@@ -50,8 +50,8 @@ tz show tz-1
 # Update issue status
 tz update tz-1 --status in_progress
 
-# Add dependencies (tz-2 blocks tz-1)
-tz dep add tz-1 tz-2
+# Add dependencies (tz-1 is blocked_by tz-2)
+tz dep add tz-1 --target tz-2
 
 # Find ready work (no blockers)
 tz ready
@@ -87,8 +87,8 @@ status: in_progress
 priority: 1
 issue_type: bug
 assignee: alice
-depends_on:
-  myproject-5: blocks
+dependencies:
+  myproject-5: blocked_by
 created_at: 2025-10-30T10:00:00Z
 updated_at: 2025-10-30T11:00:00Z
 ---
@@ -189,8 +189,9 @@ tazk uses coarse-grained locking with `.tazk/tazk.lock` containing the process P
 
 ### Dependencies
 
-- `tz dep add FROM TO [--type TYPE]` - Add dependency
-  - Types: `blocks` (default), `related`, `parent-child`, `discovered-from`
+- `tz dep add ISSUE_ID --target DEPENDENCY_ID [--type TYPE]` - Add dependency (ISSUE_ID has the dependency on DEPENDENCY_ID)
+  - Types: `blocked_by` (default), `related_to`, `child_of`, `discovered-from`, `tracks`
+- `tz dep remove ISSUE_ID --target DEPENDENCY_ID` - Remove dependency
 
 ### Queries
 

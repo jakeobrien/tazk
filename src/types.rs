@@ -267,12 +267,16 @@ impl std::str::FromStr for EditField {
 
 /// Dependency type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum DependencyType {
-    Blocks,
-    Related,
-    ParentChild,
+    #[serde(rename = "blocked_by")]
+    BlockedBy,
+    #[serde(rename = "related_to")]
+    RelatedTo,
+    #[serde(rename = "child_of")]
+    ChildOf,
+    #[serde(rename = "discovered-from")]
     DiscoveredFrom,
+    #[serde(rename = "tracks")]
     Tracks,
 }
 
@@ -280,9 +284,9 @@ impl DependencyType {
     /// Get the string representation of this dependency type
     pub fn as_str(&self) -> &'static str {
         match self {
-            DependencyType::Blocks => "blocks",
-            DependencyType::Related => "related",
-            DependencyType::ParentChild => "parent-child",
+            DependencyType::BlockedBy => "blocked_by",
+            DependencyType::RelatedTo => "related_to",
+            DependencyType::ChildOf => "child_of",
             DependencyType::DiscoveredFrom => "discovered-from",
             DependencyType::Tracks => "tracks",
         }
@@ -300,13 +304,13 @@ impl std::str::FromStr for DependencyType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "blocks" => Ok(DependencyType::Blocks),
-            "related" => Ok(DependencyType::Related),
-            "parent-child" => Ok(DependencyType::ParentChild),
+            "blocked_by" => Ok(DependencyType::BlockedBy),
+            "related_to" => Ok(DependencyType::RelatedTo),
+            "child_of" => Ok(DependencyType::ChildOf),
             "discovered-from" => Ok(DependencyType::DiscoveredFrom),
             "tracks" => Ok(DependencyType::Tracks),
             _ => Err(anyhow::anyhow!(
-                "Invalid dependency type: '{}'. Valid values are: blocks, related, parent-child, discovered-from, tracks",
+                "Invalid dependency type: '{}'. Valid values are: blocked_by, related_to, child_of, discovered-from, tracks",
                 s
             )),
         }
@@ -490,7 +494,7 @@ impl Issue {
     pub fn get_blocking_dependencies(&self) -> impl Iterator<Item = &String> + '_ {
         self.depends_on
             .iter()
-            .filter(|(_, dep_type)| **dep_type == DependencyType::Blocks)
+            .filter(|(_, dep_type)| **dep_type == DependencyType::BlockedBy)
             .map(|(id, _)| id)
     }
 
@@ -498,7 +502,7 @@ impl Issue {
     pub fn has_blocking_dependencies(&self) -> bool {
         self.depends_on
             .values()
-            .any(|dep_type| *dep_type == DependencyType::Blocks)
+            .any(|dep_type| *dep_type == DependencyType::BlockedBy)
     }
 }
 

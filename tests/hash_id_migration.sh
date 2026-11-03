@@ -146,7 +146,7 @@ assert_file_exists ".tazk/issues/test-3.md" "test-3.md should exist"
 
 # Test 3: Dry-run migration
 echo -e "\n${YELLOW}Test 3: Dry-run migration${NC}"
-OUTPUT=$("$TZ_BIN" tz-migrate --dry-run 2>&1)
+OUTPUT=$("$TZ_BIN" migrate --dry-run 2>&1)
 assert_contains "$OUTPUT" "Dry run - would make the following changes:" "Should show dry-run header"
 assert_contains "$OUTPUT" "Update config-tazk.yaml: tz-hash-ids: false -> true" "Should update config"
 assert_contains "$OUTPUT" "Rename file: test-1.md ->" "Should rename test-1"
@@ -161,7 +161,7 @@ assert_file_exists ".tazk/issues/test-3.md" "test-3.md should still exist after 
 
 # Test 4: Actual migration
 echo -e "\n${YELLOW}Test 4: Actual migration${NC}"
-OUTPUT=$("$TZ_BIN" tz-migrate 2>&1)
+OUTPUT=$("$TZ_BIN" migrate 2>&1)
 assert_contains "$OUTPUT" "Successfully migrated 3 issue(s) to hash-based IDs" "Should report success"
 assert_contains "$OUTPUT" "Updated config-tazk.yaml: tz-hash-ids: true" "Should confirm config update"
 
@@ -223,7 +223,7 @@ fi
 
 # Test 8: Attempt to migrate again (should fail)
 echo -e "\n${YELLOW}Test 8: Attempt to migrate again (should fail)${NC}"
-OUTPUT=$("$TZ_BIN" tz-migrate 2>&1 || true)
+OUTPUT=$("$TZ_BIN" migrate 2>&1 || true)
 assert_contains "$OUTPUT" "Database is already using hash-based IDs" "Should reject re-migration"
 
 # Print summary

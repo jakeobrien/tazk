@@ -20,7 +20,7 @@ pub struct Frontmatter {
     /// Sorted so that rewriting an issue never reorders its dependency lines,
     /// which would otherwise create spurious diffs and merge conflicts.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub depends_on: BTreeMap<String, String>,
+    pub dependencies: BTreeMap<String, String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,7 +86,7 @@ pub fn frontmatter_yaml(issue: &Issue) -> Result<String> {
         assignee: issue.assignee.clone(),
         external_ref: issue.external_ref.clone(),
         labels: issue.labels.clone(),
-        depends_on: issue
+        dependencies: issue
             .depends_on
             .iter()
             .map(|(k, v)| (k.clone(), v.to_string()))
@@ -335,9 +335,9 @@ pub fn markdown_to_issue(issue_id: &str, content: &str) -> Result<Issue> {
     };
 
     // Convert dependencies
-    for (depends_on_id, dep_type_str) in fm.depends_on {
+    for (dependency_id, dep_type_str) in fm.dependencies {
         let dep_type: DependencyType = dep_type_str.parse()?;
-        issue.depends_on.insert(depends_on_id, dep_type);
+        issue.depends_on.insert(dependency_id, dep_type);
     }
 
     Ok(issue)
@@ -574,7 +574,7 @@ mod tests {
         issue.description = "Test description".to_string();
         issue
             .depends_on
-            .insert("test-2".to_string(), DependencyType::Blocks);
+            .insert("test-2".to_string(), DependencyType::BlockedBy);
 
         let markdown = issue_to_markdown(&issue).unwrap();
         let parsed = markdown_to_issue("test-1", &markdown).unwrap();
@@ -628,12 +628,12 @@ mod tests {
 
     #[test]
     fn test_indented_code_block_survives_roundtrip() {
-        // Regression test for the tz-migrate description-truncation bug:
+        // Regression test for the migrate description-truncation bug:
         // an indented "# ..." line (a shell/Python comment inside an
         // indented code block) was mistaken for a top-level section header,
         // and everything from that line onward was silently dropped the
         // next time the issue was parsed and rewritten (e.g. by
-        // `tz tz-migrate --to numeric`).
+        // `tz migrate --to numeric`).
         let mut issue = Issue::new(
             "test-1".to_string(),
             "Trunc".to_string(),

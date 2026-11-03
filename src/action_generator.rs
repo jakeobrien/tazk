@@ -401,9 +401,9 @@ impl ActionGenerator {
         }
 
         let dep_type = match self.rng.gen_range(0..3) {
-            0 => DependencyType::Blocks,
-            1 => DependencyType::Related,
-            _ => DependencyType::ParentChild,
+            0 => DependencyType::BlockedBy,
+            1 => DependencyType::RelatedTo,
+            _ => DependencyType::ChildOf,
         };
 
         TazkAction::AddDependency {
@@ -616,6 +616,7 @@ impl ActionExecutor {
                 cmd.arg("dep")
                     .arg("add")
                     .arg(issue_id)
+                    .arg("--target")
                     .arg(depends_on)
                     .arg("-t")
                     .arg(dep_type.as_str());

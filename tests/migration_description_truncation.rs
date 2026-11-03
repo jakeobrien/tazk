@@ -1,6 +1,6 @@
-//! Regression test for the tz-migrate description-truncation bug.
+//! Regression test for the migrate description-truncation bug.
 //!
-//! Renumbering hash-based IDs to numeric IDs (`tz tz-migrate --to numeric`)
+//! Renumbering hash-based IDs to numeric IDs (`tz migrate --to numeric`)
 //! parses every issue and rewrites the renamed ones. The parser used to treat
 //! any line whose *trimmed* form started with "# " as a top-level section
 //! header, so a comment inside an indented code block (e.g. "    # x") was

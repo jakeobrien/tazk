@@ -301,11 +301,11 @@ async fn run_migration_test(
     println!("Phase 2: Migrate to hash IDs");
     println!("{}", "=".repeat(70));
 
-    logger.log("Running tz tz-migrate...".to_string());
+    logger.log("Running tz migrate...".to_string());
 
     let migrate_output = std::process::Command::new(&tazk_binary)
         .current_dir(work_dir)
-        .args(["tz-migrate"])
+        .args(["migrate"])
         .output()?;
 
     if !migrate_output.status.success() {

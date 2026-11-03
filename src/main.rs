@@ -218,8 +218,8 @@ enum Commands {
         id: Option<String>,
 
         /// Dependencies (comma-separated). Formats:
-        /// Simple: "tz-1,tz-2" (defaults to 'blocks')
-        /// Advanced: "blocks:tz-1,related:tz-2,discovered-from:tz-3"
+        /// Simple: "tz-1,tz-2" (defaults to 'blocked_by')
+        /// Advanced: "blocked_by:tz-1,related_to:tz-2,discovered-from:tz-3"
         #[arg(long)]
         deps: Option<String>,
 
@@ -471,7 +471,7 @@ enum Commands {
     },
 
     /// Rename an issue ID
-    TzRename {
+    Rename {
         /// Current issue ID
         old_id: String,
 
@@ -634,7 +634,7 @@ enum Commands {
     },
 
     /// Migrate between numeric and hash-based IDs
-    TzMigrate {
+    Migrate {
         /// Migration direction: 'hash', 'numeric', 'sharded', or 'flat'
         #[arg(long, default_value = "hash")]
         to: String,
@@ -707,10 +707,10 @@ impl Commands {
             | Self::Claim { .. }
             | Self::Close { .. }
             | Self::Reopen { .. }
-            | Self::TzRename { .. }
+            | Self::Rename { .. }
             | Self::RenamePrefix { .. }
             | Self::Sync { .. }
-            | Self::TzMigrate { .. }
+            | Self::Migrate { .. }
             | Self::MergeDriver { .. } => false,
         }
     }
@@ -762,11 +762,12 @@ enum DepCommands {
         /// Issue that has the dependency
         issue_id: String,
 
-        /// Issue that issue_id depends on
-        depends_on_id: String,
+        /// Issue that issue_id has the dependency on
+        #[arg(long = "target", value_name = "DEPENDENCY_ID")]
+        dependency_id: String,
 
-        /// Dependency type: blocks, related, parent-child, discovered-from
-        #[arg(short = 't', long, default_value = "blocks")]
+        /// Dependency type: blocked_by, related_to, child_of, discovered-from, tracks
+        #[arg(short = 't', long, default_value = "blocked_by")]
         r#type: DependencyType,
     },
 
@@ -775,8 +776,9 @@ enum DepCommands {
         /// Issue that has the dependency
         issue_id: String,
 
-        /// Issue that issue_id depends on (to remove)
-        depends_on_id: String,
+        /// Dependency to remove from issue_id
+        #[arg(long = "target", value_name = "DEPENDENCY_ID")]
+        dependency_id: String,
     },
 
     /// List dependencies or dependents
@@ -1357,7 +1359,7 @@ impl IssueFilters<'_> {
                 issue
                     .depends_on
                     .get(parent_id)
-                    .is_some_and(|dep_type| *dep_type == DependencyType::ParentChild)
+                    .is_some_and(|dep_type| *dep_type == DependencyType::ChildOf)
             });
         }
     }
@@ -1527,8 +1529,8 @@ fn run() -> Result<()> {
 
             // Parse dependencies
             // Supports two formats:
-            // 1. Simple: "tz-1,tz-2" (defaults to 'blocks' type)
-            // 2. Advanced: "blocks:tz-1,related:tz-2,discovered-from:tz-3"
+            // 1. Simple: "tz-1,tz-2" (defaults to 'blocked_by' type)
+            // 2. Advanced: "blocked_by:tz-1,related_to:tz-2,discovered-from:tz-3"
             let mut parsed_deps = if let Some(deps_str) = deps {
                 deps_str
                     .split(',')
@@ -1555,8 +1557,8 @@ fn run() -> Result<()> {
                                 }
                             }
                         } else {
-                            // Simple format: just the ID, default to Blocks
-                            Some((s.to_string(), DependencyType::Blocks))
+                            // Simple format: just the ID, default to BlockedBy
+                            Some((s.to_string(), DependencyType::BlockedBy))
                         }
                     })
                     .collect()
@@ -1564,9 +1566,9 @@ fn run() -> Result<()> {
                 Vec::new()
             };
 
-            // Add parent as a parent-child dependency if specified
+            // Add parent as a child_of dependency if specified
             if let Some(parent_id) = parent {
-                parsed_deps.push((parent_id, DependencyType::ParentChild));
+                parsed_deps.push((parent_id, DependencyType::ChildOf));
             }
 
             let mut all_labels = label;
@@ -1742,7 +1744,7 @@ fn run() -> Result<()> {
                 issue
                     .depends_on
                     .get(&parent_id)
-                    .is_some_and(|dep_type| *dep_type == DependencyType::ParentChild)
+                    .is_some_and(|dep_type| *dep_type == DependencyType::ChildOf)
             });
 
             if json {
@@ -2013,7 +2015,7 @@ fn run() -> Result<()> {
             Ok(())
         }
 
-        Commands::TzRename {
+        Commands::Rename {
             old_id,
             new_id,
             dry_run,
@@ -2113,28 +2115,28 @@ fn run() -> Result<()> {
             match command {
                 DepCommands::Add {
                     issue_id,
-                    depends_on_id,
+                    dependency_id,
                     r#type,
                 } => {
-                    storage.add_dependency(&issue_id, &depends_on_id, r#type)?;
+                    storage.add_dependency(&issue_id, &dependency_id, r#type)?;
 
                     if !json {
                         println!(
                             "Added dependency: {} depends on {} ({})",
-                            issue_id, depends_on_id, r#type
+                            issue_id, dependency_id, r#type
                         );
                     }
                 }
                 DepCommands::Remove {
                     issue_id,
-                    depends_on_id,
+                    dependency_id,
                 } => {
-                    storage.remove_dependency(&issue_id, &depends_on_id)?;
+                    storage.remove_dependency(&issue_id, &dependency_id)?;
 
                     if !json {
                         println!(
                             "Removed dependency: {} no longer depends on {}",
-                            issue_id, depends_on_id
+                            issue_id, dependency_id
                         );
                     }
                 }
@@ -2169,7 +2171,7 @@ fn run() -> Result<()> {
                                     let dep_type = dependent
                                         .dep_type
                                         .parse::<DependencyType>()
-                                        .unwrap_or(DependencyType::Blocks);
+                                        .unwrap_or(DependencyType::BlockedBy);
                                     if r#type.is_none_or(|filter| filter == dep_type) {
                                         let dep_type = dependent.dep_type;
                                         rows.push(DepListRow {
@@ -2740,7 +2742,7 @@ fn run() -> Result<()> {
 
         Commands::MergeDriver { command } => run_merge_driver_command(command),
 
-        Commands::TzMigrate {
+        Commands::Migrate {
             to,
             dry_run,
             tz_patch_code,
@@ -3093,13 +3095,14 @@ VIEWING ISSUES
   tz show myapp-1       Show issue details
 
 MANAGING DEPENDENCIES
-  tz dep add myapp-1 myapp-2     Add dependency (myapp-2 blocks myapp-1)
+  tz dep add myapp-1 --target myapp-2     Add dependency (myapp-1 is blocked_by myapp-2)
 
 DEPENDENCY TYPES
-  blocks  Task B must complete before task A
-  related  Soft connection, doesn't block progress
-  parent-child  Epic/subtask hierarchical relationship
+  blocked_by  This task can't start until the target task is complete
+  related_to  Soft connection, doesn't block progress
+  child_of  This task is a subtask of the target (epic)
   discovered-from  Auto-created when AI discovers related work
+  tracks  Tracks the target task
 
 READY WORK
   tz ready       Show issues ready to work on

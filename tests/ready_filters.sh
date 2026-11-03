@@ -97,8 +97,8 @@ cd "$TEST_DIR"
 "$TZ_BIN" create "Refactor auth" -t task -p 1 -l backend >/dev/null
 
 # test-4 becomes a child of test-1; test-3 becomes blocked by test-1.
-"$TZ_BIN" dep add test-4 test-1 -t parent-child >/dev/null
-"$TZ_BIN" dep add test-3 test-1 -t blocks >/dev/null
+"$TZ_BIN" dep add test-4 --target test-1 -t child_of >/dev/null
+"$TZ_BIN" dep add test-3 --target test-1 -t blocked_by >/dev/null
 
 # Ready still excludes blocked issues.
 echo -e "\n${YELLOW}Blocked issues stay out of ready${NC}"

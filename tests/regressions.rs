@@ -183,7 +183,7 @@ fn repacking_swaps_and_cycles_preserves_all_issues_dependencies_and_comments() {
             let (_temp, storage) = fixture(layout);
             let issues = import_fixture_issues(&storage, &ids);
             storage
-                .add_dependency(ids[0], ids[1], DependencyType::Blocks)
+                .add_dependency(ids[0], ids[1], DependencyType::BlockedBy)
                 .unwrap();
             let comment = storage
                 .add_comment(ids[0], "review", "keep this comment")
@@ -430,13 +430,13 @@ fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
         create(&storage, id, id).unwrap();
     }
     storage
-        .add_dependency("r-2", "r-1", DependencyType::Blocks)
+        .add_dependency("r-2", "r-1", DependencyType::BlockedBy)
         .unwrap();
     storage
-        .add_dependency("r-3", "r-missing", DependencyType::Blocks)
+        .add_dependency("r-3", "r-missing", DependencyType::BlockedBy)
         .unwrap();
     storage
-        .add_dependency("r-4", "r-1", DependencyType::Related)
+        .add_dependency("r-4", "r-1", DependencyType::RelatedTo)
         .unwrap();
     assert_eq!(storage.get_stats().unwrap().blocked_issues, 2);
     storage.close_issue("r-1", "done").unwrap();
@@ -479,7 +479,7 @@ fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
         )
         .unwrap();
     storage
-        .add_dependency("r-2", "r-1", DependencyType::Blocks)
+        .add_dependency("r-2", "r-1", DependencyType::BlockedBy)
         .unwrap();
     assert!(storage
         .get_ready(
@@ -724,11 +724,11 @@ fn readonly_rejects_modifications_before_opening_storage() {
         vec!["update", "r-1", "--title", "changed"],
         vec!["create", "new"],
         vec!["close", "r-1"],
-        vec!["tz-rename", "r-1", "r-2"],
+        vec!["rename", "r-1", "r-2"],
         vec!["config", "set", "issue-prefix", "changed"],
         vec!["comments", "add", "r-1", "--body", "new"],
         vec!["label", "add", "r-1", "new"],
-        vec!["dep", "add", "r-1", "r-2"],
+        vec!["dep", "add", "r-1", "--target", "r-2"],
         vec!["sync"],
         vec!["export", "--tz-output-default"],
     ] {

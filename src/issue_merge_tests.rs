@@ -24,7 +24,7 @@ fn base_issue() -> Issue {
     issue.labels = vec!["alpha".into(), "beta".into()];
     issue
         .depends_on
-        .insert("proj-1".into(), DependencyType::Blocks);
+        .insert("proj-1".into(), DependencyType::BlockedBy);
     issue
 }
 
@@ -252,14 +252,14 @@ fn dependencies_merge_per_target_and_conflict_on_change_versus_removal() {
     let base = base_issue();
     let mut ours = base.clone();
     ours.depends_on
-        .insert("proj-1".into(), DependencyType::Related);
+        .insert("proj-1".into(), DependencyType::RelatedTo);
     ours.depends_on
-        .insert("proj-2".into(), DependencyType::Blocks);
+        .insert("proj-2".into(), DependencyType::BlockedBy);
     let mut theirs = base.clone();
     theirs.depends_on.remove("proj-1");
     theirs
         .depends_on
-        .insert("proj-3".into(), DependencyType::ParentChild);
+        .insert("proj-3".into(), DependencyType::ChildOf);
 
     let result = merge(&base, &ours, &theirs);
     assert_eq!(
@@ -268,20 +268,22 @@ fn dependencies_merge_per_target_and_conflict_on_change_versus_removal() {
     );
     let resolved = parse(&resolve(&result.text, Side::Theirs));
     assert!(!resolved.depends_on.contains_key("proj-1"));
-    assert_eq!(resolved.depends_on["proj-2"], DependencyType::Blocks);
-    assert_eq!(resolved.depends_on["proj-3"], DependencyType::ParentChild);
+    assert_eq!(resolved.depends_on["proj-2"], DependencyType::BlockedBy);
+    assert_eq!(resolved.depends_on["proj-3"], DependencyType::ChildOf);
 }
 
 #[test]
 fn dependency_lines_serialize_in_sorted_order() {
     let mut issue = base_issue();
     for id in ["proj-9", "proj-3", "proj-5", "proj-2"] {
-        issue.depends_on.insert(id.into(), DependencyType::Blocks);
+        issue
+            .depends_on
+            .insert(id.into(), DependencyType::BlockedBy);
     }
     let text = render(&issue);
     let order: Vec<usize> = ["proj-1", "proj-2", "proj-3", "proj-5", "proj-9"]
         .iter()
-        .map(|id| text.find(&format!("{id}: blocks")).unwrap())
+        .map(|id| text.find(&format!("{id}: blocked_by")).unwrap())
         .collect();
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
 }
@@ -331,10 +333,10 @@ fn dependency_conflicts_without_an_ancestor_say_so() {
     let mut ours = base_issue();
     let mut theirs = base_issue();
     ours.depends_on
-        .insert("tz-9".into(), DependencyType::Blocks);
+        .insert("tz-9".into(), DependencyType::BlockedBy);
     theirs
         .depends_on
-        .insert("tz-9".into(), DependencyType::Related);
+        .insert("tz-9".into(), DependencyType::RelatedTo);
 
     let result = merge_texts("", &render(&ours), &render(&theirs));
     assert_eq!(
@@ -631,9 +633,9 @@ const TITLES: [&str; 4] = [
 const LABELS: [&str; 5] = ["alpha", "beta", "gamma", "delta", "human"];
 const DEPENDENCY_IDS: [&str; 3] = ["proj-1", "proj-2", "proj-3"];
 const DEPENDENCY_TYPES: [DependencyType; 3] = [
-    DependencyType::Blocks,
-    DependencyType::Related,
-    DependencyType::ParentChild,
+    DependencyType::BlockedBy,
+    DependencyType::RelatedTo,
+    DependencyType::ChildOf,
 ];
 const STATUSES: [Status; 4] = [
     Status::Open,

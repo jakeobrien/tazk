@@ -129,7 +129,7 @@ OUTPUT=$("$TZ_BIN" create "Test issue 2" -p 2 -t bug --deps test-1 2>&1)
 assert_contains "$OUTPUT" "Created issue: test-2" "Should create test-2"
 
 # Verify dependency in file
-DEP_COUNT=$(grep -c "test-1: blocks" .tazk/issues/test-2.md || true)
+DEP_COUNT=$(grep -c "test-1: blocked_by" .tazk/issues/test-2.md || true)
 assert_equals "1" "$DEP_COUNT" "Dependency should be recorded"
 
 # Test 4: List issues
@@ -247,7 +247,7 @@ assert_contains "$OUTPUT" "test-1" "JSON should include test-1"
 # Test 13: Add dependency manually
 echo -e "\n${YELLOW}Test 13: Add dependency${NC}"
 "$TZ_BIN" create "Test issue 3" -p 1 -t task >/dev/null 2>&1
-OUTPUT=$("$TZ_BIN" dep add test-3 test-2 --type related 2>&1)
+OUTPUT=$("$TZ_BIN" dep add test-3 --target test-2 --type related_to 2>&1)
 assert_contains "$OUTPUT" "Added dependency: test-3 depends on test-2" "Should add dependency"
 
 # Test 14: Numeric shorthand for tz show
