@@ -1,9 +1,6 @@
 mod code_patch;
 mod diff3;
 mod format;
-mod github;
-mod github_ancestor;
-mod github_merge;
 mod hash;
 mod issue_merge;
 mod lock;
@@ -27,13 +24,10 @@ use std::env;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
-use storage::{is_github_issue_ref, IssueStorageLayout, Storage};
-use types::{
-    ClaimDuration, Comment, DependencyType, EditField, Issue, IssueType, Status, SyncSince,
-};
+use storage::{IssueStorageLayout, Storage};
+use types::{ClaimDuration, Comment, DependencyType, EditField, Issue, IssueType, Status};
 
-const PRIMARY_STORAGE_DIR: &str = ".minibeads";
-const LEGACY_STORAGE_DIR: &str = ".beads";
+const PRIMARY_STORAGE_DIR: &str = ".tazk";
 
 /// Generate long version string with git info and build date
 fn long_version() -> &'static str {
@@ -61,8 +55,8 @@ fn long_version() -> &'static str {
 
 #[derive(Parser)]
 #[command(
-    name = "mb",
-    about = "Minibeads - A minimal issue tracker",
+    name = "tz",
+    about = "Tazk - A minimal issue tracker",
     long_version = long_version(),
 )]
 struct Cli {
@@ -76,21 +70,15 @@ struct Cli {
 #[derive(clap::Args)]
 #[command(next_help_heading = "Global Options")]
 struct GlobalOpts {
-    /// Path to minibeads directory (minibeads-specific, preferred over --db)
-    #[arg(long = "mb-beads-dir", global = true)]
-    mb_beads_dir: Option<PathBuf>,
-
-    /// Path to database (for upstream compatibility - use --mb-beads-dir instead)
-    /// Treated as syntactic sugar for specifying the minibeads directory.
-    /// When path ends with .db, the parent directory is used.
-    #[arg(long, global = true)]
-    db: Option<PathBuf>,
+    /// Path to tazk directory
+    #[arg(long = "tz-dir", global = true)]
+    tz_dir: Option<PathBuf>,
 
     /// Actor name for audit trail
     #[arg(long, global = true)]
     actor: Option<String>,
 
-    /// Change working directory before running the command (upstream bd compatibility)
+    /// Change working directory before running the command
     #[arg(short = 'C', long = "directory", global = true, hide = true)]
     directory: Option<PathBuf>,
 
@@ -98,62 +86,22 @@ struct GlobalOpts {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Suppress non-essential output (accepted for upstream bd compatibility)
-    #[arg(short = 'q', long, global = true, hide = true)]
-    quiet: bool,
-
-    /// Enable verbose/debug output (accepted for upstream bd compatibility)
-    #[arg(short = 'v', long, global = true, hide = true)]
-    verbose: bool,
-
-    /// Generate CPU profile (ignored for upstream bd compatibility)
-    #[arg(long, global = true, hide = true)]
-    profile: bool,
-
     /// Reject modifying commands and disable persistent storage writes
     #[arg(long, global = true, hide = true)]
     readonly: bool,
 
-    /// Sandbox mode (accepted for upstream bd compatibility)
-    #[arg(long, global = true, hide = true)]
-    sandbox: bool,
-
-    /// Ignore schema skew (ignored for upstream bd compatibility)
-    #[arg(long, global = true, hide = true)]
-    ignore_schema_skew: bool,
-
-    /// Dolt auto-commit policy (ignored for upstream bd compatibility)
-    #[arg(long, global = true, hide = true)]
-    dolt_auto_commit: Option<String>,
-
-    /// Proceed with stale data (ignored for upstream bd compatibility)
-    #[arg(long, global = true, hide = true)]
-    allow_stale: bool,
-
-    /// Flat output mode (ignored for upstream bd compatibility)
-    #[arg(long, global = true, hide = true)]
-    flat: bool,
-
-    /// Validation mode for parsing issues: silent, warn, error (minibeads-specific)
+    /// Validation mode for parsing issues: silent, warn, error
     #[arg(
-        long = "mb-validation",
+        long = "tz-validation",
         global = true,
         default_value = "error",
         value_name = "MODE"
     )]
-    mb_validation: ValidationMode,
+    tz_validation: ValidationMode,
 
-    /// Disable command logging to the minibeads command_history.log (minibeads-specific)
-    #[arg(long = "mb-no-cmd-logging", global = true)]
-    mb_no_cmd_logging: bool,
-
-    /// Disable auto-flush (ignored for compatibility)
-    #[arg(long, global = true)]
-    no_auto_flush: bool,
-
-    /// Disable auto-import (ignored for compatibility)
-    #[arg(long, global = true)]
-    no_auto_import: bool,
+    /// Disable command logging to the tazk command_history.log
+    #[arg(long = "tz-no-cmd-logging", global = true)]
+    tz_no_cmd_logging: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,47 +129,23 @@ impl std::str::FromStr for ValidationMode {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize beads in current directory
+    /// Initialize tazk in current directory
     Init {
         /// Issue prefix (e.g., 'myproject' for myproject-1, myproject-2)
         #[arg(short, long)]
         prefix: Option<String>,
 
-        /// Use hash-based issue IDs instead of sequential numbers (minibeads-specific)
-        #[arg(long = "mb-hash-ids")]
-        mb_hash_ids: bool,
+        /// Use hash-based issue IDs instead of sequential numbers
+        #[arg(long = "tz-hash-ids")]
+        tz_hash_ids: bool,
 
-        /// Issue file layout for new repos: flat or sharded (minibeads-specific)
-        #[arg(long = "mb-issue-layout", default_value = "flat")]
-        mb_issue_layout: String,
+        /// Issue file layout for new repos: flat or sharded
+        #[arg(long = "tz-issue-layout", default_value = "flat")]
+        tz_issue_layout: String,
 
-        /// Use external Dolt server (ignored for upstream bd compatibility)
-        #[arg(long, hide = true)]
-        server: bool,
-
-        /// Dolt server port (ignored for upstream bd compatibility)
-        #[arg(long = "server-port", hide = true)]
-        server_port: Option<u16>,
-
-        /// Database name (ignored for upstream bd compatibility)
-        #[arg(long, hide = true)]
-        database: Option<String>,
-
-        /// Storage backend (ignored for upstream bd compatibility)
-        #[arg(long, hide = true)]
-        backend: Option<String>,
-
-        /// Suppress init output (upstream bd compatibility)
+        /// Suppress init output
         #[arg(short = 'q', long, hide = true)]
         quiet: bool,
-
-        /// Skip agent instruction generation (ignored for upstream bd compatibility)
-        #[arg(long = "skip-agents", hide = true)]
-        skip_agents: bool,
-
-        /// Skip git hook setup (ignored for upstream bd compatibility)
-        #[arg(long = "skip-hooks", hide = true)]
-        skip_hooks: bool,
     },
 
     /// Create a new issue
@@ -254,7 +178,7 @@ enum Commands {
         ///
         /// Prefer this over `--description` for any multi-line or
         /// markdown-bearing body. Passing prose as an inline shell argument
-        /// lets the SHELL expand backticks and `$(...)` before minibeads ever
+        /// lets the SHELL expand backticks and `$(...)` before tazk ever
         /// sees the text, which silently stores a mangled description and
         /// still exits 0. Reading from a file or stdin removes the shell from
         /// the path entirely, so there is nothing left to expand.
@@ -281,7 +205,7 @@ enum Commands {
         #[arg(short, long)]
         label: Vec<String>,
 
-        /// Comma-separated labels (upstream bd compatibility)
+        /// Comma-separated labels
         #[arg(long = "labels")]
         labels: Vec<String>,
 
@@ -294,12 +218,12 @@ enum Commands {
         id: Option<String>,
 
         /// Dependencies (comma-separated). Formats:
-        /// Simple: "bd-1,bd-2" (defaults to 'blocks')
-        /// Advanced: "blocks:bd-1,related:bd-2,discovered-from:bd-3"
+        /// Simple: "tz-1,tz-2" (defaults to 'blocks')
+        /// Advanced: "blocks:tz-1,related:tz-2,discovered-from:tz-3"
         #[arg(long)]
         deps: Option<String>,
 
-        /// Parent issue ID for hierarchical child (e.g., 'bd-a3f8e9')
+        /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9')
         #[arg(long)]
         parent: Option<String>,
 
@@ -310,14 +234,6 @@ enum Commands {
         /// Create multiple issues from markdown file
         #[arg(short = 'f', long)]
         file: Option<PathBuf>,
-
-        /// Mark issue as ephemeral (ignored for upstream bd compatibility)
-        #[arg(long, hide = true)]
-        ephemeral: bool,
-
-        /// Suppress non-JSON output (upstream bd compatibility)
-        #[arg(long, hide = true)]
-        silent: bool,
     },
 
     /// List issues
@@ -342,10 +258,6 @@ enum Commands {
         #[arg(short = 'l', long = "label")]
         labels: Vec<String>,
 
-        /// Show only issues linked to GitHub Issues (minibeads-specific)
-        #[arg(long)]
-        github: bool,
-
         /// Filter by specific issue IDs (comma-separated)
         #[arg(long)]
         id: Option<String>,
@@ -365,14 +277,6 @@ enum Commands {
         /// Group issues by priority with headers
         #[arg(long)]
         group_priority: bool,
-
-        /// Include infrastructure issues (accepted for upstream bd compatibility)
-        #[arg(long = "include-infra", hide = true)]
-        include_infra: bool,
-
-        /// Disable pager output (accepted for upstream bd compatibility)
-        #[arg(long = "no-pager", hide = true)]
-        no_pager: bool,
     },
 
     /// Show issue details
@@ -404,7 +308,7 @@ enum Commands {
         #[arg(short = 'a', long)]
         assignee: Option<String>,
 
-        /// Clear assignee (upstream bd compatibility)
+        /// Clear assignee
         #[arg(long)]
         unassign: bool,
 
@@ -417,7 +321,7 @@ enum Commands {
         description: Option<String>,
 
         /// Read the new description from a FILE, or from stdin when given `-`.
-        /// See `mb create --help` for why this is preferred over passing prose
+        /// See `tz create --help` for why this is preferred over passing prose
         /// as an inline shell argument.
         #[arg(
             long = "description-file",
@@ -426,19 +330,10 @@ enum Commands {
         )]
         description_file: Option<String>,
 
-        /// Permit changing the description of a GitHub-mirrored issue.
-        ///
-        /// Mirrored descriptions are replaced by a pull-only synchronization.
-        /// Put project analysis in a minibeads comment or a companion local
-        /// issue instead. This explicit override is for intentionally changing
-        /// the upstream GitHub issue body.
-        #[arg(long)]
-        allow_mirrored_description: bool,
-
         /// Targeted edit: find this exact text in a field and swap it for
         /// --replace, instead of overwriting the whole field. Safer for agents
         /// than rewriting a long description wholesale. By default the text must
-        /// match exactly once. Requires --replace. (minibeads-specific)
+        /// match exactly once. Requires --replace.
         #[arg(
             long,
             allow_hyphen_values = true,
@@ -447,18 +342,18 @@ enum Commands {
         )]
         search: Option<String>,
 
-        /// Replacement text for --search. (minibeads-specific)
+        /// Replacement text for --search.
         #[arg(long, allow_hyphen_values = true, requires = "search")]
         replace: Option<String>,
 
         /// Which field --search/--replace/--append edits: title, description,
         /// design, notes, or acceptance (default: description).
-        /// (minibeads-specific)
+        ///
         #[arg(long = "field", default_value = "description")]
         search_field: EditField,
 
         /// With --search, replace every occurrence instead of requiring the
-        /// search text to match exactly once. (minibeads-specific)
+        /// search text to match exactly once.
         #[arg(long, requires = "search")]
         replace_all: bool,
 
@@ -466,7 +361,7 @@ enum Commands {
         /// another). A blank line is inserted before it when the field already
         /// has content, so the appended text becomes its own paragraph. Saves
         /// having to pass the trailing text as --search/--replace when you just
-        /// want to add to the end. (minibeads-specific)
+        /// want to add to the end.
         #[arg(
             long,
             allow_hyphen_values = true,
@@ -504,29 +399,29 @@ enum Commands {
 
         /// Atomically claim the issue: sets you as assignee and status to
         /// in_progress, recording claimed_at/claimed_until. Fails if another
-        /// worker holds an active claim. (minibeads-specific)
+        /// worker holds an active claim.
         #[arg(long)]
         claim: bool,
 
         /// Team suffix for the claim identity (assignee becomes `host/team`).
-        /// Only meaningful with --claim. (minibeads-specific)
+        /// Only meaningful with --claim.
         #[arg(long, requires = "claim")]
         team: Option<String>,
 
         /// How long to hold the claim, e.g. `48h`, `2d`, `90m` (default 48h).
-        /// Only meaningful with --claim. (minibeads-specific)
+        /// Only meaningful with --claim.
         #[arg(long = "for", requires = "claim")]
         claim_for: Option<ClaimDuration>,
 
         /// Override the claim identity instead of using the detected hostname.
-        /// Only meaningful with --claim. (minibeads-specific)
+        /// Only meaningful with --claim.
         #[arg(long = "as", requires = "claim")]
         claim_as: Option<String>,
     },
 
-    /// Claim or release an issue for cross-machine coordination (minibeads-specific)
+    /// Claim or release an issue for cross-machine coordination
     ///
-    /// Shorthand for `mb update --claim`. Sets you as assignee, flips status to
+    /// Shorthand for `tz update --claim`. Sets you as assignee, flips status to
     /// in_progress, and records claimed_at/claimed_until. The claim is enforced
     /// across machines by committing and pushing the change: a losing push is
     /// rejected, so the loser pulls and sees the issue is already taken.
@@ -575,8 +470,8 @@ enum Commands {
         reason: Option<String>,
     },
 
-    /// Rename an issue ID (minibeads-specific)
-    MbRename {
+    /// Rename an issue ID
+    TzRename {
         /// Current issue ID
         old_id: String,
 
@@ -591,9 +486,9 @@ enum Commands {
         #[arg(long)]
         repair: bool,
 
-        /// Also patch code references (requires interactive TTY) (minibeads-specific)
-        #[arg(long = "mb-patch-code")]
-        mb_patch_code: bool,
+        /// Also patch code references (requires interactive TTY)
+        #[arg(long = "tz-patch-code")]
+        tz_patch_code: bool,
     },
 
     /// Rename the issue prefix for all issues
@@ -622,53 +517,16 @@ enum Commands {
         command: LabelCommands,
     },
 
-    /// Manage compatibility configuration
+    /// Manage configuration
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
     },
 
-    /// Compatibility migration command. Plain `migrate` is a no-op for minibeads.
-    Migrate {
-        /// Show what would be done without changing data
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Auto-confirm prompts
-        #[arg(long)]
-        yes: bool,
-
-        /// Output migration stats as JSON
-        #[arg(long)]
-        json: bool,
-
-        /// Show migration plan
-        #[arg(long)]
-        inspect: bool,
-
-        /// Update repository ID (ignored)
-        #[arg(long = "update-repo-id")]
-        update_repo_id: bool,
-    },
-
-    /// Manage issue comments (minibeads-specific)
+    /// Manage issue comments
     Comments {
         #[command(subcommand)]
         command: CommentCommands,
-    },
-
-    /// Sync selected minibeads issues with GitHub Issues via gh (minibeads-specific)
-    Github {
-        /// GitHub token to use for the underlying `gh` calls made by this invocation only
-        /// (minibeads-specific). Sets `GH_TOKEN` for the spawned `gh` process; does NOT run
-        /// `gh auth switch` and does not touch `gh`'s stored/global auth state, so it's safe
-        /// to use for one-off bot-attributed calls (e.g. GitHub Issue comments/labels) without
-        /// racing other concurrent `gh` users on the same machine. Omit to use whatever account
-        /// `gh` already resolves (its currently logged-in account).
-        #[arg(long, global = true)]
-        token: Option<String>,
-        #[command(subcommand)]
-        command: GithubCommands,
     },
 
     /// Get statistics
@@ -684,8 +542,8 @@ enum Commands {
         output: Option<PathBuf>,
 
         /// Use default file output (storage/issues.jsonl) instead of stdout
-        #[arg(long = "mb-output-default")]
-        mb_output_default: bool,
+        #[arg(long = "tz-output-default")]
+        tz_output_default: bool,
 
         /// Filter by status: open, in_progress, blocked, closed
         #[arg(long)]
@@ -737,10 +595,6 @@ enum Commands {
         #[arg(short = 'l', long = "label")]
         labels: Vec<String>,
 
-        /// Show only issues linked to GitHub Issues (minibeads-specific)
-        #[arg(long)]
-        github: bool,
-
         /// Filter by specific issue IDs (comma-separated)
         #[arg(long)]
         id: Option<String>,
@@ -773,14 +627,14 @@ enum Commands {
     #[command(alias = "v")]
     Version,
 
-    /// Git merge driver for issue and comment files (minibeads-specific)
+    /// Git merge driver for issue and comment files
     MergeDriver {
         #[command(subcommand)]
         command: MergeDriverCommands,
     },
 
-    /// Migrate between numeric and hash-based IDs (minibeads-specific)
-    MbMigrate {
+    /// Migrate between numeric and hash-based IDs
+    TzMigrate {
         /// Migration direction: 'hash', 'numeric', 'sharded', or 'flat'
         #[arg(long, default_value = "hash")]
         to: String,
@@ -789,15 +643,15 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Also patch code references (requires interactive TTY) (minibeads-specific)
-        #[arg(long = "mb-patch-code")]
-        mb_patch_code: bool,
+        /// Also patch code references (requires interactive TTY)
+        #[arg(long = "tz-patch-code")]
+        tz_patch_code: bool,
 
-        /// Don't update config-minibeads.yaml (minibeads-specific)
+        /// Don't update config-tazk.yaml
         #[arg(long = "no-change-config")]
         no_change_config: bool,
 
-        /// Repack numeric IDs to fill gaps (e.g., 1,3,5 -> 1,2,3) (minibeads-specific)
+        /// Repack numeric IDs to fill gaps (e.g., 1,3,5 -> 1,2,3)
         #[arg(long = "repack-contiguous")]
         repack_contiguous: bool,
 
@@ -825,13 +679,12 @@ impl Commands {
             }
             | Self::MergeDriver {
                 command: MergeDriverCommands::Run { stdout: true, .. },
-            }
-            | Self::Migrate { .. } => true,
+            } => true,
             Self::Export {
                 output,
-                mb_output_default,
+                tz_output_default,
                 ..
-            } => output.is_none() && !mb_output_default,
+            } => output.is_none() && !tz_output_default,
             Self::Dep { command } => match command {
                 DepCommands::List { .. } | DepCommands::Tree { .. } | DepCommands::Cycles => true,
                 DepCommands::Add { .. } | DepCommands::Remove { .. } => false,
@@ -848,24 +701,16 @@ impl Commands {
                 CommentCommands::List { .. } => true,
                 CommentCommands::Add { .. } | CommentCommands::Delete { .. } => false,
             },
-            Self::Github { command, .. } => match command {
-                GithubCommands::List => true,
-                GithubCommands::Link { dry_run, .. }
-                | GithubCommands::Publish { dry_run, .. }
-                | GithubCommands::Import { dry_run, .. }
-                | GithubCommands::Sync { dry_run, .. } => *dry_run,
-                GithubCommands::StressTest { .. } => false,
-            },
             Self::Init { .. }
             | Self::Create { .. }
             | Self::Update { .. }
             | Self::Claim { .. }
             | Self::Close { .. }
             | Self::Reopen { .. }
-            | Self::MbRename { .. }
+            | Self::TzRename { .. }
             | Self::RenamePrefix { .. }
             | Self::Sync { .. }
-            | Self::MbMigrate { .. }
+            | Self::TzMigrate { .. }
             | Self::MergeDriver { .. } => false,
         }
     }
@@ -873,7 +718,7 @@ impl Commands {
 
 #[derive(Subcommand)]
 enum MergeDriverCommands {
-    /// Merge one file (invoked by git as `merge.mb.driver`). Writes the result to
+    /// Merge one file (invoked by git as `merge.tz.driver`). Writes the result to
     /// OURS and exits 0 when clean, 1 when conflict hunks were written.
     Run {
         /// Common ancestor version (git's %O)
@@ -893,11 +738,11 @@ enum MergeDriverCommands {
         #[arg(long)]
         stdout: bool,
     },
-    /// Register the driver in git config and route minibeads files to it in
+    /// Register the driver in git config and route tazk files to it in
     /// .gitattributes
     Install {
         /// Executable git should run as the driver
-        #[arg(long, default_value = "mb")]
+        #[arg(long, default_value = "tz")]
         command: String,
         /// Write the driver to the user's global git config instead of the repository's
         #[arg(long)]
@@ -997,7 +842,7 @@ enum ConfigCommands {
     /// Set a configuration value
     Set { key: String, value: String },
 
-    /// Delete a configuration value (currently sets it empty for compatibility)
+    /// Delete a configuration value (currently sets it empty)
     Unset { key: String },
 
     /// List all configuration values
@@ -1022,151 +867,9 @@ enum CommentCommands {
     Delete {
         issue_id: String,
 
-        /// Comment ID(s) to delete, as shown by `mb comments list`
+        /// Comment ID(s) to delete, as shown by `tz comments list`
         comment_ids: Vec<String>,
     },
-}
-
-#[derive(Subcommand)]
-enum GithubCommands {
-    /// List minibeads issues currently linked to GitHub Issues
-    List,
-
-    /// Link an existing minibeads issue to an existing GitHub issue
-    Link {
-        issue_id: String,
-        /// GitHub issue URL or number
-        github_issue: String,
-        /// GitHub repository, e.g. owner/repo. Required when github_issue is a number outside the current repo.
-        #[arg(short = 'R', long)]
-        repo: Option<String>,
-        /// Preview without writing local sync state
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Create a GitHub issue from a minibeads issue and link it
-    Publish {
-        issue_id: String,
-        /// GitHub repository, e.g. owner/repo
-        #[arg(short = 'R', long)]
-        repo: Option<String>,
-        /// Preview without creating the GitHub issue
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Import unlinked GitHub issues as new linked minibeads issues
-    Import {
-        /// GitHub repository override, e.g. owner/repo
-        #[arg(short = 'R', long)]
-        repo: Option<String>,
-        /// Filter by state: open, closed, or all
-        #[arg(short = 's', long, value_parser = ["open", "closed", "all"])]
-        state: Option<String>,
-        /// Filter by label. May be provided multiple times.
-        #[arg(short = 'l', long = "label")]
-        labels: Vec<String>,
-        /// Filter by assignee
-        #[arg(short = 'a', long)]
-        assignee: Option<String>,
-        /// Filter by author
-        #[arg(short = 'A', long)]
-        author: Option<String>,
-        /// Filter by mention
-        #[arg(long)]
-        mention: Option<String>,
-        /// Filter by milestone number or title
-        #[arg(short = 'm', long)]
-        milestone: Option<String>,
-        /// Filter by GitHub App author
-        #[arg(long)]
-        app: Option<String>,
-        /// Search query using GitHub issue search syntax
-        #[arg(short = 'S', long)]
-        search: Option<String>,
-        /// Maximum number of issues to fetch
-        #[arg(short = 'L', long)]
-        limit: Option<usize>,
-        /// Preview without creating local issues
-        #[arg(long)]
-        dry_run: bool,
-        /// Print only the one-line summary
-        #[arg(long, conflicts_with = "verbose")]
-        quiet: bool,
-        /// Print extra per-issue details
-        #[arg(long)]
-        verbose: bool,
-    },
-
-    /// Sync all linked issues, or only the provided issue IDs
-    Sync {
-        issue_ids: Vec<String>,
-        /// Only sync issues carrying every supplied local label. Repeating this
-        /// option intersects labels, explicit issue IDs, and --since.
-        #[arg(short = 'l', long = "label")]
-        labels: Vec<github::GithubSyncLabel>,
-        /// GitHub repository override, e.g. owner/repo
-        #[arg(short = 'R', long)]
-        repo: Option<String>,
-        /// Preview changes without applying them
-        #[arg(long)]
-        dry_run: bool,
-        /// Pull GitHub fields/comments without writing to GitHub. Refuses to
-        /// discard local fields or divergent content without a common ancestor
-        /// unless --force is also given.
-        #[arg(long)]
-        pull_only: bool,
-        /// With --pull-only, explicitly choose GitHub even after local changes or
-        /// without a common ancestor. Also confirms paired local comment deletion
-        /// when its GitHub counterpart disappeared. Does not override ordinary
-        /// bidirectional field conflicts.
-        #[arg(long)]
-        force: bool,
-        /// Only sync issues whose local record changed at/after this time (minibeads-specific).
-        /// Accepts an RFC3339 timestamp (e.g. '2026-07-30T00:00:00Z') or a relative duration
-        /// like '24h', '2d', '90m'. Combines with explicit issue IDs (intersection). Cheap
-        /// incremental mode so a large linked set doesn't need a full walk every time. This
-        /// does not discover remote-only changes; omit it when those must be found.
-        #[arg(long)]
-        since: Option<SyncSince>,
-        /// Print only the one-line summary
-        #[arg(long, conflicts_with = "verbose")]
-        quiet: bool,
-        /// Print extra per-issue details
-        #[arg(long)]
-        verbose: bool,
-    },
-
-    /// Stress-test GitHub sync against a disposable GitHub repository
-    StressTest {
-        /// GitHub repository, e.g. owner/repo
-        #[arg(short = 'R', long)]
-        repo: String,
-        /// Number of real GitHub issues to create and close
-        #[arg(short = 'n', long, default_value = "5")]
-        iterations: usize,
-        /// Random mutation steps to run per temporary GitHub issue
-        #[arg(long, default_value = "8")]
-        steps: usize,
-        /// Random seed for reproducing a stress-test sequence
-        #[arg(long)]
-        seed: Option<u64>,
-        /// Mutate a batch of issues before each sync, including deliberate conflicts
-        #[arg(long)]
-        adversarial: bool,
-        /// Print each live stress action and verification step to stderr
-        #[arg(long)]
-        verbose: bool,
-    },
-}
-
-#[derive(serde::Serialize)]
-struct GithubLinkView {
-    issue_id: String,
-    title: String,
-    status: Status,
-    github_url: String,
 }
 
 #[derive(serde::Serialize)]
@@ -1193,123 +896,6 @@ impl<'a> From<&'a Comment> for ShowCommentView<'a> {
             timestamp: comment.created_at.to_rfc3339(),
         }
     }
-}
-
-fn print_github_summary(report: &github::GithubSyncReport) {
-    println!(
-        "GitHub sync: linked {}, created remote {}, pushed {}, pulled {}, comments exported {}, comments imported {}, comments deleted remote {}, comments deleted local {}, conflicts {}",
-        report.linked,
-        report.created_remote,
-        report.pushed_issues,
-        report.pulled_issues,
-        report.exported_comments,
-        report.imported_comments,
-        report.deleted_remote_comments,
-        report.deleted_local_comments,
-        report.conflicts.len()
-    );
-}
-
-fn print_github_report(report: &github::GithubSyncReport, quiet: bool, verbose: bool) {
-    if quiet {
-        print_github_summary(report);
-        return;
-    }
-
-    if report.issues.is_empty() {
-        println!("No GitHub-linked issues matched.");
-    } else {
-        for issue in &report.issues {
-            let mut extras = Vec::new();
-            if issue.comments_exported > 0 {
-                extras.push(format!("{} comment(s) exported", issue.comments_exported));
-            }
-            if issue.comments_imported > 0 {
-                extras.push(format!("{} comment(s) imported", issue.comments_imported));
-            }
-            if issue.comments_deleted_remote > 0 {
-                extras.push(format!(
-                    "{} comment(s) deleted on GitHub",
-                    issue.comments_deleted_remote
-                ));
-            }
-            if issue.comments_deleted_local > 0 {
-                extras.push(format!(
-                    "{} local comment(s) deleted",
-                    issue.comments_deleted_local
-                ));
-            }
-            if issue.conflict.is_some() {
-                extras.push("conflict".to_string());
-            }
-
-            let suffix = if extras.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", extras.join(", "))
-            };
-            println!(
-                "{}: {} -> {}{}",
-                issue.issue_id, issue.action, issue.github_url, suffix
-            );
-
-            if verbose {
-                println!("  title: {}", issue.title);
-                for detail in &issue.details {
-                    println!("  - {}", detail);
-                }
-                if let Some(conflict) = &issue.conflict {
-                    println!("  conflict: {}", conflict);
-                }
-            }
-        }
-    }
-
-    print_github_summary(report);
-}
-
-fn print_github_import_summary(report: &github::GithubImportReport) {
-    println!(
-        "GitHub import: imported {}, skipped existing {}",
-        report.imported, report.skipped_existing
-    );
-}
-
-fn print_github_import_report(report: &github::GithubImportReport, quiet: bool, verbose: bool) {
-    if quiet {
-        print_github_import_summary(report);
-        return;
-    }
-
-    if report.issues.is_empty() {
-        println!("No GitHub issues matched.");
-    } else {
-        for issue in &report.issues {
-            let local = issue
-                .issue_id
-                .as_ref()
-                .map(|id| format!(" -> {id}"))
-                .unwrap_or_default();
-            let comments = if issue.comments_imported > 0 {
-                format!(" ({} comment(s) imported)", issue.comments_imported)
-            } else {
-                String::new()
-            };
-            println!(
-                "{}: {}{}{}",
-                issue.github_url, issue.action, local, comments
-            );
-
-            if verbose {
-                println!("  title: {}", issue.title);
-                for detail in &issue.details {
-                    println!("  - {}", detail);
-                }
-            }
-        }
-    }
-
-    print_github_import_summary(report);
 }
 
 fn should_color_stdout() -> bool {
@@ -1451,16 +1037,12 @@ fn comments_markdown(comments: &[Comment]) -> String {
     comments
         .iter()
         .map(|comment| {
-            let mut text = format!(
+            format!(
                 "### {} at {}\n\n{}",
                 comment.author,
                 comment.created_at.to_rfc3339(),
                 comment.body.trim()
-            );
-            if let Some(source_url) = &comment.source_url {
-                text.push_str(&format!("\n\n_Source: {}_", source_url));
-            }
-            text
+            )
         })
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -1637,8 +1219,8 @@ fn print_dependency_tree(node: &types::TreeNode, depth: usize, prefix: &str, is_
 ///
 /// `--description-file -` reads stdin. This exists because passing prose as an
 /// inline shell argument lets the SHELL expand backticks and `$(...)` before
-/// minibeads receives it: the command then stores a silently truncated body and
-/// exits 0. minibeads cannot detect that -- by the time the string arrives it is
+/// tazk receives it: the command then stores a silently truncated body and
+/// exits 0. tazk cannot detect that -- by the time the string arrives it is
 /// already valid and already wrong -- so the only real fix is to keep the shell
 /// out of the path. Four separate agents hit that footgun in a single day, all
 /// of whom knew the rule, because this safe path did not exist.
@@ -1660,67 +1242,6 @@ fn resolve_body(inline: Option<String>, from_file: Option<String>) -> Result<Opt
             Ok(Some(text))
         }
     }
-}
-
-/// Reject a local description edit that a GitHub mirror can later replace.
-///
-/// A linked issue's description is the mirrored GitHub issue body, not a safe
-/// place for local implementation notes. Requiring an explicit override makes
-/// intentional upstream-body edits possible while making accidental local-only
-/// notes fail before they are written.
-fn refuse_unacknowledged_mirrored_description_edit(
-    storage: &Storage,
-    issue_ids: &[String],
-    changes_description: bool,
-    allow_mirrored_description: bool,
-    replacement_external_ref: Option<&str>,
-) -> Result<()> {
-    let mut issues = Vec::with_capacity(issue_ids.len());
-    for issue_id in issue_ids {
-        issues.push(
-            storage
-                .get_issue(issue_id)?
-                .ok_or_else(|| anyhow::anyhow!("Issue not found: {issue_id}"))?,
-        );
-    }
-    refuse_mirrored_description_edit_for_issues(
-        &issues,
-        changes_description,
-        allow_mirrored_description,
-        replacement_external_ref,
-    )
-}
-
-fn refuse_mirrored_description_edit_for_issues(
-    issues: &[Issue],
-    changes_description: bool,
-    allow_mirrored_description: bool,
-    replacement_external_ref: Option<&str>,
-) -> Result<()> {
-    if !changes_description || allow_mirrored_description {
-        return Ok(());
-    }
-
-    let will_link_to_github = replacement_external_ref.is_some_and(is_github_issue_ref);
-    let mirrored: Vec<&str> = issues
-        .iter()
-        .filter(|issue| {
-            will_link_to_github
-                || issue
-                    .external_ref
-                    .as_deref()
-                    .is_some_and(is_github_issue_ref)
-        })
-        .map(|issue| issue.id.as_str())
-        .collect();
-    if mirrored.is_empty() {
-        return Ok(());
-    }
-
-    anyhow::bail!(
-        "refusing to change mirrored GitHub description(s): {}. Their description is replaced by GitHub synchronization; put local analysis in `mb comments add` or a companion local issue. If you intentionally mean to edit the upstream GitHub issue body, rerun with --allow-mirrored-description.",
-        mirrored.join(", ")
-    );
 }
 
 /// Report what was actually STORED, not merely that the write succeeded.
@@ -1755,8 +1276,6 @@ fn main() {
 struct IssueFilters<'a> {
     /// Must have ALL specified labels.
     labels: &'a [String],
-    /// Only issues linked to a GitHub issue.
-    github: bool,
     /// Restrict to a comma-separated set of exact issue IDs.
     id: Option<&'a str>,
     /// Case-insensitive title substring.
@@ -1823,15 +1342,6 @@ impl IssueFilters<'_> {
             issues.retain(|issue| self.labels.iter().all(|label| issue.labels.contains(label)));
         }
 
-        if self.github {
-            issues.retain(|issue| {
-                issue
-                    .external_ref
-                    .as_deref()
-                    .is_some_and(is_github_issue_ref)
-            });
-        }
-
         if let Some(id_filter) = self.id {
             let target_ids: Vec<&str> = id_filter.split(',').map(str::trim).collect();
             issues.retain(|issue| target_ids.contains(&issue.id.as_str()));
@@ -1889,14 +1399,14 @@ fn run_merge_driver_command(command: MergeDriverCommands) -> Result<()> {
             for line in report {
                 println!("{line}");
             }
-            println!("Installed the minibeads merge driver.");
+            println!("Installed the tazk merge driver.");
             Ok(())
         }
         MergeDriverCommands::Show => {
             println!(
                 "git config merge.{}.driver '{}'",
                 merge_driver::DRIVER_NAME,
-                merge_driver::driver_command("mb")
+                merge_driver::driver_command("tz")
             );
             println!("# .gitattributes");
             for line in merge_driver::gitattributes_lines() {
@@ -1921,56 +1431,49 @@ fn run() -> Result<()> {
     }
 
     // Extract fields needed for get_storage before matching on cli.command
-    // This avoids borrowing issues when we try to call get_storage(mb_beads_dir, db, readonly) inside match arms
-    let mb_beads_dir = &cli.global_opts.mb_beads_dir;
-    let db = &cli.global_opts.db;
+    // This avoids borrowing issues when we try to call get_storage(tz_dir, readonly) inside match arms
+    let tz_dir = &cli.global_opts.tz_dir;
     let json = cli.global_opts.json;
-    let mb_no_cmd_logging = cli.global_opts.mb_no_cmd_logging || readonly;
+    let tz_no_cmd_logging = cli.global_opts.tz_no_cmd_logging || readonly;
     let actor = cli.global_opts.actor.clone();
 
     match cli.command {
         Commands::Init {
             prefix,
-            mb_hash_ids,
-            mb_issue_layout,
-            server: _,
-            server_port: _,
-            database: _,
-            backend: _,
+            tz_hash_ids,
+            tz_issue_layout,
             quiet,
-            skip_agents: _,
-            skip_hooks: _,
         } => {
             // IMPORTANT: init always creates the primary storage dir in current directory
-            // It does NOT use find_beads_dir() or respect --db/--mb-beads-dir flags
+            // It does NOT use find_tazk_dir() or respect the --tz-dir flag
             // This ensures init always initializes in CWD, never in ancestor directories
-            if mb_beads_dir.is_some() || db.is_some() {
+            if tz_dir.is_some() {
                 eprintln!(
-                    "Note: 'mb init' always creates {}/ in current directory",
+                    "Note: 'tz init' always creates {}/ in current directory",
                     PRIMARY_STORAGE_DIR
                 );
-                eprintln!("      --db and --mb-beads-dir flags are ignored for 'init'");
+                eprintln!("      --tz-dir is ignored for 'init'");
             }
 
-            let beads_dir = PathBuf::from(PRIMARY_STORAGE_DIR);
-            let issue_layout = match mb_issue_layout.as_str() {
+            let tazk_dir = PathBuf::from(PRIMARY_STORAGE_DIR);
+            let issue_layout = match tz_issue_layout.as_str() {
                 "flat" => IssueStorageLayout::Flat,
                 "sharded" => IssueStorageLayout::Sharded,
                 other => anyhow::bail!(
-                    "Invalid --mb-issue-layout '{}'. Valid values are: flat, sharded",
+                    "Invalid --tz-issue-layout '{}'. Valid values are: flat, sharded",
                     other
                 ),
             };
-            let storage = Storage::init(beads_dir, prefix, mb_hash_ids, issue_layout)?;
+            let storage = Storage::init(tazk_dir, prefix, tz_hash_ids, issue_layout)?;
 
             // Log command after successful init
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             if !json && !quiet {
                 println!(
-                    "Initialized beads database with prefix: {}",
+                    "Initialized tazk database with prefix: {}",
                     storage.get_prefix()?
                 );
             }
@@ -1995,14 +1498,12 @@ fn run() -> Result<()> {
             parent,
             force: _force,
             file,
-            ephemeral: _,
-            silent,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Handle bulk creation from file
@@ -2026,8 +1527,8 @@ fn run() -> Result<()> {
 
             // Parse dependencies
             // Supports two formats:
-            // 1. Simple: "bd-1,bd-2" (defaults to 'blocks' type)
-            // 2. Advanced: "blocks:bd-1,related:bd-2,discovered-from:bd-3"
+            // 1. Simple: "tz-1,tz-2" (defaults to 'blocks' type)
+            // 2. Advanced: "blocks:tz-1,related:tz-2,discovered-from:tz-3"
             let mut parsed_deps = if let Some(deps_str) = deps {
                 deps_str
                     .split(',')
@@ -2091,7 +1592,7 @@ fn run() -> Result<()> {
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&issue)?);
-            } else if !silent {
+            } else {
                 println!("Created issue: {}", issue.id);
                 // Report what was STORED, not merely that the write succeeded.
                 report_stored_body("description", &description);
@@ -2105,20 +1606,17 @@ fn run() -> Result<()> {
             r#type,
             assignee,
             labels,
-            github,
             id,
             title,
             parent,
             limit,
             group_priority,
-            include_infra: _,
-            no_pager: _,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Parse priority filters (repeatable and/or comma-separated)
@@ -2140,7 +1638,6 @@ fn run() -> Result<()> {
             // Apply in-memory filters shared with `ready`
             IssueFilters {
                 labels: &labels,
-                github,
                 id: id.as_deref(),
                 title: title.as_deref(),
                 parent: parent.as_deref(),
@@ -2171,15 +1668,15 @@ fn run() -> Result<()> {
         }
 
         Commands::Show { issue_ids } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             if issue_ids.is_empty() {
-                anyhow::bail!("No issue IDs provided. Usage: mb show <issue-id> [issue-ids...]");
+                anyhow::bail!("No issue IDs provided. Usage: tz show <issue-id> [issue-ids...]");
             }
 
             let prefix = storage.get_prefix()?;
@@ -2234,10 +1731,10 @@ fn run() -> Result<()> {
         }
 
         Commands::Children { parent_id } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             let mut children = storage.list_issues(None, None, None, None, None)?;
@@ -2267,7 +1764,6 @@ fn run() -> Result<()> {
             title,
             description,
             description_file,
-            allow_mirrored_description,
             search,
             replace,
             search_field,
@@ -2285,24 +1781,17 @@ fn run() -> Result<()> {
             claim_for,
             claim_as,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Targeted search/replace edit. clap guarantees --search comes with
             // --replace and is mutually exclusive with the wholesale field
             // setters and --claim, so this is a self-contained mode.
             if let Some(search) = search {
-                refuse_unacknowledged_mirrored_description_edit(
-                    &storage,
-                    &issue_ids,
-                    search_field == EditField::Description,
-                    allow_mirrored_description,
-                    external_ref.as_deref(),
-                )?;
                 let replace = replace.unwrap_or_default();
                 let mut updated_issues = Vec::new();
                 for issue_id in &issue_ids {
@@ -2329,13 +1818,6 @@ fn run() -> Result<()> {
             // exclusive with --search/--replace, the wholesale field setters, and
             // --claim, so this is a self-contained mode like search/replace.
             if let Some(append) = append {
-                refuse_unacknowledged_mirrored_description_edit(
-                    &storage,
-                    &issue_ids,
-                    search_field == EditField::Description,
-                    allow_mirrored_description,
-                    external_ref.as_deref(),
-                )?;
                 let mut updated_issues = Vec::new();
                 for issue_id in &issue_ids {
                     let issue = storage.append_to_issue(issue_id, search_field, &append)?;
@@ -2371,13 +1853,6 @@ fn run() -> Result<()> {
             }
             // Prefer a file/stdin body when given; the shell never touches it.
             let description = resolve_body(description, description_file)?;
-            refuse_unacknowledged_mirrored_description_edit(
-                &storage,
-                &issue_ids,
-                description.is_some(),
-                allow_mirrored_description,
-                external_ref.as_deref(),
-            )?;
             if let Some(d) = description {
                 stored_description = Some(d.clone());
                 updates.insert("description".to_string(), d);
@@ -2444,10 +1919,10 @@ fn run() -> Result<()> {
             claim_as,
             force,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             if issue_ids.is_empty() {
@@ -2486,11 +1961,11 @@ fn run() -> Result<()> {
         }
 
         Commands::Close { issue_ids, reason } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Close all specified issues
@@ -2514,11 +1989,11 @@ fn run() -> Result<()> {
             issue_ids,
             reason: _,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             let mut reopened = Vec::new();
@@ -2538,18 +2013,18 @@ fn run() -> Result<()> {
             Ok(())
         }
 
-        Commands::MbRename {
+        Commands::TzRename {
             old_id,
             new_id,
             dry_run,
             repair,
-            mb_patch_code,
+            tz_patch_code,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             if repair {
@@ -2589,7 +2064,7 @@ fn run() -> Result<()> {
                     }
 
                     // Patch code references if requested
-                    if mb_patch_code {
+                    if tz_patch_code {
                         if let Err(e) = code_patch::patch_code_for_rename(&old_id, &new_id) {
                             eprintln!("Warning: Code patching failed: {}", e);
                         }
@@ -2604,11 +2079,11 @@ fn run() -> Result<()> {
             dry_run,
             force,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             let changes = storage.rename_prefix(&new_prefix, dry_run, force)?;
@@ -2628,11 +2103,11 @@ fn run() -> Result<()> {
         }
 
         Commands::Dep { command } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             match command {
@@ -2767,10 +2242,10 @@ fn run() -> Result<()> {
         }
 
         Commands::Label { command } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             match command {
@@ -2829,10 +2304,10 @@ fn run() -> Result<()> {
         }
 
         Commands::Config { command } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             match command {
@@ -2874,32 +2349,11 @@ fn run() -> Result<()> {
             Ok(())
         }
 
-        Commands::Migrate {
-            dry_run: _,
-            yes: _,
-            json: migrate_json,
-            inspect: _,
-            update_repo_id: _,
-        } => {
-            if migrate_json || json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "status": "ok",
-                        "message": "minibeads markdown storage has no Beads schema migrations"
-                    })
-                );
-            } else {
-                println!("No migrations needed for minibeads markdown storage.");
-            }
-            Ok(())
-        }
-
         Commands::Comments { command } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             match command {
@@ -2954,189 +2408,12 @@ fn run() -> Result<()> {
             Ok(())
         }
 
-        Commands::Github { token, command } => {
-            let github_preview = match &command {
-                GithubCommands::List => false,
-                GithubCommands::Link { dry_run, .. }
-                | GithubCommands::Publish { dry_run, .. }
-                | GithubCommands::Import { dry_run, .. }
-                | GithubCommands::Sync { dry_run, .. } => *dry_run,
-                GithubCommands::StressTest { .. } => false,
-            };
-            let storage = get_storage(mb_beads_dir, db, readonly || github_preview)?;
-
-            if !mb_no_cmd_logging && !github_preview {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
-            }
-
-            // Scope the token to this process's `gh` calls only: no `gh auth switch`, no
-            // change to gh's persistent/global auth state, so concurrent `gh` users on the
-            // same machine are unaffected.
-            if let Some(token) = &token {
-                env::set_var("GH_TOKEN", token);
-            }
-
-            let report = match command {
-                GithubCommands::List => {
-                    let links: Vec<GithubLinkView> = storage
-                        .list_issues(None, None, None, None, None)?
-                        .into_iter()
-                        .filter_map(|issue| {
-                            let github_url = issue.external_ref.clone()?;
-                            if !is_github_issue_ref(&github_url) {
-                                return None;
-                            }
-                            Some(GithubLinkView {
-                                issue_id: issue.id,
-                                title: issue.title,
-                                status: issue.status,
-                                github_url,
-                            })
-                        })
-                        .collect();
-
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&links)?);
-                    } else if links.is_empty() {
-                        println!("No GitHub-linked issues.");
-                    } else {
-                        for link in links {
-                            println!(
-                                "{}: {} [{}] -> {}",
-                                link.issue_id, link.title, link.status, link.github_url
-                            );
-                        }
-                    }
-                    return Ok(());
-                }
-                GithubCommands::Link {
-                    issue_id,
-                    github_issue,
-                    repo,
-                    dry_run,
-                } => github::link_issue(
-                    &storage,
-                    &issue_id,
-                    &github_issue,
-                    repo.as_deref(),
-                    dry_run,
-                )?,
-                GithubCommands::Publish {
-                    issue_id,
-                    repo,
-                    dry_run,
-                } => github::publish_issue(&storage, &issue_id, repo.as_deref(), dry_run)?,
-                GithubCommands::Import {
-                    repo,
-                    state,
-                    labels,
-                    assignee,
-                    author,
-                    mention,
-                    milestone,
-                    app,
-                    search,
-                    limit,
-                    dry_run,
-                    quiet,
-                    verbose,
-                } => {
-                    let _gh_trace = github::trace_gh_calls(verbose);
-                    let options = github::GithubImportOptions {
-                        repo,
-                        state,
-                        labels,
-                        assignee,
-                        author,
-                        mention,
-                        milestone,
-                        app,
-                        search,
-                        limit,
-                        dry_run,
-                    };
-                    let report = github::import_issues(&storage, &options)?;
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&report)?);
-                    } else {
-                        print_github_import_report(&report, quiet, verbose);
-                    }
-                    return Ok(());
-                }
-                GithubCommands::Sync {
-                    issue_ids,
-                    labels,
-                    repo,
-                    dry_run,
-                    pull_only,
-                    force,
-                    since,
-                    quiet,
-                    verbose,
-                } => {
-                    let _gh_trace = github::trace_gh_calls(verbose);
-                    let report = github::sync_linked(
-                        &storage,
-                        &issue_ids,
-                        repo.as_deref(),
-                        dry_run,
-                        pull_only,
-                        force,
-                        github::GithubSyncFilter {
-                            labels: &labels,
-                            since: since.map(|SyncSince(dt)| dt),
-                        },
-                    )?;
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&report)?);
-                    } else {
-                        print_github_report(&report, quiet, verbose);
-                    }
-                    return Ok(());
-                }
-                GithubCommands::StressTest {
-                    repo,
-                    iterations,
-                    steps,
-                    seed,
-                    adversarial,
-                    verbose,
-                } => {
-                    let report =
-                        github::stress_test(&repo, iterations, steps, seed, adversarial, verbose)?;
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&report)?);
-                    } else {
-                        println!(
-                            "GitHub sync stress test passed: {} iteration(s), {} step(s) each, {} issue(s) created and closed in {} (seed {})",
-                            report.iterations,
-                            report.steps,
-                            report.issues_created,
-                            report.repo,
-                            report.seed
-                        );
-                        for issue in report.github_urls {
-                            println!("  {}", issue);
-                        }
-                    }
-                    return Ok(());
-                }
-            };
-
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                print_github_report(&report, false, false);
-            }
-            Ok(())
-        }
-
         Commands::Stats => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             let stats = storage.get_stats()?;
@@ -3159,11 +2436,11 @@ fn run() -> Result<()> {
         }
 
         Commands::Blocked => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             let blocked = storage.get_blocked()?;
@@ -3185,17 +2462,17 @@ fn run() -> Result<()> {
 
         Commands::Export {
             output,
-            mb_output_default,
+            tz_output_default,
             status,
             priority,
             r#type,
             assignee,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Determine output destination
@@ -3209,9 +2486,9 @@ fn run() -> Result<()> {
                     assignee.as_deref(),
                 )?;
                 eprintln!("Exported {} issues to {}", count, path.display());
-            } else if mb_output_default {
-                // --mb-output-default: write to storage/issues.jsonl
-                let path = storage.get_beads_dir().join("issues.jsonl");
+            } else if tz_output_default {
+                // --tz-output-default: write to storage/issues.jsonl
+                let path = storage.get_tazk_dir().join("issues.jsonl");
                 let count = storage.export_to_jsonl(
                     &path,
                     status,
@@ -3221,7 +2498,7 @@ fn run() -> Result<()> {
                 )?;
                 eprintln!("Exported {} issues to {}", count, path.display());
             } else {
-                // Default: write to stdout (matching upstream bd)
+                // Default: write to stdout
                 // Convert single priority to vector for list_issues
                 let priority_list = priority.map(|p| vec![p]);
                 let issues = storage.list_issues(
@@ -3244,18 +2521,18 @@ fn run() -> Result<()> {
             dry_run,
             direction,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
-            let beads_dir = storage.get_beads_dir();
-            let jsonl_path = jsonl.unwrap_or_else(|| beads_dir.join("issues.jsonl"));
+            let tazk_dir = storage.get_tazk_dir();
+            let jsonl_path = jsonl.unwrap_or_else(|| tazk_dir.join("issues.jsonl"));
 
             // Load issues from both sources
-            let markdown_issues = sync::load_markdown_issues(&beads_dir)?;
+            let markdown_issues = sync::load_markdown_issues(&tazk_dir)?;
             let jsonl_issues = sync::load_jsonl_issues(&jsonl_path)?;
 
             // Create sync engine and analyze
@@ -3336,7 +2613,7 @@ fn run() -> Result<()> {
                 &filtered_plan,
                 &markdown_issues,
                 &jsonl_issues,
-                &beads_dir,
+                &tazk_dir,
                 &jsonl_path,
                 dry_run,
             )?;
@@ -3385,7 +2662,6 @@ fn run() -> Result<()> {
             priority,
             r#type,
             labels,
-            github,
             id,
             title,
             parent,
@@ -3393,11 +2669,11 @@ fn run() -> Result<()> {
             group_priority,
             sort,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Validate sort policy
@@ -3417,7 +2693,6 @@ fn run() -> Result<()> {
             // Apply in-memory filters shared with `list`
             IssueFilters {
                 labels: &labels,
-                github,
                 id: id.as_deref(),
                 title: title.as_deref(),
                 parent: parent.as_deref(),
@@ -3459,25 +2734,25 @@ fn run() -> Result<()> {
         }
 
         Commands::Version => {
-            println!("mb version {}", env!("CARGO_PKG_VERSION"));
+            println!("tz version {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
 
         Commands::MergeDriver { command } => run_merge_driver_command(command),
 
-        Commands::MbMigrate {
+        Commands::TzMigrate {
             to,
             dry_run,
-            mb_patch_code,
+            tz_patch_code,
             no_change_config,
             repack_contiguous,
             closed_issue_start,
         } => {
-            let storage = get_storage(mb_beads_dir, db, readonly)?;
+            let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
-            if !mb_no_cmd_logging {
-                let _ = log_command(&storage.get_beads_dir(), &env::args().collect::<Vec<_>>());
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
             // Validate that --closed-issue-start is only valid with --repack-contiguous
@@ -3509,7 +2784,7 @@ fn run() -> Result<()> {
                         );
 
                         // Patch code references if requested
-                        if mb_patch_code {
+                        if tz_patch_code {
                             if let Err(e) = code_patch::patch_code_for_migration(&id_mapping) {
                                 eprintln!("Warning: Code patching failed: {}", e);
                             }
@@ -3543,11 +2818,11 @@ fn run() -> Result<()> {
                             changes.len() / 3
                         );
                         if update_config {
-                            println!("Updated config-minibeads.yaml: mb-hash-ids: true");
+                            println!("Updated config-tazk.yaml: tz-hash-ids: true");
                         }
 
                         // Patch code references if requested
-                        if mb_patch_code {
+                        if tz_patch_code {
                             if let Err(e) = code_patch::patch_code_for_migration(&id_mapping) {
                                 eprintln!("Warning: Code patching failed: {}", e);
                             }
@@ -3576,11 +2851,11 @@ fn run() -> Result<()> {
                             issue_count
                         );
                         if update_config {
-                            println!("Updated config-minibeads.yaml: mb-hash-ids: false");
+                            println!("Updated config-tazk.yaml: tz-hash-ids: false");
                         }
 
                         // Patch code references if requested
-                        if mb_patch_code {
+                        if tz_patch_code {
                             if let Err(e) = code_patch::patch_code_for_migration(&id_mapping) {
                                 eprintln!("Warning: Code patching failed: {}", e);
                             }
@@ -3625,7 +2900,7 @@ fn run() -> Result<()> {
                         }
                         if update_config {
                             println!(
-                                "Updated config-minibeads.yaml: issue-storage-layout: {}",
+                                "Updated config-tazk.yaml: issue-storage-layout: {}",
                                 target_layout.as_str()
                             );
                         }
@@ -3643,73 +2918,37 @@ fn run() -> Result<()> {
     }
 }
 
-fn get_storage(
-    mb_beads_dir: &Option<PathBuf>,
-    db: &Option<PathBuf>,
-    readonly: bool,
-) -> Result<Storage> {
-    // Priority order for determining minibeads directory:
-    // 1. --mb-beads-dir flag (preferred, minibeads-specific)
-    // 2. --db flag (for upstream compatibility, treated as syntactic sugar for BEADS_DIR)
-    // 3. MB_BEADS_DIR environment variable (minibeads-specific)
-    // 4. BEADS_DIR environment variable (upstream compatibility)
-    // 5. BEADS_DB environment variable (for upstream compatibility)
-    // 6. Search for .minibeads first, then .beads, in current directory and ancestors
+fn get_storage(tz_dir: &Option<PathBuf>, readonly: bool) -> Result<Storage> {
+    // Priority order for determining the database directory:
+    // 1. --tz-dir flag
+    // 2. TAZK_DIR environment variable
+    // 3. Search for .tazk in the current directory and ancestors
 
-    let beads_dir = if let Some(dir) = mb_beads_dir {
-        // --mb-beads-dir: use directly
+    let tazk_dir = if let Some(dir) = tz_dir {
         dir.clone()
-    } else if let Some(db_path) = db {
-        // --db: syntactic sugar for BEADS_DIR
-        // If it points to a .db file, use its parent directory
-        if db_path.extension().is_some_and(|e| e == "db") {
-            db_path
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("Invalid database path"))?
-                .to_path_buf()
-        } else {
-            db_path.clone()
-        }
-    } else if let Ok(beads_dir) = env::var("MB_BEADS_DIR") {
-        PathBuf::from(beads_dir)
-    } else if let Ok(beads_dir) = env::var("BEADS_DIR") {
-        PathBuf::from(beads_dir)
-    } else if let Ok(beads_db) = env::var("BEADS_DB") {
-        let db_path = PathBuf::from(beads_db);
-        if db_path.extension().is_some_and(|e| e == "db") {
-            db_path
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("Invalid BEADS_DB path"))?
-                .to_path_buf()
-        } else {
-            db_path
-        }
+    } else if let Ok(tazk_dir) = env::var("TAZK_DIR") {
+        PathBuf::from(tazk_dir)
     } else {
-        // Search for the primary directory first, then legacy .beads
-        find_beads_dir()?
+        find_tazk_dir()?
     };
 
     if readonly {
-        Storage::open_readonly(beads_dir)
+        Storage::open_readonly(tazk_dir)
     } else {
-        Storage::open(beads_dir)
+        Storage::open(tazk_dir)
     }
     .context("Failed to open storage")
 }
 
-fn find_beads_dir() -> Result<PathBuf> {
+fn find_tazk_dir() -> Result<PathBuf> {
     let start = env::current_dir()?;
     if let Some(dir) = find_storage_dir_named(&start, PRIMARY_STORAGE_DIR)? {
         return Ok(dir);
     }
-    if let Some(dir) = find_storage_dir_named(&start, LEGACY_STORAGE_DIR)? {
-        return Ok(dir);
-    }
 
     anyhow::bail!(
-        "No {} or {} directory found. Run 'mb init' to initialize a new database.",
-        PRIMARY_STORAGE_DIR,
-        LEGACY_STORAGE_DIR
+        "No {} directory found. Run 'tz init' to initialize a new database.",
+        PRIMARY_STORAGE_DIR
     );
 }
 
@@ -3728,34 +2967,19 @@ fn find_storage_dir_named(start: &Path, dir_name: &str) -> Result<Option<PathBuf
 }
 
 /// Log command to command_history.log
-fn log_command(beads_dir: &Path, args: &[String]) -> Result<()> {
+fn log_command(tazk_dir: &Path, args: &[String]) -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
-    let log_path = beads_dir.join("command_history.log");
+    let log_path = tazk_dir.join("command_history.log");
     let timestamp = chrono::Utc::now().to_rfc3339();
 
-    // Redact credentials before formatting arguments. Debug quoting also keeps
-    // embedded newlines from forging another history entry.
-    let mut redact_next = false;
+    // Debug quoting keeps embedded newlines from forging another history entry.
     // Skip the first argument (binary path) and quote each CLI argument
     let command_line = if args.len() > 1 {
         args[1..]
             .iter()
-            .map(|arg| {
-                let safe = if redact_next {
-                    redact_next = false;
-                    "[REDACTED]"
-                } else if arg == "--token" {
-                    redact_next = true;
-                    arg.as_str()
-                } else if arg.starts_with("--token=") {
-                    "--token=[REDACTED]"
-                } else {
-                    arg.as_str()
-                };
-                format!("{safe:?}")
-            })
+            .map(|arg| format!("{arg:?}"))
             .collect::<Vec<_>>()
             .join(" ")
     } else {
@@ -3845,31 +3069,31 @@ fn print_claim_result(issue: &types::Issue) {
 
 fn print_quickstart() {
     println!(
-        r#"mb - Dependency-Aware Issue Tracker
+        r#"tz - Dependency-Aware Issue Tracker
 
-Issues chained together like beads (minibeads).
+Issues chained together by dependencies.
 
 GETTING STARTED
-  mb init   Initialize mb in your project
-            Creates .minibeads/ directory with project-specific database
+  tz init   Initialize tz in your project
+            Creates .tazk/ directory with project-specific database
             Auto-detects prefix from directory name (e.g., myapp-1, myapp-2)
 
-  mb init --prefix api   Initialize with custom prefix
+  tz init --prefix api   Initialize with custom prefix
             Issues will be named: api-1, api-2, ...
 
 CREATING ISSUES
-  mb create "Fix login bug"
-  mb create "Add auth" -p 0 -t feature
-  mb create "Write tests" -d "Unit tests for auth" --assignee alice
+  tz create "Fix login bug"
+  tz create "Add auth" -p 0 -t feature
+  tz create "Write tests" -d "Unit tests for auth" --assignee alice
 
 VIEWING ISSUES
-  mb list       List all issues
-  mb list --status open  List by status
-  mb list --priority 0  List by priority (0-4, 0=highest)
-  mb show myapp-1       Show issue details
+  tz list       List all issues
+  tz list --status open  List by status
+  tz list --priority 0  List by priority (0-4, 0=highest)
+  tz show myapp-1       Show issue details
 
 MANAGING DEPENDENCIES
-  mb dep add myapp-1 myapp-2     Add dependency (myapp-2 blocks myapp-1)
+  tz dep add myapp-1 myapp-2     Add dependency (myapp-2 blocks myapp-1)
 
 DEPENDENCY TYPES
   blocks  Task B must complete before task A
@@ -3878,19 +3102,19 @@ DEPENDENCY TYPES
   discovered-from  Auto-created when AI discovers related work
 
 READY WORK
-  mb ready       Show issues ready to work on
+  tz ready       Show issues ready to work on
             Ready = status is 'open' AND no blocking dependencies
             Perfect for agents to claim next work!
 
 CLAIMING WORK (cross-machine coordination)
-  mb claim myapp-1       Claim an issue for yourself
+  tz claim myapp-1       Claim an issue for yourself
             Sets assignee to your hostname, status to in_progress, and records
             claimed_at/claimed_until (default: 48h). Fails if another worker
             already holds an active claim.
-  mb claim myapp-1 --for 4h   Claim for a custom window (e.g. 4h, 2d, 90m)
-  mb claim myapp-1 --team backend   Identity becomes 'host/backend'
-  mb claim myapp-1 --release  Release the claim (returns it to the backlog)
-  mb update myapp-1 --claim   Equivalent long form of 'mb claim'
+  tz claim myapp-1 --for 4h   Claim for a custom window (e.g. 4h, 2d, 90m)
+  tz claim myapp-1 --team backend   Identity becomes 'host/backend'
+  tz claim myapp-1 --release  Release the claim (returns it to the backlog)
+  tz update myapp-1 --claim   Equivalent long form of 'tz claim'
 
             HOW THE LOCK WORKS: a claim is just a small commit. Claim the issue,
             commit, and push to the shared branch. If two machines race, the
@@ -3898,21 +3122,21 @@ CLAIMING WORK (cross-machine coordination)
             claimed, and moves on. A claim past its claimed_until is stale and
             may be reclaimed by anyone. Typical agent flow when starting work on
             an already-committed backlog issue:
-              mb claim myapp-1 && git commit -am "claim myapp-1" && git push
+              tz claim myapp-1 && git commit -am "claim myapp-1" && git push
 
 UPDATING ISSUES
-  mb update myapp-1 --status in_progress
-  mb update myapp-1 --priority 0
-  mb update myapp-1 --assignee bob
+  tz update myapp-1 --status in_progress
+  tz update myapp-1 --priority 0
+  tz update myapp-1 --assignee bob
 
-EDITING DESCRIPTIONS (do NOT hand-edit the .minibeads/*.md files!)
-  Always go through 'mb' to change an issue. To revise long text, use a
+EDITING DESCRIPTIONS (do NOT hand-edit the .tazk/*.md files!)
+  Always go through 'tz' to change an issue. To revise long text, use a
   targeted search/replace edit instead of overwriting the whole field with
   --description (which is error-prone and drops content):
 
-  mb update myapp-1 --search "old wording" --replace "new wording"
-  mb update myapp-1 --field design --search "foo" --replace "bar"
-  mb update myapp-1 --search "TODO" --replace "DONE" --replace-all
+  tz update myapp-1 --search "old wording" --replace "new wording"
+  tz update myapp-1 --field design --search "foo" --replace "bar"
+  tz update myapp-1 --search "TODO" --replace "DONE" --replace-all
 
             The --search text must match the field EXACTLY (including newlines)
             and, by default, match exactly once -- include enough surrounding
@@ -3924,35 +3148,24 @@ EDITING DESCRIPTIONS (do NOT hand-edit the .minibeads/*.md files!)
   To simply add to the end of a field, use --append instead of reproducing
   the trailing text as a search/replace:
 
-  mb update myapp-1 --append "A new closing paragraph."
-  mb update myapp-1 --field design --append "An extra design note."
+  tz update myapp-1 --append "A new closing paragraph."
+  tz update myapp-1 --field design --append "An extra design note."
 
             --append inserts a blank line before the new text when the field is
             non-empty, so it lands as its own paragraph.
 
 CLOSING ISSUES
-  mb close myapp-1
-  mb close myapp-1 --reason "Fixed in PR #42"
+  tz close myapp-1
+  tz close myapp-1 --reason "Fixed in PR #42"
 
 DATABASE LOCATION
-  mb automatically discovers your database in this priority order:
-    1. --mb-beads-dir /path/to/.minibeads   (minibeads-specific, preferred)
-    2. --db /path/to/.minibeads             (upstream compatibility)
-    3. $MB_BEADS_DIR environment variable
-    4. $BEADS_DB environment variable   (upstream compatibility)
-    5. .minibeads/ in current directory or ancestors
-    6. .beads/ in current directory or ancestors (legacy fallback)
-
-  Note: --db is treated as syntactic sugar for specifying BEADS_DIR.
-        When path ends with .db, the parent directory is used.
-        Use --mb-beads-dir for minibeads-specific workflows.
-
-COMPATIBILITY NOTE
-  The binary is named 'mb' (minibeads) to distinguish it from upstream 'bd'.
-  You can symlink 'mb' to 'bd' if needed for compatibility with existing tools.
+  tz automatically discovers your database in this priority order:
+    1. --tz-dir /path/to/.tazk
+    2. $TAZK_DIR environment variable
+    3. .tazk/ in current directory or ancestors
 
 Ready to start!
-Run mb create "My first issue" to create your first issue.
+Run tz create "My first issue" to create your first issue.
 "#
     );
 }
@@ -3961,48 +3174,6 @@ Run mb create "My first issue" to create your first issue.
 mod body_input_tests {
     use super::*;
     use std::io::Write;
-
-    #[test]
-    fn github_sync_parses_intersecting_selection_flags() {
-        let cli = Cli::try_parse_from([
-            "mb",
-            "github",
-            "sync",
-            "minibeads-42",
-            "minibeads-43",
-            "--label",
-            "documentation",
-            "--label",
-            "review",
-            "--since",
-            "24h",
-            "--dry-run",
-        ])
-        .unwrap();
-        assert!(cli.command.is_read_only());
-        let Commands::Github {
-            command:
-                GithubCommands::Sync {
-                    issue_ids,
-                    labels,
-                    since,
-                    dry_run,
-                    ..
-                },
-            ..
-        } = cli.command
-        else {
-            panic!("expected GitHub sync command");
-        };
-        assert_eq!(issue_ids, ["minibeads-42", "minibeads-43"]);
-        assert!(labels
-            .iter()
-            .map(github::GithubSyncLabel::as_str)
-            .eq(["documentation", "review"]));
-        assert!(since.is_some());
-        assert!(dry_run);
-        assert!(Cli::try_parse_from(["mb", "github", "sync", "--label", " "]).is_err());
-    }
 
     /// Inline stays inline when no file is given.
     #[test]
@@ -4051,69 +3222,5 @@ mod body_input_tests {
         .unwrap()
         .unwrap();
         assert_eq!(got, "from file");
-    }
-
-    #[test]
-    fn mirrored_description_edit_requires_an_explicit_override() {
-        let mut mirrored = Issue::new(
-            "minibeads-1".to_string(),
-            "Mirrored bug".to_string(),
-            3,
-            IssueType::Bug,
-        );
-        mirrored.external_ref =
-            Some("https://github.com/DeepScryAI/DeepScry_bugs/issues/1".to_string());
-
-        let err = refuse_mirrored_description_edit_for_issues(&[mirrored], true, false, None)
-            .expect_err("a mirrored description must fail loudly by default");
-        let text = err.to_string();
-        assert!(
-            text.contains("minibeads-1"),
-            "must name the blocked issue: {text}"
-        );
-        assert!(
-            text.contains("mb comments add"),
-            "must name the durable alternative: {text}"
-        );
-        assert!(
-            text.contains("--allow-mirrored-description"),
-            "must name the explicit override: {text}"
-        );
-    }
-
-    #[test]
-    fn explicit_override_and_unlinked_description_edits_are_allowed() {
-        let mut mirrored = Issue::new(
-            "minibeads-1".to_string(),
-            "Mirrored bug".to_string(),
-            3,
-            IssueType::Bug,
-        );
-        mirrored.external_ref =
-            Some("https://github.com/DeepScryAI/DeepScry_bugs/issues/1".to_string());
-        let local = Issue::new(
-            "minibeads-2".to_string(),
-            "Local analysis".to_string(),
-            3,
-            IssueType::Task,
-        );
-
-        refuse_mirrored_description_edit_for_issues(&[mirrored], true, true, None)
-            .expect("explicit override must preserve intentional upstream edits");
-        refuse_mirrored_description_edit_for_issues(
-            std::slice::from_ref(&local),
-            true,
-            false,
-            None,
-        )
-        .expect("unlinked descriptions remain ordinary editable task records");
-        let err = refuse_mirrored_description_edit_for_issues(
-            std::slice::from_ref(&local),
-            true,
-            false,
-            Some("https://github.com/DeepScryAI/DeepScry_bugs/issues/2"),
-        )
-        .expect_err("linking and editing in one command must not bypass the guard");
-        assert!(err.to_string().contains("minibeads-2"));
     }
 }

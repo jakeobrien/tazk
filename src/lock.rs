@@ -14,17 +14,17 @@ pub struct Lock {
 }
 
 impl Lock {
-    /// Acquire a coarse-grained lock on the beads directory
-    pub fn acquire(beads_dir: &Path) -> Result<Self> {
-        Self::acquire_with_recovery(beads_dir, true)
+    /// Acquire a coarse-grained lock on the tazk directory
+    pub fn acquire(tazk_dir: &Path) -> Result<Self> {
+        Self::acquire_with_recovery(tazk_dir, true)
     }
 
-    pub(crate) fn acquire_without_recovery(beads_dir: &Path) -> Result<Self> {
-        Self::acquire_with_recovery(beads_dir, false)
+    pub(crate) fn acquire_without_recovery(tazk_dir: &Path) -> Result<Self> {
+        Self::acquire_with_recovery(tazk_dir, false)
     }
 
-    fn acquire_with_recovery(beads_dir: &Path, recover: bool) -> Result<Self> {
-        let lock_path = beads_dir.join("minibeads.lock");
+    fn acquire_with_recovery(tazk_dir: &Path, recover: bool) -> Result<Self> {
+        let lock_path = tazk_dir.join("tazk.lock");
         let pid = std::process::id();
 
         let mut backoff = INITIAL_BACKOFF_MS;
@@ -39,10 +39,10 @@ impl Lock {
                         _pid: pid,
                     };
                     if recover {
-                        crate::transaction::recover(beads_dir)?;
+                        crate::transaction::recover(tazk_dir)?;
                     } else {
                         anyhow::ensure!(
-                            !beads_dir.join(crate::transaction::JOURNAL).exists(),
+                            !tazk_dir.join(crate::transaction::JOURNAL).exists(),
                             "Pending transaction requires recovery; rerun without --readonly"
                         );
                     }
@@ -175,17 +175,17 @@ mod tests {
         let temp_dir = temp.path();
 
         let lock = Lock::acquire(temp_dir).unwrap();
-        assert!(temp_dir.join("minibeads.lock").exists());
+        assert!(temp_dir.join("tazk.lock").exists());
 
         drop(lock);
-        assert!(!temp_dir.join("minibeads.lock").exists());
+        assert!(!temp_dir.join("tazk.lock").exists());
     }
 
     #[test]
     fn concurrent_acquisition_has_one_winner() {
         let temp = tempfile::tempdir().unwrap();
         let temp_dir = temp.path();
-        let lock_path = temp_dir.join("minibeads.lock");
+        let lock_path = temp_dir.join("tazk.lock");
         let contenders = 32;
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(contenders));
 

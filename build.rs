@@ -3,9 +3,9 @@ fn main() {
     // small for unoptimized CLI construction, including --help and --version.
     let target = std::env::var("TARGET").expect("Cargo must set TARGET");
     if target.ends_with("windows-msvc") {
-        println!("cargo:rustc-link-arg-bin=mb=/STACK:16777216");
+        println!("cargo:rustc-link-arg-bin=tz=/STACK:16777216");
     } else if target.ends_with("windows-gnu") || target.ends_with("windows-gnullvm") {
-        println!("cargo:rustc-link-arg-bin=mb=-Wl,--stack,16777216");
+        println!("cargo:rustc-link-arg-bin=tz=-Wl,--stack,16777216");
     }
 
     // Set build date

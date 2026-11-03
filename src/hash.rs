@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 /// Hash encoding format for issue IDs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashEncoding {
-    /// Base36 encoding using [0-9a-z] (recommended, matches upstream bd)
+    /// Base36 encoding using [0-9a-z] (recommended)
     Base36,
     /// Hexadecimal encoding using [0-9a-f] (legacy format)
     Hex,
@@ -108,7 +108,7 @@ fn encode_base36(data: &[u8], length: usize) -> String {
 /// before escalating to longer hash lengths.
 ///
 /// # Arguments
-/// * `prefix` - The issue prefix (e.g., "minibeads")
+/// * `prefix` - The issue prefix (e.g., "tazk")
 /// * `title` - Issue title
 /// * `description` - Issue description
 /// * `timestamp` - Creation timestamp for deterministic hashing
@@ -117,7 +117,7 @@ fn encode_base36(data: &[u8], length: usize) -> String {
 /// * `collision_check` - Function that returns true if an ID already exists
 ///
 /// # Returns
-/// A unique hash-based ID like "minibeads-4f10" or "minibeads-b127a5"
+/// A unique hash-based ID like "tazk-4f10" or "tazk-b127a5"
 pub fn generate_hash_id_with_collision_check<F>(
     prefix: &str,
     title: &str,
@@ -195,12 +195,11 @@ where
 
 /// Generate a hash-based issue ID from content and metadata.
 ///
-/// This matches the upstream beads implementation in internal/storage/sqlite/ids.go
 /// The hash is deterministic based on title, description, creator, timestamp, and nonce.
-/// Supports both base36 encoding (recommended, matches upstream) and hex encoding (legacy).
+/// Supports both base36 encoding (recommended) and hex encoding (legacy).
 ///
 /// # Arguments
-/// * `prefix` - The issue prefix (e.g., "minibeads")
+/// * `prefix` - The issue prefix (e.g., "tazk")
 /// * `title` - Issue title
 /// * `description` - Issue description
 /// * `creator` - Issue creator (typically "user" or system user)
@@ -210,7 +209,7 @@ where
 /// * `encoding` - Hash encoding format (base36 or hex)
 ///
 /// # Returns
-/// A hash-based ID like "minibeads-3s9" (base36) or "minibeads-a1b2" (hex)
+/// A hash-based ID like "tazk-3s9" (base36) or "tazk-a1b2" (hex)
 #[allow(clippy::too_many_arguments)]
 pub fn generate_hash_id(
     prefix: &str,
@@ -223,7 +222,7 @@ pub fn generate_hash_id(
     encoding: HashEncoding,
 ) -> String {
     // Combine inputs into stable content string
-    // Format matches upstream: "title|description|creator|timestamp_nanos|nonce"
+    // Format: "title|description|creator|timestamp_nanos|nonce"
     let content = format!(
         "{}|{}|{}|{}|{}",
         title,
@@ -243,7 +242,6 @@ pub fn generate_hash_id(
         HashEncoding::Base36 => {
             // Base36 encoding with variable length (3-8 chars)
             // Determine how many bytes to use based on desired output length
-            // Matching upstream logic from ids.go generateHashID
             let num_bytes = match length {
                 3 => 2, // 2 bytes = 16 bits ≈ 3.09 base36 chars
                 4 => 3, // 3 bytes = 24 bits ≈ 4.63 base36 chars

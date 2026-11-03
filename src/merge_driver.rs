@@ -1,7 +1,7 @@
-//! `mb merge-driver`: a git merge driver for minibeads issue and comment files.
+//! `tz merge-driver`: a git merge driver for tazk issue and comment files.
 //!
-//! Git invokes `mb merge-driver run %O %A %B --marker-size %L --path %P` for
-//! paths marked `merge=mb` in `.gitattributes`. The merged result replaces the
+//! Git invokes `tz merge-driver run %O %A %B --marker-size %L --path %P` for
+//! paths marked `merge=tz` in `.gitattributes`. The merged result replaces the
 //! `%A` file; the exit status is 0 for a clean merge and 1 when conflict hunks
 //! were written, exactly as git expects from a merge driver.
 
@@ -16,10 +16,10 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 /// Name of the driver in `merge.<name>.driver` and `merge=<name>`.
-pub(crate) const DRIVER_NAME: &str = "mb";
+pub(crate) const DRIVER_NAME: &str = "tz";
 
 /// Storage directories whose issue and comment files the driver handles.
-const DATABASE_DIRS: [&str; 2] = [".minibeads", ".beads"];
+const DATABASE_DIRS: [&str; 1] = [".tazk"];
 
 /// The kind of file being merged, determined from its repository path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,7 +32,7 @@ pub(crate) enum MergeFileKind {
     Text,
 }
 
-/// Classify a repository-relative path such as `.beads/issues/mb-1.md`.
+/// Classify a repository-relative path such as `.tazk/issues/tz-1.md`.
 pub(crate) fn classify_path(path: &Path) -> MergeFileKind {
     let components: Vec<&str> = path
         .components()
@@ -190,7 +190,7 @@ pub(crate) struct DriverRun<'a> {
 }
 
 /// Run the driver: merge, write the result, and report every conflict and
-/// notice on stderr as one `mb merge-driver: ...` line each.
+/// notice on stderr as one `tz merge-driver: ...` line each.
 pub(crate) fn run_driver(run: &DriverRun<'_>) -> Result<DriverOutcome> {
     let base = read_input(run.base)?;
     let ours = read_input(run.ours)?;
@@ -207,11 +207,11 @@ pub(crate) fn run_driver(run: &DriverRun<'_>) -> Result<DriverOutcome> {
     }
     let shown = path.display();
     for notice in &merged.notices {
-        eprintln!("mb merge-driver: NOTICE {shown}: {notice}");
+        eprintln!("tz merge-driver: NOTICE {shown}: {notice}");
     }
     for conflict in &merged.conflicts {
         eprintln!(
-            "mb merge-driver: CONFLICT {shown}: {}: {}",
+            "tz merge-driver: CONFLICT {shown}: {}: {}",
             conflict.subject, conflict.reason
         );
     }
@@ -222,7 +222,7 @@ pub(crate) fn run_driver(run: &DriverRun<'_>) -> Result<DriverOutcome> {
     })
 }
 
-/// The `.gitattributes` lines routing minibeads files to the driver. The
+/// The `.gitattributes` lines routing tazk files to the driver. The
 /// leading `**/` matches a database at the top level or in any subdirectory.
 pub(crate) fn gitattributes_lines() -> Vec<String> {
     DATABASE_DIRS
@@ -236,7 +236,7 @@ pub(crate) fn gitattributes_lines() -> Vec<String> {
         .collect()
 }
 
-/// The `merge.mb.driver` command line for a given `mb` executable.
+/// The `merge.tz.driver` command line for a given `tz` executable.
 ///
 /// Git substitutes `%P` already shell-quoted, so it must not be quoted again.
 pub(crate) fn driver_command(executable: &str) -> String {
@@ -267,9 +267,9 @@ fn git(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// Options of `mb merge-driver install`.
+/// Options of `tz merge-driver install`.
 pub(crate) struct InstallOptions<'a> {
-    /// Command git should run; `mb` resolves through `PATH` at merge time.
+    /// Command git should run; `tz` resolves through `PATH` at merge time.
     pub(crate) executable: &'a str,
     /// Write `git config` into the user's global config instead of the repo's.
     pub(crate) global: bool,
@@ -277,7 +277,7 @@ pub(crate) struct InstallOptions<'a> {
     pub(crate) skip_gitattributes: bool,
 }
 
-/// Register the driver with git and route minibeads files to it.
+/// Register the driver with git and route tazk files to it.
 pub(crate) fn install(options: &InstallOptions<'_>) -> Result<Vec<String>> {
     let scope = if options.global {
         "--global"
@@ -292,7 +292,7 @@ pub(crate) fn install(options: &InstallOptions<'_>) -> Result<Vec<String>> {
         "config",
         scope,
         &name_key,
-        "minibeads three-way issue and comment merge",
+        "tazk three-way issue and comment merge",
     ])?;
     git(&["config", scope, &driver_key, &command])?;
     report.push(format!("git config {scope} {driver_key} '{command}'"));
@@ -337,9 +337,8 @@ mod tests {
     #[test]
     fn classifies_flat_and_sharded_issue_paths() {
         for path in [
-            ".beads/issues/minibeads-3.md",
-            ".minibeads/issues/n/0/3/proj-3.md",
-            "sub/project/.minibeads/issues/h/ab/proj-ab12.md",
+            ".tazk/issues/n/0/3/proj-3.md",
+            "sub/project/.tazk/issues/h/ab/proj-ab12.md",
         ] {
             assert_eq!(
                 classify_path(Path::new(path)),
@@ -352,15 +351,14 @@ mod tests {
     #[test]
     fn classifies_comment_paths_and_everything_else() {
         assert_eq!(
-            classify_path(Path::new(".beads/comments/minibeads-30.json")),
+            classify_path(Path::new(".tazk/comments/tazk-30.json")),
             MergeFileKind::Comments
         );
         for path in [
-            ".beads/github-sync-state.json",
-            ".beads/config.yaml",
+            ".tazk/config.yaml",
             "README.md",
             "docs/issues/a.md",
-            ".beads/comments/nested/a.json",
+            ".tazk/comments/nested/a.json",
         ] {
             assert_eq!(
                 classify_path(Path::new(path)),
@@ -372,20 +370,20 @@ mod tests {
 
     #[test]
     fn driver_command_passes_every_git_placeholder() {
-        let command = driver_command("mb");
+        let command = driver_command("tz");
         for placeholder in ["%O", "%A", "%B", "%L", "%P"] {
             assert!(command.contains(placeholder), "{placeholder}");
         }
         assert!(command.ends_with("--path %P"), "git quotes %P itself");
-        assert!(driver_command("/opt/my tools/mb").starts_with("'/opt/my tools/mb' merge-driver"));
-        assert!(driver_command("/x/it's/mb").starts_with(r"'/x/it'\''s/mb' "));
+        assert!(driver_command("/opt/my tools/tz").starts_with("'/opt/my tools/tz' merge-driver"));
+        assert!(driver_command("/x/it's/tz").starts_with(r"'/x/it'\''s/tz' "));
     }
 
     #[test]
-    fn gitattributes_cover_both_database_directories() {
+    fn gitattributes_cover_the_database_directory() {
         let lines = gitattributes_lines();
-        assert!(lines.contains(&"**/.beads/issues/**/*.md merge=mb".to_owned()));
-        assert!(lines.contains(&"**/.minibeads/comments/*.json merge=mb".to_owned()));
+        assert!(lines.contains(&"**/.tazk/issues/**/*.md merge=tz".to_owned()));
+        assert!(lines.contains(&"**/.tazk/comments/*.json merge=tz".to_owned()));
     }
 
     #[test]
@@ -393,7 +391,7 @@ mod tests {
         let (base, ours, theirs) = (&b"base\n"[..], &b"ours \xff"[..], &b"theirs\n"[..]);
         let (bytes, merged) = merge_bytes(
             MergeFileKind::Issue,
-            Path::new(".minibeads/issues/x-1.md"),
+            Path::new(".tazk/issues/x-1.md"),
             [base, ours, theirs],
             MarkerSize::DEFAULT,
         );
@@ -411,7 +409,7 @@ mod tests {
         // Markers outgrow marker-like lines here too.
         let (bytes, _) = merge_bytes(
             MergeFileKind::Issue,
-            Path::new(".minibeads/issues/x-1.md"),
+            Path::new(".tazk/issues/x-1.md"),
             [b"=======\n", b"=======\nours \xff\n", b"=======\ntheirs\n"],
             MarkerSize::DEFAULT,
         );
@@ -420,7 +418,7 @@ mod tests {
 
     #[test]
     fn non_utf8_inputs_changed_on_one_side_merge_cleanly() {
-        let path = Path::new(".minibeads/issues/x-1.md");
+        let path = Path::new(".tazk/issues/x-1.md");
         let (old, new) = (&b"old \xff\n"[..], &b"new \xfe\n"[..]);
         for (sides, expected) in [
             ([old, new, old], new),

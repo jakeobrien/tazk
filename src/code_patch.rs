@@ -33,7 +33,7 @@ pub fn is_interactive_tty() -> bool {
 
 /// Search for references to an issue ID in code using git grep
 ///
-/// Excludes minibeads metadata directories and uses word boundaries to match issue IDs.
+/// Excludes tazk metadata directories and uses word boundaries to match issue IDs.
 /// Returns a mapping from file paths to matching lines with their line numbers.
 pub fn find_code_references(issue_id: &str) -> Result<CodeReferences> {
     find_code_references_in(&std::env::current_dir()?, issue_id)
@@ -68,8 +68,7 @@ fn find_code_references_in(directory: &Path, issue_id: &str) -> Result<CodeRefer
             issue_id,
             "--",
             ".",
-            ":(top,exclude,glob)**/.minibeads/**",
-            ":(top,exclude,glob)**/.beads/**",
+            ":(top,exclude,glob)**/.tazk/**",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -227,7 +226,7 @@ fn patch_code_mappings(
 pub fn patch_code_for_rename(old_id: &str, new_id: &str) -> Result<Option<usize>> {
     // Check if we're in an interactive TTY
     if !is_interactive_tty() {
-        eprintln!("Warning: --mb-patch-code requires an interactive TTY. Skipping code patching.");
+        eprintln!("Warning: --tz-patch-code requires an interactive TTY. Skipping code patching.");
         return Ok(None);
     }
 
@@ -257,7 +256,7 @@ pub fn patch_code_for_rename(old_id: &str, new_id: &str) -> Result<Option<usize>
 /// Collect all accepted mappings before editing, then replace them in one pass.
 pub fn patch_code_for_migration(id_mapping: &HashMap<String, String>) -> Result<usize> {
     if !is_interactive_tty() {
-        eprintln!("Warning: --mb-patch-code requires an interactive TTY. Skipping code patching.");
+        eprintln!("Warning: --tz-patch-code requires an interactive TTY. Skipping code patching.");
         return Ok(0);
     }
 
@@ -341,9 +340,8 @@ mod tests {
                 "src/code with spaces.rs",
                 "first\r\n// r[1]-1: track this\r\nr[1]-10 untouched\r\n",
             ),
-            (".minibeads/issues/r[1]-1.md", "r[1]-1"),
-            (".beads/issues/r[1]-1.md", "r[1]-1"),
-            ("nested/.minibeads/notes", "r[1]-1"),
+            (".tazk/issues/r[1]-1.md", "r[1]-1"),
+            ("nested/.tazk/notes", "r[1]-1"),
         ]);
         let references = find_code_references_in(&directory.path().join("src"), "r[1]-1").unwrap();
         assert_eq!(references.total_matches, 1);
@@ -357,7 +355,7 @@ mod tests {
             b"first\r\n// r-$1: track this\r\nr[1]-10 untouched\r\n"
         );
         assert_eq!(
-            fs::read_to_string(directory.path().join(".minibeads/issues/r[1]-1.md")).unwrap(),
+            fs::read_to_string(directory.path().join(".tazk/issues/r[1]-1.md")).unwrap(),
             "r[1]-1"
         );
         assert_eq!(

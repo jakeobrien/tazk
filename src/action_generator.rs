@@ -1,11 +1,11 @@
-//! Random beads action generator for property-based testing
+//! Random action generator for property-based testing
 //!
 //! This module provides a reusable library for generating and executing
-//! random sequences of beads commands against minibeads or upstream bd.
+//! random sequences of tz commands against the tazk binary.
 //!
 //! ## Key Assumption: Sequential Issue Numbering
 //!
-//! **IMPORTANT**: This generator assumes that beads implementations always number
+//! **IMPORTANT**: This generator assumes that tazk always numbers
 //! new issues sequentially as `N+1` where `N` is the maximum previous issue ID.
 //!
 //! This assumption allows us to:
@@ -18,13 +18,13 @@
 //!
 //! When executing action sequences, we VERIFY this assumption by:
 //! 1. Each `Create` action includes an `expected_id` field
-//! 2. After executing `bd create`, we parse the output to extract the actual issue ID
+//! 2. After executing `tz create`, we parse the output to extract the actual issue ID
 //! 3. We assert that `actual_id == expected_id`
 //! 4. If the assertion fails, the test fails with a clear error message
 //!
 //! This verification ensures that:
 //! - Our model of issue state matches reality
-//! - The beads implementation follows sequential numbering
+//! - The implementation follows sequential numbering
 //! - All subsequent actions operate on the correct issues
 //!
 //! ### Example
@@ -47,13 +47,13 @@ use std::process::Command;
 // Re-export production types instead of defining duplicates
 pub use crate::types::{DependencyType, IssueType, Status};
 
-/// Represents a beads command/action
+/// Represents a tazk command/action
 #[derive(Debug, Clone, PartialEq)]
-pub enum BeadsAction {
-    /// Initialize beads in directory
+pub enum TazkAction {
+    /// Initialize tazk in directory
     Init {
         prefix: Option<String>,
-        mb_hash_ids: Option<bool>,
+        tz_hash_ids: Option<bool>,
     },
 
     /// Create a new issue with expected ID for verification
@@ -98,23 +98,23 @@ pub enum BeadsAction {
     Export { output: String },
 }
 
-impl std::fmt::Display for BeadsAction {
+impl std::fmt::Display for TazkAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BeadsAction::Init {
+            TazkAction::Init {
                 prefix,
-                mb_hash_ids,
+                tz_hash_ids,
             } => {
                 let mut parts = vec!["init".to_string()];
                 if let Some(p) = prefix {
                     parts.push(format!("--prefix {}", p));
                 }
-                if let Some(true) = mb_hash_ids {
-                    parts.push("--mb-hash-ids".to_string());
+                if let Some(true) = tz_hash_ids {
+                    parts.push("--tz-hash-ids".to_string());
                 }
                 write!(f, "{}", parts.join(" "))
             }
-            BeadsAction::Create {
+            TazkAction::Create {
                 expected_id,
                 priority,
                 issue_type,
@@ -126,7 +126,7 @@ impl std::fmt::Display for BeadsAction {
                 priority,
                 issue_type.as_str()
             ),
-            BeadsAction::List { status, priority } => {
+            TazkAction::List { status, priority } => {
                 let mut parts = vec!["list".to_string()];
                 if let Some(s) = status {
                     parts.push(format!("status:{}", s.as_str()));
@@ -136,8 +136,8 @@ impl std::fmt::Display for BeadsAction {
                 }
                 write!(f, "{}", parts.join(" "))
             }
-            BeadsAction::Show { issue_id } => write!(f, "show {}", issue_id),
-            BeadsAction::Update {
+            TazkAction::Show { issue_id } => write!(f, "show {}", issue_id),
+            TazkAction::Update {
                 issue_id,
                 status,
                 priority,
@@ -151,9 +151,9 @@ impl std::fmt::Display for BeadsAction {
                 }
                 write!(f, "{}", parts.join(" "))
             }
-            BeadsAction::Close { issue_id, .. } => write!(f, "close {}", issue_id),
-            BeadsAction::Reopen { issue_id } => write!(f, "reopen {}", issue_id),
-            BeadsAction::AddDependency {
+            TazkAction::Close { issue_id, .. } => write!(f, "close {}", issue_id),
+            TazkAction::Reopen { issue_id } => write!(f, "reopen {}", issue_id),
+            TazkAction::AddDependency {
                 issue_id,
                 depends_on,
                 dep_type,
@@ -164,12 +164,12 @@ impl std::fmt::Display for BeadsAction {
                 depends_on,
                 dep_type.as_str()
             ),
-            BeadsAction::Export { output } => write!(f, "export to {}", output),
+            TazkAction::Export { output } => write!(f, "export to {}", output),
         }
     }
 }
 
-/// Generates random beads action sequences
+/// Generates random action sequences
 ///
 /// Maintains state to ensure generated actions are contextually valid:
 /// - Tracks which issues exist (for Update, Show, Close, etc.)
@@ -205,13 +205,13 @@ impl ActionGenerator {
     /// Generate a sequence of random actions
     ///
     /// Always starts with Init, then generates num_actions random valid actions
-    pub fn generate_sequence(&mut self, num_actions: usize) -> Vec<BeadsAction> {
+    pub fn generate_sequence(&mut self, num_actions: usize) -> Vec<TazkAction> {
         let mut actions = Vec::new();
 
         // Always start with init
-        actions.push(BeadsAction::Init {
+        actions.push(TazkAction::Init {
             prefix: Some(self.prefix.clone()),
-            mb_hash_ids: Some(self.use_hash_ids),
+            tz_hash_ids: Some(self.use_hash_ids),
         });
 
         // Generate random actions
@@ -223,7 +223,7 @@ impl ActionGenerator {
     }
 
     /// Generate a single random action based on current state
-    fn generate_action(&mut self) -> BeadsAction {
+    fn generate_action(&mut self) -> TazkAction {
         // Weight actions based on what makes sense
         let action_type = if self.existing_issues.is_empty() {
             // If no issues exist, must create one
@@ -264,7 +264,7 @@ impl ActionGenerator {
         }
     }
 
-    fn generate_create(&mut self) -> BeadsAction {
+    fn generate_create(&mut self) -> TazkAction {
         let title = format!("Issue {}", self.rng.gen_range(1000..9999));
         let priority = self.rng.gen_range(0..5);
         let issue_type = match self.rng.gen_range(0..5) {
@@ -298,7 +298,7 @@ impl ActionGenerator {
             self.existing_issues.push(expected_id.clone());
         }
 
-        BeadsAction::Create {
+        TazkAction::Create {
             expected_id,
             title,
             priority,
@@ -307,7 +307,7 @@ impl ActionGenerator {
         }
     }
 
-    fn generate_list(&mut self) -> BeadsAction {
+    fn generate_list(&mut self) -> TazkAction {
         let status = if self.rng.gen_bool(0.3) {
             Some(match self.rng.gen_range(0..4) {
                 0 => Status::Open,
@@ -325,15 +325,15 @@ impl ActionGenerator {
             None
         };
 
-        BeadsAction::List { status, priority }
+        TazkAction::List { status, priority }
     }
 
-    fn generate_show(&mut self) -> BeadsAction {
+    fn generate_show(&mut self) -> TazkAction {
         let issue_id = self.pick_random_issue();
-        BeadsAction::Show { issue_id }
+        TazkAction::Show { issue_id }
     }
 
-    fn generate_update(&mut self) -> BeadsAction {
+    fn generate_update(&mut self) -> TazkAction {
         let issue_id = self.pick_random_issue();
 
         let status = if self.rng.gen_bool(0.5) {
@@ -352,24 +352,24 @@ impl ActionGenerator {
             None
         };
 
-        BeadsAction::Update {
+        TazkAction::Update {
             issue_id,
             status,
             priority,
         }
     }
 
-    fn generate_close(&mut self) -> BeadsAction {
+    fn generate_close(&mut self) -> TazkAction {
         let issue_id = self.pick_random_issue();
         self.closed_issues.insert(issue_id.clone());
 
-        BeadsAction::Close {
+        TazkAction::Close {
             issue_id,
             reason: "Completed".to_string(),
         }
     }
 
-    fn generate_reopen(&mut self) -> BeadsAction {
+    fn generate_reopen(&mut self) -> TazkAction {
         // Try to reopen a closed issue, or pick any issue
         let issue_id = if !self.closed_issues.is_empty() && self.rng.gen_bool(0.7) {
             let idx = self.rng.gen_range(0..self.closed_issues.len());
@@ -380,10 +380,10 @@ impl ActionGenerator {
             self.pick_random_issue()
         };
 
-        BeadsAction::Reopen { issue_id }
+        TazkAction::Reopen { issue_id }
     }
 
-    fn generate_add_dependency(&mut self) -> BeadsAction {
+    fn generate_add_dependency(&mut self) -> TazkAction {
         // Need at least 2 issues for a dependency
         if self.existing_issues.len() < 2 {
             return self.generate_create();
@@ -406,15 +406,15 @@ impl ActionGenerator {
             _ => DependencyType::ParentChild,
         };
 
-        BeadsAction::AddDependency {
+        TazkAction::AddDependency {
             issue_id,
             depends_on,
             dep_type,
         }
     }
 
-    fn generate_export(&mut self) -> BeadsAction {
-        BeadsAction::Export {
+    fn generate_export(&mut self) -> TazkAction {
+        TazkAction::Export {
             output: "issues.jsonl".to_string(),
         }
     }
@@ -430,75 +430,57 @@ impl ActionGenerator {
     }
 }
 
-/// Executes beads actions against a specific implementation
+/// Executes actions against the tazk binary
 pub struct ActionExecutor {
     binary_path: String,
     work_dir: String,
-    use_no_db: bool,
 }
 
 impl ActionExecutor {
     /// Create a new executor for the given binary
-    ///
-    /// `use_no_db`: If true, prepends --no-db to all commands (for upstream bd)
-    pub fn new(binary_path: &str, work_dir: &str, use_no_db: bool) -> Self {
+    pub fn new(binary_path: &str, work_dir: &str) -> Self {
         Self {
             binary_path: binary_path.to_string(),
             work_dir: work_dir.to_string(),
-            use_no_db,
         }
     }
 
-    /// Build a command with the binary path, working directory, and --no-db flag if needed
+    /// Build a command with the binary path, and working directory
     fn build_command(&self) -> Command {
         let mut cmd = Command::new(&self.binary_path);
         cmd.current_dir(&self.work_dir);
 
-        // Set MB_BEADS_DIR to force using storage in the working directory.
-        // This prevents minibeads from walking up and finding ancestor databases.
-        let storage_dir = if self.binary_path.contains("upstream") {
-            ".beads"
-        } else {
-            ".minibeads"
-        };
-        let beads_dir = std::path::PathBuf::from(&self.work_dir).join(storage_dir);
-        cmd.env("MB_BEADS_DIR", beads_dir);
-
-        if self.use_no_db {
-            cmd.arg("--no-db");
-        }
+        // Set TAZK_DIR to force using storage in the working directory.
+        // This prevents tz from walking up and finding ancestor databases.
+        let tazk_dir = std::path::PathBuf::from(&self.work_dir).join(".tazk");
+        cmd.env("TAZK_DIR", tazk_dir);
         cmd
     }
 
     /// Execute a single action
     ///
     /// For Create actions, verifies that the created issue ID matches expected_id
-    pub fn execute(&self, action: &BeadsAction) -> Result<ExecutionResult> {
+    pub fn execute(&self, action: &TazkAction) -> Result<ExecutionResult> {
         // Track actual_issue_id for Create actions
         let mut actual_issue_id: Option<String> = None;
 
         let output = match action {
-            BeadsAction::Init {
+            TazkAction::Init {
                 prefix,
-                mb_hash_ids,
+                tz_hash_ids,
             } => {
                 let mut cmd = self.build_command();
                 cmd.arg("init");
                 if let Some(p) = prefix {
                     cmd.arg("--prefix").arg(p);
                 }
-                // Only pass --mb-hash-ids to minibeads, not upstream
-                // Upstream doesn't support this flag (it always uses hash IDs)
-                let is_upstream = self.binary_path.contains("upstream");
-                if let Some(true) = mb_hash_ids {
-                    if !is_upstream {
-                        cmd.arg("--mb-hash-ids");
-                    }
+                if let Some(true) = tz_hash_ids {
+                    cmd.arg("--tz-hash-ids");
                 }
                 cmd.output().context("Failed to execute init command")?
             }
 
-            BeadsAction::Create {
+            TazkAction::Create {
                 expected_id,
                 title,
                 priority,
@@ -549,7 +531,7 @@ impl ActionExecutor {
                                 error_msg.push_str("Possible causes:\n");
                                 error_msg.push_str("  - Init command failed to set prefix\n");
                                 error_msg.push_str(
-                                    "  - Found existing minibeads directory with different prefix\n",
+                                    "  - Found existing tazk directory with different prefix\n",
                                 );
                                 error_msg.push_str("  - Working in wrong directory\n");
                             }
@@ -575,7 +557,7 @@ impl ActionExecutor {
                 output
             }
 
-            BeadsAction::List { status, priority } => {
+            TazkAction::List { status, priority } => {
                 let mut cmd = self.build_command();
                 cmd.arg("list");
 
@@ -589,13 +571,13 @@ impl ActionExecutor {
                 cmd.output().context("Failed to execute list command")?
             }
 
-            BeadsAction::Show { issue_id } => {
+            TazkAction::Show { issue_id } => {
                 let mut cmd = self.build_command();
                 cmd.arg("show").arg(issue_id);
                 cmd.output().context("Failed to execute show command")?
             }
 
-            BeadsAction::Update {
+            TazkAction::Update {
                 issue_id,
                 status,
                 priority,
@@ -613,19 +595,19 @@ impl ActionExecutor {
                 cmd.output().context("Failed to execute update command")?
             }
 
-            BeadsAction::Close { issue_id, reason } => {
+            TazkAction::Close { issue_id, reason } => {
                 let mut cmd = self.build_command();
                 cmd.arg("close").arg(issue_id).arg("--reason").arg(reason);
                 cmd.output().context("Failed to execute close command")?
             }
 
-            BeadsAction::Reopen { issue_id } => {
+            TazkAction::Reopen { issue_id } => {
                 let mut cmd = self.build_command();
                 cmd.arg("reopen").arg(issue_id);
                 cmd.output().context("Failed to execute reopen command")?
             }
 
-            BeadsAction::AddDependency {
+            TazkAction::AddDependency {
                 issue_id,
                 depends_on,
                 dep_type,
@@ -640,7 +622,7 @@ impl ActionExecutor {
                 cmd.output().context("Failed to execute dep add command")?
             }
 
-            BeadsAction::Export { output } => {
+            TazkAction::Export { output } => {
                 let mut cmd = self.build_command();
                 cmd.arg("export").arg("--output").arg(output);
                 cmd.output().context("Failed to execute export command")?
@@ -658,7 +640,7 @@ impl ActionExecutor {
 
     /// Execute a sequence of actions
     #[allow(dead_code)]
-    pub fn execute_sequence(&self, actions: &[BeadsAction]) -> Result<Vec<ExecutionResult>> {
+    pub fn execute_sequence(&self, actions: &[TazkAction]) -> Result<Vec<ExecutionResult>> {
         let mut results = Vec::new();
         for action in actions {
             let result = self.execute(action)?;
@@ -717,7 +699,7 @@ fn extract_issue_id(output: &str) -> Option<String> {
     None
 }
 
-/// Result of executing a beads action
+/// Result of executing an action
 #[derive(Debug, Clone)]
 pub struct ExecutionResult {
     pub success: bool,
@@ -728,10 +710,10 @@ pub struct ExecutionResult {
     pub actual_issue_id: Option<String>,
 }
 
-/// Reference interpreter for beads actions
+/// Reference interpreter for tazk actions
 ///
-/// Maintains an in-memory representation of the beads state by interpreting
-/// BeadsAction sequences. This provides a "golden state" for verification.
+/// Maintains an in-memory representation of the tazk state by interpreting
+/// TazkAction sequences. This provides a "golden state" for verification.
 pub struct ReferenceInterpreter {
     pub issues: std::collections::HashMap<String, ReferenceIssue>,
     pub prefix: String,
@@ -773,22 +755,22 @@ impl ReferenceInterpreter {
     }
 
     /// Execute an action, updating the internal state
-    pub fn execute(&mut self, action: &BeadsAction) -> Result<()> {
+    pub fn execute(&mut self, action: &TazkAction) -> Result<()> {
         match action {
-            BeadsAction::Init {
+            TazkAction::Init {
                 prefix,
-                mb_hash_ids,
+                tz_hash_ids,
             } => {
                 if let Some(p) = prefix {
                     self.prefix = p.clone();
                 }
-                if let Some(use_hash) = mb_hash_ids {
+                if let Some(use_hash) = tz_hash_ids {
                     self.use_hash_ids = *use_hash;
                 }
                 Ok(())
             }
 
-            BeadsAction::Create {
+            TazkAction::Create {
                 expected_id,
                 title,
                 priority,
@@ -824,17 +806,17 @@ impl ReferenceInterpreter {
                 Ok(())
             }
 
-            BeadsAction::List { .. } => {
+            TazkAction::List { .. } => {
                 // List doesn't modify state
                 Ok(())
             }
 
-            BeadsAction::Show { .. } => {
+            TazkAction::Show { .. } => {
                 // Show doesn't modify state
                 Ok(())
             }
 
-            BeadsAction::Update {
+            TazkAction::Update {
                 issue_id,
                 status,
                 priority,
@@ -847,25 +829,25 @@ impl ReferenceInterpreter {
                         issue.priority = *p;
                     }
                 }
-                // Silently ignore updates to non-existent issues (matches bd behavior)
+                // Silently ignore updates to non-existent issues
                 Ok(())
             }
 
-            BeadsAction::Close { issue_id, .. } => {
+            TazkAction::Close { issue_id, .. } => {
                 if let Some(issue) = self.issues.get_mut(issue_id) {
                     issue.status = Status::Closed;
                 }
                 Ok(())
             }
 
-            BeadsAction::Reopen { issue_id } => {
+            TazkAction::Reopen { issue_id } => {
                 if let Some(issue) = self.issues.get_mut(issue_id) {
                     issue.status = Status::Open;
                 }
                 Ok(())
             }
 
-            BeadsAction::AddDependency {
+            TazkAction::AddDependency {
                 issue_id,
                 depends_on,
                 dep_type,
@@ -876,7 +858,7 @@ impl ReferenceInterpreter {
                 Ok(())
             }
 
-            BeadsAction::Export { .. } => {
+            TazkAction::Export { .. } => {
                 // Export doesn't modify state
                 Ok(())
             }

@@ -2,12 +2,9 @@ use std::process::Command;
 
 #[test]
 fn cli_help_and_version_start_successfully() {
-    for argument in ["--help", "--version", "github"] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mb"));
+    for argument in ["--help", "--version"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_tz"));
         command.arg(argument);
-        if argument == "github" {
-            command.arg("--help");
-        }
         let output = command.output().expect("run the actual CLI binary");
         assert!(
             output.status.success(),
@@ -19,9 +16,9 @@ fn cli_help_and_version_start_successfully() {
     }
 }
 
-use minibeads::storage::{IssueStorageLayout, Storage};
-use minibeads::types::{Issue, IssueType};
 use std::fs;
+use tazk::storage::{IssueStorageLayout, Storage};
+use tazk::types::{Issue, IssueType};
 
 fn fixture(layout: IssueStorageLayout) -> (tempfile::TempDir, Storage) {
     let temp = tempfile::tempdir().unwrap();
@@ -123,10 +120,10 @@ fn hostile_jsonl_does_not_overwrite_a_file_outside_the_database() {
     let input = temp.path().join("input.jsonl");
     fs::write(&input, serde_json::to_string(&issue).unwrap()).unwrap();
     assert!(storage.import_from_jsonl(&input, true).is_err());
-    assert!(minibeads::sync::load_jsonl_issues(&input).is_err());
-    let output = Command::new(env!("CARGO_BIN_EXE_mb"))
-        .args(["--mb-no-cmd-logging", "--json", "--mb-beads-dir"])
-        .arg(storage.get_beads_dir())
+    assert!(tazk::sync::load_jsonl_issues(&input).is_err());
+    let output = Command::new(env!("CARGO_BIN_EXE_tz"))
+        .args(["--tz-no-cmd-logging", "--json", "--tz-dir"])
+        .arg(storage.get_tazk_dir())
         .args(["sync", "--jsonl"])
         .arg(&input)
         .output()
@@ -141,7 +138,7 @@ fn a_symlink_cannot_redirect_issue_writes_outside_the_database() {
     let (temp, storage) = fixture(IssueStorageLayout::Flat);
     let sentinel = temp.path().join("outside.md");
     fs::write(&sentinel, "keep this").unwrap();
-    std::os::unix::fs::symlink(&sentinel, storage.get_beads_dir().join("issues/r-1.md")).unwrap();
+    std::os::unix::fs::symlink(&sentinel, storage.get_tazk_dir().join("issues/r-1.md")).unwrap();
     assert!(create(&storage, "r-1", "overwrite").is_err());
     assert!(storage.get_issue("r-1").is_err());
     assert_eq!(fs::read_to_string(sentinel).unwrap(), "keep this");
@@ -180,7 +177,7 @@ fn import_fixture_issues(storage: &Storage, ids: &[&str]) -> Vec<Issue> {
 
 #[test]
 fn repacking_swaps_and_cycles_preserves_all_issues_dependencies_and_comments() {
-    use minibeads::types::DependencyType;
+    use tazk::types::DependencyType;
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         for ids in [vec!["r-2", "r-1"], vec!["r-3", "r-1", "r-2"]] {
             let (_temp, storage) = fixture(layout);
@@ -211,16 +208,14 @@ fn repacking_swaps_and_cycles_preserves_all_issues_dependencies_and_comments() {
             assert_eq!(comments.len(), 1);
             assert_eq!(comments[0].id, comment.id);
             assert_eq!(&comments[0].issue_id, new_first);
-            let all = minibeads::sync::load_markdown_issues(&storage.get_beads_dir()).unwrap();
+            let all = tazk::sync::load_markdown_issues(&storage.get_tazk_dir()).unwrap();
             assert_eq!(all.len(), ids.len());
         }
     }
 }
 
 #[test]
-fn every_id_migration_preserves_comment_ownership_ancestry_and_jsonl_ids() {
-    use sha2::{Digest, Sha256};
-
+fn every_id_migration_preserves_comment_ownership_and_jsonl_ids() {
     for mode in ["rename", "prefix", "hash", "numeric", "repack"] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
         let old_id = if mode == "numeric" { "r-abcd" } else { "r-2" };
@@ -228,39 +223,8 @@ fn every_id_migration_preserves_comment_ownership_ancestry_and_jsonl_ids() {
         let comment = storage
             .add_comment(old_id, "review", "keep my identity")
             .unwrap();
-        let remote_url = "https://github.com/review/fixture/issues/1";
-        let state = serde_json::json!({"issues": {remote_url: {
-            "local_id": old_id,
-            "synced_comments": [{"local_id": comment.id, "remote_id": "101"}]
-        }}});
         fs::write(
-            storage.get_beads_dir().join("github-sync-state.json"),
-            serde_json::to_vec(&state).unwrap(),
-        )
-        .unwrap();
-        let ancestor_directory = storage.get_beads_dir().join("sync_ancestors/github");
-        fs::create_dir_all(&ancestor_directory).unwrap();
-        let ancestor_path = ancestor_directory.join(format!(
-            "sha256-{:x}.json",
-            Sha256::digest(remote_url.as_bytes())
-        ));
-        let ancestor = serde_json::json!({
-            "schema_version": 1,
-            "remote": remote_url,
-            "local_id": old_id,
-            "common": {
-                "title": "Common title",
-                "body": "Common body",
-                "status": "open"
-            }
-        });
-        fs::write(
-            &ancestor_path,
-            serde_json::to_vec_pretty(&ancestor).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            storage.get_beads_dir().join("issues.jsonl"),
+            storage.get_tazk_dir().join("issues.jsonl"),
             serde_json::to_vec(&originals[0]).unwrap(),
         )
         .unwrap();
@@ -282,29 +246,13 @@ fn every_id_migration_preserves_comment_ownership_ancestry_and_jsonl_ids() {
         assert_eq!(comments[0].id, comment.id, "{mode}");
         assert_eq!(comments[0].issue_id, new_id, "{mode}");
         assert!(storage.list_comments(old_id).unwrap().is_empty(), "{mode}");
-        let state: serde_json::Value = serde_json::from_slice(
-            &fs::read(storage.get_beads_dir().join("github-sync-state.json")).unwrap(),
-        )
-        .unwrap();
-        let ancestry = &state["issues"]["https://github.com/review/fixture/issues/1"];
-        assert_eq!(ancestry["local_id"], new_id, "{mode}");
-        assert_eq!(
-            ancestry["synced_comments"][0]["local_id"], comment.id,
-            "{mode}"
-        );
-        let ancestor: serde_json::Value =
-            serde_json::from_slice(&fs::read(&ancestor_path).unwrap()).unwrap();
-        assert_eq!(ancestor["local_id"], new_id, "{mode}");
-        assert_eq!(ancestor["remote"], remote_url, "{mode}");
-        assert_eq!(ancestor["common"]["body"], "Common body", "{mode}");
         let jsonl =
-            minibeads::sync::load_jsonl_issues(&storage.get_beads_dir().join("issues.jsonl"))
-                .unwrap();
+            tazk::sync::load_jsonl_issues(&storage.get_tazk_dir().join("issues.jsonl")).unwrap();
         assert!(jsonl.contains_key(&new_id), "{mode}");
         assert!(!jsonl.contains_key(old_id), "{mode}");
         assert!(!storage
-            .get_beads_dir()
-            .join("minibeads-transaction.json")
+            .get_tazk_dir()
+            .join("tazk-transaction.json")
             .exists());
     }
 }
@@ -313,9 +261,9 @@ fn every_id_migration_preserves_comment_ownership_ancestry_and_jsonl_ids() {
 fn migration_preflight_failure_preserves_sources_and_config() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "keep issue").unwrap();
-    fs::create_dir_all(storage.get_beads_dir().join("comments")).unwrap();
+    fs::create_dir_all(storage.get_tazk_dir().join("comments")).unwrap();
     fs::write(
-        storage.get_beads_dir().join("comments/new-1.json"),
+        storage.get_tazk_dir().join("comments/new-1.json"),
         b"orphan comments",
     )
     .unwrap();
@@ -326,7 +274,7 @@ fn migration_preflight_failure_preserves_sources_and_config() {
     );
     assert_eq!(storage.get_prefix().unwrap(), "r");
     assert_eq!(
-        fs::read(storage.get_beads_dir().join("comments/new-1.json")).unwrap(),
+        fs::read(storage.get_tazk_dir().join("comments/new-1.json")).unwrap(),
         b"orphan comments"
     );
 }
@@ -341,16 +289,16 @@ fn repacking_closed_issues_can_swap_their_ids_with_open_issues() {
         let open = storage.get_issue("r-1").unwrap().unwrap();
         let closed = storage.get_issue("r-2").unwrap().unwrap();
         assert_eq!(open.title, "original 1");
-        assert_eq!(open.status, minibeads::types::Status::Open);
+        assert_eq!(open.status, tazk::types::Status::Open);
         assert_eq!(closed.title, "original 0");
-        assert_eq!(closed.status, minibeads::types::Status::Closed);
+        assert_eq!(closed.status, tazk::types::Status::Closed);
     }
 }
 
 #[test]
 fn layout_migration_preserves_mtime_and_newer_jsonl_edits() {
-    use minibeads::sync::{load_jsonl_issues, load_markdown_issues, SyncEngine};
     use std::time::{Duration, SystemTime};
+    use tazk::sync::{load_jsonl_issues, load_markdown_issues, SyncEngine};
 
     for (source, target) in [
         (IssueStorageLayout::Flat, IssueStorageLayout::Sharded),
@@ -358,7 +306,7 @@ fn layout_migration_preserves_mtime_and_newer_jsonl_edits() {
     ] {
         let (_temp, storage) = fixture(source);
         let mut issue = create(&storage, "r-1", "original title").unwrap();
-        let root = storage.get_beads_dir();
+        let root = storage.get_tazk_dir();
         let original_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let markdown = load_markdown_issues(&root).unwrap();
         filetime::set_file_mtime(
@@ -395,7 +343,7 @@ fn layout_migration_preserves_mtime_and_newer_jsonl_edits() {
 
 #[test]
 fn id_migrations_preserve_newer_independent_jsonl_edits() {
-    use minibeads::sync::{load_jsonl_issues, load_markdown_issues, SyncEngine};
+    use tazk::sync::{load_jsonl_issues, load_markdown_issues, SyncEngine};
 
     enum Migration {
         Rename,
@@ -425,7 +373,7 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
                 .unwrap();
             let original_updated_at = independent.updated_at;
             let original_mtime = original_updated_at.into();
-            let root = storage.get_beads_dir();
+            let root = storage.get_tazk_dir();
             let markdown = load_markdown_issues(&root).unwrap();
             filetime::set_file_mtime(
                 &markdown[old_id].path,
@@ -476,7 +424,7 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
 
 #[test]
 fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
-    use minibeads::types::DependencyType;
+    use tazk::types::DependencyType;
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     for id in ["r-1", "r-2", "r-3", "r-4"] {
         create(&storage, id, id).unwrap();
@@ -511,7 +459,7 @@ fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
 
 #[test]
 fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
-    use minibeads::types::DependencyType;
+    use tazk::types::DependencyType;
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "prerequisite").unwrap();
     create(&storage, "r-2", "dependent").unwrap();
@@ -563,7 +511,7 @@ fn updates_refuse_unrecognized_or_ambiguous_sections_without_losing_text() {
     ] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
         create(&storage, "r-1", "keep").unwrap();
-        let path = storage.get_beads_dir().join("issues/r-1.md");
+        let path = storage.get_tazk_dir().join("issues/r-1.md");
         let original = fs::read_to_string(&path).unwrap() + extra;
         fs::write(&path, &original).unwrap();
         let error = storage
@@ -582,7 +530,7 @@ fn crlf_and_bom_frontmatter_survive_an_ordinary_update() {
     for bom in ["", "\u{feff}"] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
         create(&storage, "r-1", "Title ending in ---").unwrap();
-        let path = storage.get_beads_dir().join("issues/r-1.md");
+        let path = storage.get_tazk_dir().join("issues/r-1.md");
         let original = fs::read_to_string(&path).unwrap() + "\n# Description\n\n  indented text\n";
         fs::write(&path, format!("{bom}{}", original.replace('\n', "\r\n"))).unwrap();
         let updated = storage
@@ -600,64 +548,38 @@ fn crlf_and_bom_frontmatter_survive_an_ordinary_update() {
 #[test]
 fn unstructured_preamble_is_rejected_instead_of_discarded() {
     let issue = Issue::new("r-1".into(), "title".into(), 2, IssueType::Task);
-    let markdown = minibeads::format::issue_to_markdown(&issue).unwrap();
+    let markdown = tazk::format::issue_to_markdown(&issue).unwrap();
     let malformed = markdown + "\nimportant prose before any section\n";
-    let error = minibeads::format::markdown_to_issue("r-1", &malformed).unwrap_err();
+    let error = tazk::format::markdown_to_issue("r-1", &malformed).unwrap_err();
     assert!(format!("{error:#}").contains("before the first Markdown section"));
 }
 
 fn run_cli(storage: &Storage, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_mb"))
-        .args(["--mb-no-cmd-logging", "--json", "--mb-beads-dir"])
-        .arg(storage.get_beads_dir())
+    Command::new(env!("CARGO_BIN_EXE_tz"))
+        .args(["--tz-no-cmd-logging", "--json", "--tz-dir"])
+        .arg(storage.get_tazk_dir())
         .args(args)
         .output()
         .unwrap()
 }
 
 #[test]
-fn checked_issue_update_returns_the_persisted_snapshot() {
-    for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
-        let (_temp, storage) = fixture(layout);
-        create(&storage, "r-1", "original").unwrap();
-        for description in ["Remote body\n", "# Remote heading\n\nRemote body\n"] {
-            let before = storage.get_issue("r-1").unwrap().unwrap();
-            let updated = storage
-                .update_issue_if_unchanged(
-                    &before,
-                    std::collections::HashMap::from([(
-                        "description".to_owned(),
-                        description.to_owned(),
-                    )]),
-                )
-                .unwrap()
-                .unwrap();
-            assert!(storage.issue_matches_snapshot(&updated).unwrap());
-            assert_eq!(
-                updated.description,
-                storage.get_issue("r-1").unwrap().unwrap().description
-            );
-        }
-    }
-}
-
-#[test]
 fn jsonl_sync_waits_for_the_database_lock_instead_of_writing_through_it() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "keep").unwrap();
-    let _lock = minibeads::lock::Lock::acquire(&storage.get_beads_dir()).unwrap();
+    let _lock = tazk::lock::Lock::acquire(&storage.get_tazk_dir()).unwrap();
     let output = run_cli(&storage, &["sync"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Failed to acquire lock"));
-    assert!(!storage.get_beads_dir().join("issues.jsonl").exists());
+    assert!(!storage.get_tazk_dir().join("issues.jsonl").exists());
 }
 
 #[test]
 fn a_stale_jsonl_sync_plan_cannot_overwrite_a_new_local_edit() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "original").unwrap();
-    let engine = minibeads::sync::SyncEngine::new();
-    let markdown = minibeads::sync::load_markdown_issues(&storage.get_beads_dir()).unwrap();
+    let engine = tazk::sync::SyncEngine::new();
+    let markdown = tazk::sync::load_markdown_issues(&storage.get_tazk_dir()).unwrap();
     let jsonl = std::collections::HashMap::new();
     let plan = engine.analyze_ref(&markdown, &jsonl).unwrap();
     storage
@@ -667,14 +589,14 @@ fn a_stale_jsonl_sync_plan_cannot_overwrite_a_new_local_edit() {
         )
         .unwrap();
     let error = engine
-        .apply(&plan, &markdown, &jsonl, &storage.get_beads_dir(), false)
+        .apply(&plan, &markdown, &jsonl, &storage.get_tazk_dir(), false)
         .unwrap_err();
     assert!(error.to_string().contains("changed after analysis"));
     assert_eq!(
         storage.get_issue("r-1").unwrap().unwrap().title,
         "concurrent edit"
     );
-    assert!(!storage.get_beads_dir().join("issues.jsonl").exists());
+    assert!(!storage.get_tazk_dir().join("issues.jsonl").exists());
 }
 
 #[test]
@@ -696,7 +618,7 @@ fn custom_jsonl_paths_are_honored_and_dry_runs_return_json_with_planned_counts()
     assert_eq!(report["created_in_jsonl"], 1);
     assert_eq!(report["dry_run"], true);
     assert!(fs::read(&custom).unwrap().is_empty());
-    assert!(!storage.get_beads_dir().join("issues.jsonl").exists());
+    assert!(!storage.get_tazk_dir().join("issues.jsonl").exists());
     let applied = run_cli(&storage, &["sync", "--jsonl", custom.to_str().unwrap()]);
     assert!(
         applied.status.success(),
@@ -706,10 +628,10 @@ fn custom_jsonl_paths_are_honored_and_dry_runs_return_json_with_planned_counts()
     let report: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
     assert_eq!(report["created_in_jsonl"], 1);
     assert_eq!(report["dry_run"], false);
-    assert!(minibeads::sync::load_jsonl_issues(&custom)
+    assert!(tazk::sync::load_jsonl_issues(&custom)
         .unwrap()
         .contains_key("r-1"));
-    assert!(!storage.get_beads_dir().join("issues.jsonl").exists());
+    assert!(!storage.get_tazk_dir().join("issues.jsonl").exists());
 }
 
 #[test]
@@ -718,8 +640,8 @@ fn equal_time_content_conflicts_are_reported_without_overwriting_either_copy() {
     let issue = create(&storage, "r-1", "markdown title").unwrap();
     let mut remote = issue.clone();
     remote.title = "JSONL title".into();
-    let markdown_path = storage.get_beads_dir().join("issues/r-1.md");
-    let jsonl_path = storage.get_beads_dir().join("issues.jsonl");
+    let markdown_path = storage.get_tazk_dir().join("issues/r-1.md");
+    let jsonl_path = storage.get_tazk_dir().join("issues.jsonl");
     let jsonl_bytes = serde_json::to_vec(&remote).unwrap();
     fs::write(&jsonl_path, &jsonl_bytes).unwrap();
     filetime::set_file_mtime(
@@ -747,7 +669,7 @@ fn jsonl_sync_ignores_timestamp_and_label_order_when_content_is_unchanged() {
     let mut jsonl_issue = issue.clone();
     jsonl_issue.labels.reverse();
     jsonl_issue.updated_at += chrono::Duration::hours(1);
-    let jsonl_path = storage.get_beads_dir().join("issues.jsonl");
+    let jsonl_path = storage.get_tazk_dir().join("issues.jsonl");
     fs::write(&jsonl_path, serde_json::to_vec(&jsonl_issue).unwrap()).unwrap();
     let output = run_cli(&storage, &["sync", "--dry-run"]);
     assert!(output.status.success());
@@ -762,17 +684,17 @@ fn duplicate_records_are_rejected_before_sync() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     let issue = create(&storage, "r-1", "keep").unwrap();
     let record = serde_json::to_string(&issue).unwrap();
-    let jsonl_path = storage.get_beads_dir().join("issues.jsonl");
+    let jsonl_path = storage.get_tazk_dir().join("issues.jsonl");
     fs::write(&jsonl_path, format!("{record}\n{record}\n")).unwrap();
-    assert!(minibeads::sync::load_jsonl_issues(&jsonl_path).is_err());
-    let duplicate_dir = storage.get_beads_dir().join("issues/duplicate");
+    assert!(tazk::sync::load_jsonl_issues(&jsonl_path).is_err());
+    let duplicate_dir = storage.get_tazk_dir().join("issues/duplicate");
     fs::create_dir_all(&duplicate_dir).unwrap();
     fs::copy(
-        storage.get_beads_dir().join("issues/r-1.md"),
+        storage.get_tazk_dir().join("issues/r-1.md"),
         duplicate_dir.join("r-1.md"),
     )
     .unwrap();
-    assert!(minibeads::sync::load_markdown_issues(&storage.get_beads_dir()).is_err());
+    assert!(tazk::sync::load_markdown_issues(&storage.get_tazk_dir()).is_err());
 }
 
 #[cfg(windows)]
@@ -793,76 +715,22 @@ fn an_unsuccessful_jsonl_write_returns_failure() {
 }
 
 #[test]
-fn conditional_updates_preserve_manual_edits_even_without_a_timestamp_change() {
-    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    let snapshot = create(&storage, "r-1", "original").unwrap();
-    let path = storage.get_beads_dir().join("issues/r-1.md");
-    let mut changed = snapshot.clone();
-    changed.description = "manually edited without touching updated_at".into();
-    fs::write(
-        &path,
-        minibeads::format::issue_to_markdown(&changed).unwrap(),
-    )
-    .unwrap();
-    let result = storage
-        .update_issue_if_unchanged(
-            &snapshot,
-            std::collections::HashMap::from([(
-                "description".to_owned(),
-                "remote overwrite".to_owned(),
-            )]),
-        )
-        .unwrap();
-    assert!(result.is_none());
-    assert_eq!(
-        storage.get_issue("r-1").unwrap().unwrap().description,
-        changed.description
-    );
-}
-
-#[test]
-fn command_history_redacts_both_token_forms() {
-    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    for args in [
-        vec!["github", "--token", "dummy-review-token-separated", "list"],
-        vec!["github", "list", "--token=dummy-review-token-equals"],
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_mb"))
-            .arg("--mb-beads-dir")
-            .arg(storage.get_beads_dir())
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let history = fs::read_to_string(storage.get_beads_dir().join("command_history.log")).unwrap();
-    assert_eq!(history.lines().count(), 2);
-    assert!(!history.contains("dummy-review-token"));
-    assert_eq!(history.matches("[REDACTED]").count(), 2);
-}
-
-#[test]
 fn readonly_rejects_modifications_before_opening_storage() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "keep").unwrap();
-    let path = storage.get_beads_dir().join("issues/r-1.md");
+    let path = storage.get_tazk_dir().join("issues/r-1.md");
     let before = fs::read(&path).unwrap();
     for args in [
         vec!["update", "r-1", "--title", "changed"],
         vec!["create", "new"],
         vec!["close", "r-1"],
-        vec!["mb-rename", "r-1", "r-2"],
+        vec!["tz-rename", "r-1", "r-2"],
         vec!["config", "set", "issue-prefix", "changed"],
         vec!["comments", "add", "r-1", "--body", "new"],
         vec!["label", "add", "r-1", "new"],
         vec!["dep", "add", "r-1", "r-2"],
         vec!["sync"],
-        vec!["github", "publish", "r-1"],
-        vec!["export", "--mb-output-default"],
+        vec!["export", "--tz-output-default"],
     ] {
         let output = run_cli(&storage, &[vec!["--readonly"], args].concat());
         assert!(!output.status.success());
@@ -874,21 +742,21 @@ fn readonly_rejects_modifications_before_opening_storage() {
         assert_eq!(fs::read(&path).unwrap(), before);
     }
     let fresh = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_mb"))
+    let output = Command::new(env!("CARGO_BIN_EXE_tz"))
         .current_dir(fresh.path())
         .args(["--readonly", "init"])
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(!fresh.path().join(".minibeads").exists());
+    assert!(!fresh.path().join(".tazk").exists());
 }
 
 #[test]
 fn command_history_keeps_multiline_arguments_on_one_line() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    let output = Command::new(env!("CARGO_BIN_EXE_mb"))
-        .arg("--mb-beads-dir")
-        .arg(storage.get_beads_dir())
+    let output = Command::new(env!("CARGO_BIN_EXE_tz"))
+        .arg("--tz-dir")
+        .arg(storage.get_tazk_dir())
         .args([
             "create",
             "Multiline description",
@@ -902,7 +770,7 @@ fn command_history_keeps_multiline_arguments_on_one_line() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let history = fs::read_to_string(storage.get_beads_dir().join("command_history.log")).unwrap();
+    let history = fs::read_to_string(storage.get_tazk_dir().join("command_history.log")).unwrap();
     assert_eq!(history.lines().count(), 1);
     assert!(history.contains(r#"first line\nsecond \"line\"\r\nthird line"#));
 }
@@ -911,8 +779,8 @@ fn command_history_keeps_multiline_arguments_on_one_line() {
 fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "keep").unwrap();
-    for name in ["config.yaml", "config-minibeads.yaml", ".gitignore"] {
-        fs::remove_file(storage.get_beads_dir().join(name)).unwrap();
+    for name in ["config.yaml", "config-tazk.yaml", ".gitignore"] {
+        fs::remove_file(storage.get_tazk_dir().join(name)).unwrap();
     }
     for args in [
         vec!["show", "r-1"],
@@ -923,11 +791,10 @@ fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
         vec!["export"],
         vec!["comments", "list", "r-1"],
         vec!["config", "list"],
-        vec!["github", "list"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_mb"))
-            .args(["--readonly", "--mb-beads-dir"])
-            .arg(storage.get_beads_dir())
+        let output = Command::new(env!("CARGO_BIN_EXE_tz"))
+            .args(["--readonly", "--tz-dir"])
+            .arg(storage.get_tazk_dir())
             .args(args)
             .output()
             .unwrap();
@@ -939,30 +806,23 @@ fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
     }
     for name in [
         "config.yaml",
-        "config-minibeads.yaml",
+        "config-tazk.yaml",
         ".gitignore",
         "command_history.log",
     ] {
         assert!(
-            !storage.get_beads_dir().join(name).exists(),
+            !storage.get_tazk_dir().join(name).exists(),
             "created {name}"
         );
     }
-    let readonly = Storage::open_readonly(storage.get_beads_dir()).unwrap();
+    let readonly = Storage::open_readonly(storage.get_tazk_dir()).unwrap();
     assert!(create(&readonly, "r-2", "must fail").is_err());
     assert!(readonly
         .set_config_value("issue-prefix", "changed")
         .is_err());
-    let journal = storage.get_beads_dir().join("minibeads-transaction.json");
+    let journal = storage.get_tazk_dir().join("tazk-transaction.json");
     fs::write(&journal, "pending recovery sentinel").unwrap();
     let output = run_cli(&storage, &["--readonly", "show", "r-1"]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("requires recovery"));
-    assert_eq!(
-        fs::read_to_string(&journal).unwrap(),
-        "pending recovery sentinel"
-    );
-    let output = run_cli(&storage, &["github", "sync", "--dry-run"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires recovery"));
     assert_eq!(

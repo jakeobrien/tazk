@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-pub(crate) const JOURNAL: &str = "minibeads-transaction.json";
+pub(crate) const JOURNAL: &str = "tazk-transaction.json";
 
 pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     atomic_write_with_mtime(path, content, None)
@@ -27,7 +27,7 @@ fn atomic_write_with_mtime(
     let parent = path.parent().context("File has no parent directory")?;
     fs::create_dir_all(parent)?;
     let mut file = tempfile::Builder::new()
-        .prefix(".mb-write-")
+        .prefix(".tz-write-")
         .tempfile_in(parent)?;
     file.write_all(content)?;
     if let Ok(metadata) = fs::metadata(path) {
@@ -184,7 +184,7 @@ fn validate_relative(path: &Path) -> Result<()> {
                 .components()
                 .all(|part| matches!(part, Component::Normal(_)))
             && path != Path::new(JOURNAL)
-            && path != Path::new("minibeads.lock"),
+            && path != Path::new("tazk.lock"),
         "Invalid transaction path: {}",
         path.display()
     );

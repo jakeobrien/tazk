@@ -1,6 +1,6 @@
-//! Three-way merge of minibeads issue files and comment files.
+//! Three-way merge of tazk issue files and comment files.
 //!
-//! This is the engine behind `mb merge-driver`. Given the common ancestor and
+//! This is the engine behind `tz merge-driver`. Given the common ancestor and
 //! two descendants of one `issues/<id>.md` or `comments/<id>.json` file it
 //! produces either a clean merge or a file whose conflict hunks cover only the
 //! fields or comments that genuinely disagree.
@@ -8,7 +8,7 @@
 //! Issue files merge field by field: scalars take whichever side changed them,
 //! labels merge as a set, dependencies as a keyed map, timestamps by derivation
 //! rules, and the four prose sections through the deterministic prose merger
-//! shared with GitHub sync. Comment files merge as a three-way set keyed by the
+//! used for comment bodies as well. Comment files merge as a three-way set keyed by the
 //! stable comment ID: additions from both sides are kept, no ID appears twice,
 //! and a comment is removed only when a side deleted it and the other side left
 //! it unchanged, which is also what git does when it resolves an untouched file
@@ -23,11 +23,20 @@ use crate::format::{
     frontmatter_yaml, issue_to_markdown, markdown_to_issue, push_section_heading,
     sanitize_section_content, trim_blank_edge_lines, Section,
 };
-use crate::github_merge::ProseMergeFailureKind;
-use crate::prose_merge::{merge_prose, ProseMergeLimits, ProseMergeResult};
+use crate::prose_merge::{
+    merge_prose, CompetingEditReason, ProseMergeLimits, ProseMergeResult, StructuredOverlapReason,
+    WorkExhaustionReason,
+};
 use crate::types::{Comment, Issue, Status};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProseMergeFailureKind {
+    CompetingEdit(CompetingEditReason),
+    UnsupportedStructuredOverlap(StructuredOverlapReason),
+    WorkExhausted(WorkExhaustionReason),
+}
 
 /// One of the three inputs to a merge.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -129,7 +138,7 @@ impl fmt::Display for TextualFallback {
         match self {
             TextualFallback::Unparseable(side) => write!(formatter, "{side} does not parse"),
             TextualFallback::NonCanonical(side) => {
-                write!(formatter, "{side} is not in canonical mb format")
+                write!(formatter, "{side} is not in canonical tz format")
             }
             TextualFallback::DuplicateCommentId(side) => {
                 write!(formatter, "{side} repeats a comment ID")
@@ -222,12 +231,6 @@ pub(crate) enum MergeNotice {
         comment_id: String,
         deleted_by: Side,
     },
-    /// Two different revisions of a comment imported from GitHub; the one with
-    /// the later `updated_at` is GitHub's newer state.
-    NewerImportedCommentWins {
-        comment_id: String,
-        winner: Side,
-    },
     TextualFallback(TextualFallback),
 }
 
@@ -240,10 +243,6 @@ impl fmt::Display for MergeNotice {
             } => write!(
                 formatter,
                 "kept comment {comment_id}: {deleted_by} deleted it but the other side edited it"
-            ),
-            MergeNotice::NewerImportedCommentWins { comment_id, winner } => write!(
-                formatter,
-                "took {winner}'s newer GitHub revision of imported comment {comment_id}"
             ),
             MergeNotice::TextualFallback(reason) => {
                 write!(formatter, "merged as plain text because {reason}")
@@ -738,34 +737,14 @@ fn resolve_shared_comment<'a>(
     base: Option<&'a Comment>,
     ours: &'a Comment,
     theirs: &'a Comment,
-    notices: &mut Vec<MergeNotice>,
 ) -> CommentResolution<'a> {
     if let Some(comment) = merge_scalar(base, ours, theirs) {
         return CommentResolution::Take(comment);
-    }
-    if ours.source_id.is_some() && theirs.source_id.is_some() && ours.source_id == theirs.source_id
-    {
-        // GitHub owns imported comments; each side holds a snapshot of it and
-        // the later edit is GitHub's current state.
-        let winner = match ours.updated_at.cmp(&theirs.updated_at) {
-            std::cmp::Ordering::Greater => Some((Side::Ours, ours)),
-            std::cmp::Ordering::Less => Some((Side::Theirs, theirs)),
-            std::cmp::Ordering::Equal => None,
-        };
-        if let Some((side, comment)) = winner {
-            notices.push(MergeNotice::NewerImportedCommentWins {
-                comment_id: comment.id.clone(),
-                winner: side,
-            });
-            return CommentResolution::Take(comment);
-        }
     }
     let same_identity = |left: &Comment, right: &Comment| {
         left.issue_id == right.issue_id
             && left.author == right.author
             && left.created_at == right.created_at
-            && left.source_url == right.source_url
-            && left.source_id == right.source_id
     };
     if let Some(base) = base.filter(|base| same_identity(base, ours) && same_identity(base, theirs))
     {
@@ -813,12 +792,7 @@ pub(crate) fn merge_comment_versions(versions: &CommentVersions, size: MarkerSiz
         let base_comment = base.get(id).copied();
         match (ours.get(id).copied(), theirs.get(id).copied()) {
             (Some(ours_comment), Some(theirs_comment)) => {
-                match resolve_shared_comment(
-                    base_comment,
-                    ours_comment,
-                    theirs_comment,
-                    &mut notices,
-                ) {
+                match resolve_shared_comment(base_comment, ours_comment, theirs_comment) {
                     CommentResolution::Take(comment) => views.push([Some(comment); 3]),
                     CommentResolution::Merged(comment) => {
                         owned_slots.push(views.len());

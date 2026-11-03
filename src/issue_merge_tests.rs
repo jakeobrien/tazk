@@ -331,15 +331,15 @@ fn dependency_conflicts_without_an_ancestor_say_so() {
     let mut ours = base_issue();
     let mut theirs = base_issue();
     ours.depends_on
-        .insert("mb-9".into(), DependencyType::Blocks);
+        .insert("tz-9".into(), DependencyType::Blocks);
     theirs
         .depends_on
-        .insert("mb-9".into(), DependencyType::Related);
+        .insert("tz-9".into(), DependencyType::Related);
 
     let result = merge_texts("", &render(&ours), &render(&theirs));
     assert_eq!(
         conflict_fields(&result),
-        vec![IssueField::Dependency("mb-9".into())]
+        vec![IssueField::Dependency("tz-9".into())]
     );
     assert_eq!(result.conflicts[0].reason, ConflictReason::NoCommonAncestor);
     assert_eq!(resolve(&result.text, Side::Ours), render(&ours));
@@ -388,23 +388,6 @@ fn comment(id: &str, body: &str, minute: Minute) -> Comment {
         body: body.into(),
         created_at: at(minute),
         updated_at: at(minute),
-        source_url: None,
-        source_id: None,
-    }
-}
-
-fn imported(remote_id: u32, body: &str, minute: Minute, edited: Minute) -> Comment {
-    Comment {
-        id: format!("gh-{remote_id}"),
-        issue_id: ISSUE_ID.into(),
-        author: "octocat".into(),
-        body: body.into(),
-        created_at: at(minute),
-        updated_at: at(edited),
-        source_url: Some(format!(
-            "https://github.com/o/r/issues/1#issuecomment-{remote_id}"
-        )),
-        source_id: Some(remote_id.to_string()),
     }
 }
 
@@ -476,16 +459,6 @@ fn comments_appended_on_both_sides_are_all_kept_in_time_order() {
         ids(&parse_comments(&result.text)),
         vec!["c-base", "c-theirs", "c-ours"]
     );
-}
-
-#[test]
-fn the_same_imported_comment_on_both_sides_is_kept_once() {
-    let base = Vec::new();
-    let ours = vec![comment("c-ours", "mine", 2), imported(100, "hello", 1, 1)];
-    let theirs = vec![imported(100, "hello", 1, 1)];
-    let result = merge_comment_lists(&base, &ours, &theirs);
-    assert!(result.is_clean());
-    assert_eq!(ids(&parse_comments(&result.text)), vec!["gh-100", "c-ours"]);
 }
 
 #[test]
@@ -580,21 +553,6 @@ fn a_comment_deleted_on_both_sides_stays_deleted() {
     let result = merge_comment_lists(&base, &ours, &theirs);
     assert!(result.is_clean());
     assert_eq!(ids(&parse_comments(&result.text)), vec!["c-1", "c-3"]);
-}
-
-#[test]
-fn the_newer_revision_of_an_imported_comment_wins() {
-    let base = vec![imported(7, "draft", 1, 1)];
-    let ours = vec![imported(7, "edited later on GitHub", 1, 9)];
-    let theirs = vec![imported(7, "edited on GitHub", 1, 5)];
-    let result = merge_comment_lists(&base, &ours, &theirs);
-    assert!(result.is_clean());
-    assert_eq!(
-        parse_comments(&result.text)[0].body,
-        "edited later on GitHub"
-    );
-    let swapped = merge_comment_lists(&base, &theirs, &ours);
-    assert_eq!(swapped.text, result.text);
 }
 
 #[test]
@@ -726,7 +684,7 @@ const EDIT_KINDS: [EditKind; 13] = [
     EditKind::Notes,
 ];
 const ISSUE_TYPES: [IssueType; 3] = [IssueType::Task, IssueType::Bug, IssueType::Feature];
-const EXTERNAL_REFS: [Option<&str>; 3] = [None, Some("gh-11"), Some("gh-12")];
+const EXTERNAL_REFS: [Option<&str>; 3] = [None, Some("ext-11"), Some("ext-12")];
 
 fn pick<'a, T>(rng: &mut StdRng, items: &'a [T]) -> &'a T {
     items.choose(rng).unwrap()
@@ -1166,15 +1124,11 @@ fn random_comment_base(rng: &mut StdRng) -> Vec<Comment> {
     (0..rng.gen_range(0..5))
         .map(|index| {
             let minute = Minute::from(index) * 10;
-            if rng.gen_bool(0.5) {
-                imported(index, pick(rng, &COMMENT_BODIES), minute, minute)
-            } else {
-                comment(
-                    &format!("c-base-{index}"),
-                    pick(rng, &COMMENT_BODIES),
-                    minute,
-                )
-            }
+            comment(
+                &format!("c-base-{index}"),
+                pick(rng, &COMMENT_BODIES),
+                minute,
+            )
         })
         .collect()
 }
@@ -1186,11 +1140,7 @@ fn random_comment_descendant(rng: &mut StdRng, base: &[Comment], tag: &str) -> V
         .cloned()
         .collect();
     for comment in &mut comments {
-        if comment.source_id.is_some() && rng.gen_bool(0.2) {
-            // A newer GitHub revision pulled by this side.
-            comment.body = format!("{} (edited, seen by {tag})", comment.body);
-            comment.updated_at += Duration::minutes(rng.gen_range(1..30));
-        } else if comment.source_id.is_none() && rng.gen_bool(0.08) {
+        if rng.gen_bool(0.08) {
             comment.body = format!("{} (rewritten by {tag})", comment.body);
             if rng.gen_bool(0.3) {
                 // A hand edit that also moved the comment in time.
@@ -1201,13 +1151,12 @@ fn random_comment_descendant(rng: &mut StdRng, base: &[Comment], tag: &str) -> V
     for index in 0..rng.gen_range(0..3) {
         let minute = 100 + rng.gen_range(0..50);
         if rng.gen_bool(0.3) {
-            // A GitHub comment both sides may import independently.
-            let remote_id = 500 + rng.gen_range(0..3);
-            comments.push(imported(
-                remote_id,
-                "Shared remote",
-                Minute::from(remote_id),
-                Minute::from(remote_id),
+            // An identical comment both sides may add independently.
+            let shared_id = 500 + rng.gen_range(0..3);
+            comments.push(comment(
+                &format!("c-shared-{shared_id}"),
+                "Shared",
+                Minute::from(shared_id),
             ));
         } else {
             comments.push(comment(

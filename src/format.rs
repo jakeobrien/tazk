@@ -628,12 +628,12 @@ mod tests {
 
     #[test]
     fn test_indented_code_block_survives_roundtrip() {
-        // Regression test for the mb-migrate description-truncation bug:
+        // Regression test for the tz-migrate description-truncation bug:
         // an indented "# ..." line (a shell/Python comment inside an
         // indented code block) was mistaken for a top-level section header,
         // and everything from that line onward was silently dropped the
         // next time the issue was parsed and rewritten (e.g. by
-        // `mb mb-migrate --to numeric`).
+        // `tz tz-migrate --to numeric`).
         let mut issue = Issue::new(
             "test-1".to_string(),
             "Trunc".to_string(),

@@ -1,6 +1,6 @@
-//! Regression test for the mb-migrate description-truncation bug.
+//! Regression test for the tz-migrate description-truncation bug.
 //!
-//! Renumbering hash-based IDs to numeric IDs (`mb mb-migrate --to numeric`)
+//! Renumbering hash-based IDs to numeric IDs (`tz tz-migrate --to numeric`)
 //! parses every issue and rewrites the renamed ones. The parser used to treat
 //! any line whose *trimmed* form started with "# " as a top-level section
 //! header, so a comment inside an indented code block (e.g. "    # x") was
@@ -8,10 +8,10 @@
 //! was silently discarded — the migration then persisted the truncated parse
 //! and deleted the intact original file.
 
-use minibeads::storage::{IssueStorageLayout, Storage};
-use minibeads::types::IssueType;
 use std::fs;
 use std::path::PathBuf;
+use tazk::storage::{IssueStorageLayout, Storage};
+use tazk::types::IssueType;
 
 #[test]
 fn migration_preserves_description_with_indented_code_block() {
@@ -21,7 +21,7 @@ fn migration_preserves_description_with_indented_code_block() {
     let _ = fs::remove_dir_all(&scratch);
 
     let storage = Storage::init(
-        scratch.join(".minibeads"),
+        scratch.join(".tazk"),
         Some("ds".to_string()),
         true, // hash IDs, as in a parallel-safe agent workspace
         IssueStorageLayout::Flat,

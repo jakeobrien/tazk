@@ -1,5 +1,5 @@
 #!/bin/bash
-# E2E test for bd export interoperability with upstream bd
+# E2E test for tz export
 set -euo pipefail
 
 # Parse command line arguments
@@ -27,10 +27,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Test configuration
-TEST_NAME="export_interop"
+TEST_NAME="export"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BD_BIN="$WORKSPACE_ROOT/target/debug/mb"
+TZ_BIN="$WORKSPACE_ROOT/target/debug/tz"
 TEST_DIR="$WORKSPACE_ROOT/scratch/e2e_${TEST_NAME}_$$"
 
 # Counters
@@ -116,32 +116,11 @@ echo "Running E2E Test: $TEST_NAME"
 echo "=========================================="
 echo ""
 
-# Ensure bd binary exists
-if [ ! -f "$BD_BIN" ]; then
-    echo "Building bd binary..."
+# Ensure tz binary exists
+if [ ! -f "$TZ_BIN" ]; then
+    echo "Building tz binary..."
     cd "$WORKSPACE_ROOT"
     cargo build
-    echo ""
-fi
-
-# Check for upstream bd
-UPSTREAM_BD=""
-if [ -f "$WORKSPACE_ROOT/beads/bd-upstream" ]; then
-    UPSTREAM_BD="$WORKSPACE_ROOT/beads/bd-upstream"
-    echo -e "${BLUE}Found upstream bd: ./beads/bd-upstream${NC}"
-elif command -v bd-upstream >/dev/null 2>&1; then
-    UPSTREAM_BD="bd-upstream"
-    echo -e "${BLUE}Found upstream bd: bd-upstream${NC}"
-elif [ -f "$HOME/.cargo/bin/bd-upstream" ]; then
-    UPSTREAM_BD="$HOME/.cargo/bin/bd-upstream"
-    echo -e "${BLUE}Found upstream bd: $UPSTREAM_BD${NC}"
-elif command -v beads >/dev/null 2>&1; then
-    UPSTREAM_BD="beads"
-    echo -e "${BLUE}Found upstream bd: beads${NC}"
-else
-    echo -e "${YELLOW}Upstream bd not found - will test export only${NC}"
-    echo -e "${YELLOW}To build upstream bd: make upstream${NC}"
-    echo -e "${YELLOW}Or install from source: cargo install --git https://github.com/steveyegge/beads bd${NC}"
     echo ""
 fi
 
@@ -150,27 +129,27 @@ echo "Creating test directory: $TEST_DIR"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
-# Test 1: Initialize minibeads database
-echo -e "\n${YELLOW}Test 1: Initialize minibeads database${NC}"
-OUTPUT=$("$BD_BIN" init --prefix exp 2>&1)
-assert_contains "$OUTPUT" "Initialized beads database with prefix: exp" "Initialize should report prefix"
+# Test 1: Initialize tazk database
+echo -e "\n${YELLOW}Test 1: Initialize tazk database${NC}"
+OUTPUT=$("$TZ_BIN" init --prefix exp 2>&1)
+assert_contains "$OUTPUT" "Initialized tazk database with prefix: exp" "Initialize should report prefix"
 
 # Test 2: Create test issues with various types and states
 echo -e "\n${YELLOW}Test 2: Create test issues${NC}"
-"$BD_BIN" create "Bug Fix A" -p 0 -t bug -d "Fix critical authentication bug" >/dev/null 2>&1
-"$BD_BIN" create "Feature B" -p 1 -t feature -d "Add export functionality" >/dev/null 2>&1
-"$BD_BIN" create "Task C" -p 2 -t task --deps exp-1 >/dev/null 2>&1
-"$BD_BIN" update exp-2 --status in_progress >/dev/null 2>&1
-"$BD_BIN" close exp-1 --reason "Fixed" >/dev/null 2>&1
+"$TZ_BIN" create "Bug Fix A" -p 0 -t bug -d "Fix critical authentication bug" >/dev/null 2>&1
+"$TZ_BIN" create "Feature B" -p 1 -t feature -d "Add export functionality" >/dev/null 2>&1
+"$TZ_BIN" create "Task C" -p 2 -t task --deps exp-1 >/dev/null 2>&1
+"$TZ_BIN" update exp-2 --status in_progress >/dev/null 2>&1
+"$TZ_BIN" close exp-1 --reason "Fixed" >/dev/null 2>&1
 
 # Verify issues were created
-assert_file_exists ".minibeads/issues/exp-1.md" "exp-1 file should exist"
-assert_file_exists ".minibeads/issues/exp-2.md" "exp-2 file should exist"
-assert_file_exists ".minibeads/issues/exp-3.md" "exp-3 file should exist"
+assert_file_exists ".tazk/issues/exp-1.md" "exp-1 file should exist"
+assert_file_exists ".tazk/issues/exp-2.md" "exp-2 file should exist"
+assert_file_exists ".tazk/issues/exp-3.md" "exp-3 file should exist"
 
 # Test 3: Export to stdout
 echo -e "\n${YELLOW}Test 3: Export to stdout (default)${NC}"
-STDOUT_EXPORT=$("$BD_BIN" export 2>/dev/null)
+STDOUT_EXPORT=$("$TZ_BIN" export 2>/dev/null)
 LINE_COUNT=$(echo "$STDOUT_EXPORT" | wc -l | tr -d ' ')
 assert_equals "3" "$LINE_COUNT" "Should export 3 issues to stdout"
 
@@ -181,7 +160,7 @@ assert_contains "$STDOUT_EXPORT" '"id":"exp-3"' "Should contain exp-3 in JSON"
 
 # Test 4: Export to file with -o flag
 echo -e "\n${YELLOW}Test 4: Export to file with -o flag${NC}"
-OUTPUT=$("$BD_BIN" export -o custom_export.jsonl 2>&1)
+OUTPUT=$("$TZ_BIN" export -o custom_export.jsonl 2>&1)
 assert_contains "$OUTPUT" "Exported 3 issues to custom_export.jsonl" "Should report export to custom file"
 assert_file_exists "custom_export.jsonl" "Custom export file should exist"
 
@@ -189,13 +168,13 @@ assert_file_exists "custom_export.jsonl" "Custom export file should exist"
 FILE_LINES=$(wc -l < custom_export.jsonl | tr -d ' ')
 assert_equals "3" "$FILE_LINES" "Custom export should have 3 lines"
 
-# Test 5: Export with --mb-output-default flag
-echo -e "\n${YELLOW}Test 5: Export with --mb-output-default flag${NC}"
-OUTPUT=$("$BD_BIN" export --mb-output-default 2>&1)
+# Test 5: Export with --tz-output-default flag
+echo -e "\n${YELLOW}Test 5: Export with --tz-output-default flag${NC}"
+OUTPUT=$("$TZ_BIN" export --tz-output-default 2>&1)
 assert_contains "$OUTPUT" "Exported 3 issues to" "Should report export"
-assert_file_exists ".minibeads/issues.jsonl" "Default export file should exist"
+assert_file_exists ".tazk/issues.jsonl" "Default export file should exist"
 
-JSONL_FILE="$TEST_DIR/.minibeads/issues.jsonl"
+JSONL_FILE="$TEST_DIR/.tazk/issues.jsonl"
 JSONL_LINES=$(wc -l < "$JSONL_FILE" | tr -d ' ')
 assert_equals "3" "$JSONL_LINES" "Export should have 3 lines"
 
@@ -234,63 +213,14 @@ assert_contains "$EXP1_JSON" '"id":"exp-3"' "Should have exp-3 as dependent"
 
 # Test 8: Export with filters
 echo -e "\n${YELLOW}Test 8: Export with status filter${NC}"
-OPEN_EXPORT=$("$BD_BIN" export --status open 2>/dev/null)
+OPEN_EXPORT=$("$TZ_BIN" export --status open 2>/dev/null)
 OPEN_COUNT=$(echo "$OPEN_EXPORT" | wc -l | tr -d ' ')
 assert_equals "1" "$OPEN_COUNT" "Should export 1 open issue (exp-3)"
 
 # Also test closed filter
-CLOSED_EXPORT=$("$BD_BIN" export --status closed 2>/dev/null)
+CLOSED_EXPORT=$("$TZ_BIN" export --status closed 2>/dev/null)
 CLOSED_COUNT=$(echo "$CLOSED_EXPORT" | wc -l | tr -d ' ')
 assert_equals "1" "$CLOSED_COUNT" "Should export 1 closed issue (exp-1)"
-
-# Test 9: Upstream bd interoperability (if available)
-if [ -n "$UPSTREAM_BD" ]; then
-    echo -e "\n${YELLOW}Test 9: Upstream bd interoperability${NC}"
-
-    # Create a clean directory for upstream bd testing
-    UPSTREAM_DIR="$TEST_DIR/upstream_test"
-    echo -e "${BLUE}→ mkdir -p $UPSTREAM_DIR${NC}"
-    mkdir -p "$UPSTREAM_DIR"
-    cd "$UPSTREAM_DIR"
-
-    # Initialize upstream bd to create .beads directory
-    echo -e "${BLUE}→ echo n | $UPSTREAM_BD init --prefix exp${NC}"
-    echo n | "$UPSTREAM_BD" init --prefix exp >/dev/null 2>&1
-    echo -e "${BLUE}  (init completed)${NC}"
-
-    # Copy exported issues.jsonl to .beads directory
-    echo -e "${BLUE}→ cp $JSONL_FILE .beads/issues.jsonl${NC}"
-    cp "$JSONL_FILE" .beads/issues.jsonl
-
-    # Import the JSONL into the database (required since bd init starts a daemon)
-    echo -e "${BLUE}→ $UPSTREAM_BD import -i .beads/issues.jsonl${NC}"
-    "$UPSTREAM_BD" import -i .beads/issues.jsonl >/dev/null 2>&1
-    echo -e "${BLUE}  (import completed)${NC}"
-
-    # Test upstream bd list (latest upstream uses database mode, not --no-db)
-    echo -e "${BLUE}→ $UPSTREAM_BD list${NC}"
-    UPSTREAM_LIST=$("$UPSTREAM_BD" list 2>&1)
-    assert_contains "$UPSTREAM_LIST" "exp-1" "Upstream bd should list exp-1"
-    assert_contains "$UPSTREAM_LIST" "exp-2" "Upstream bd should list exp-2"
-    assert_contains "$UPSTREAM_LIST" "exp-3" "Upstream bd should list exp-3"
-
-    # Test upstream bd show
-    echo -e "${BLUE}→ $UPSTREAM_BD show exp-1${NC}"
-    UPSTREAM_SHOW=$("$UPSTREAM_BD" show exp-1 2>&1)
-    assert_contains "$UPSTREAM_SHOW" "exp-1" "Upstream bd should show exp-1"
-    assert_contains "$UPSTREAM_SHOW" "Bug Fix A" "Upstream bd should show title"
-
-    # Test upstream bd stats
-    echo -e "${BLUE}→ $UPSTREAM_BD stats${NC}"
-    UPSTREAM_STATS=$("$UPSTREAM_BD" stats 2>&1)
-    assert_contains "$UPSTREAM_STATS" "Total Issues:" "Upstream bd should show total issues"
-    assert_contains "$UPSTREAM_STATS" "3" "Upstream bd should show 3 as total"
-
-    cd "$TEST_DIR"
-else
-    echo -e "\n${YELLOW}Test 9: Upstream bd interoperability - SKIPPED${NC}"
-    echo -e "${YELLOW}Install upstream bd to enable full interoperability testing${NC}"
-fi
 
 # Print summary
 echo ""

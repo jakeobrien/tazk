@@ -510,33 +510,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
-name = "minibeads"
-version = "0.29.0"
-dependencies = [
- "anyhow",
- "built",
- "chrono",
- "clap",
- "dir-test",
- "filetime",
- "libc",
- "num-bigint",
- "num-traits",
- "rand",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "similar",
- "similar-asserts",
- "tempfile",
- "thiserror",
- "tokio",
- "winapi",
-]
-
-[[package]]
 name = "mio"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -842,6 +815,33 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tazk"
+version = "0.29.0"
+dependencies = [
+ "anyhow",
+ "built",
+ "chrono",
+ "clap",
+ "dir-test",
+ "filetime",
+ "libc",
+ "num-bigint",
+ "num-traits",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "similar",
+ "similar-asserts",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "winapi",
 ]
 
 [[package]]

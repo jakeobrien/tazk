@@ -1,6 +1,6 @@
 //! Line-based three-way merge (diff3) with standard conflict hunks.
 //!
-//! This is the textual layer under `mb merge-driver`: structured issue and
+//! This is the textual layer under `tz merge-driver`: structured issue and
 //! comment merges render each conflicting field through it so that conflict
 //! hunks cover only the lines that actually disagree, and files that cannot be
 //! merged structurally fall back to it wholesale.

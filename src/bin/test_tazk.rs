@@ -1,20 +1,18 @@
-//! Test toolkit for minibeads
+//! Test toolkit for tazk
 //!
-//! This binary provides various testing utilities for minibeads.
+//! This binary provides various testing utilities for tazk.
 //!
 //! Usage:
-//!   test_minibeads random-actions [OPTIONS]
-//!   test_minibeads --help
+//!   test_tazk random-actions [OPTIONS]
+//!   test_tazk --help
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use minibeads::beads_generator::{
-    ActionExecutor, ActionGenerator, BeadsAction, ReferenceInterpreter,
-};
 use rand::RngCore;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tazk::action_generator::{ActionExecutor, ActionGenerator, ReferenceInterpreter, TazkAction};
 
 /// Verbosity level for logging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,8 +78,8 @@ impl Logger {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "test_minibeads")]
-#[command(about = "Test toolkit for minibeads")]
+#[command(name = "test_tazk")]
+#[command(about = "Test toolkit for tazk")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -110,31 +108,7 @@ enum Commands {
         verbose: bool,
     },
 
-    /// Bidirectional sync testing alternating between minibeads and upstream
-    #[command(name = "sync-test")]
-    SyncTest {
-        /// Seed for deterministic RNG
-        #[arg(long)]
-        seed: Option<u64>,
-
-        /// Use entropy for random seed (non-deterministic)
-        #[arg(long)]
-        seed_from_entropy: bool,
-
-        /// Number of sync cycles to run
-        #[arg(long, default_value = "5")]
-        cycles: usize,
-
-        /// Number of actions to generate per phase
-        #[arg(long, default_value = "10")]
-        actions_per_phase: usize,
-
-        /// Enable verbose output (print action sequence and detailed checks)
-        #[arg(long, short)]
-        verbose: bool,
-    },
-
-    /// Random property-based testing for beads implementations
+    /// Random property-based testing for tazk
     #[command(name = "random-actions")]
     RandomActions {
         /// Seed for deterministic RNG
@@ -159,10 +133,6 @@ enum Commands {
         #[arg(long, default_value = "20")]
         actions_per_iter: usize,
 
-        /// Implementation to test: minibeads or upstream
-        #[arg(long, default_value = "minibeads")]
-        r#impl: Implementation,
-
         /// Path to binary (overrides --impl default)
         #[arg(long)]
         binary: Option<String>,
@@ -176,22 +146,10 @@ enum Commands {
         #[arg(long, value_name = "N", num_args = 0..=1, default_missing_value = "0", require_equals = true)]
         parallel: Option<usize>,
 
-        /// Test JSONL import after upstream execution (only applies when --impl=upstream)
-        /// Exports upstream database to JSONL and verifies minibeads can import it
-        #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
-        test_import: bool,
-
         /// ID generation mode: numeric (sequential) or hash (content-based)
-        /// Upstream only supports hash mode
         #[arg(long, default_value = "numeric")]
         ids: IdMode,
     },
-}
-
-#[derive(Debug, Clone, clap::ValueEnum)]
-enum Implementation {
-    Minibeads,
-    Upstream,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -236,24 +194,15 @@ fn main() -> Result<()> {
                 actions,
                 verbose,
             } => run_migration_test(seed, seed_from_entropy, actions, verbose).await,
-            Commands::SyncTest {
-                seed,
-                seed_from_entropy,
-                cycles,
-                actions_per_phase,
-                verbose,
-            } => run_sync_test(seed, seed_from_entropy, cycles, actions_per_phase, verbose).await,
             Commands::RandomActions {
                 seed,
                 seed_from_entropy,
                 iters,
                 seconds,
                 actions_per_iter,
-                r#impl,
                 binary,
                 verbose,
                 parallel,
-                test_import,
                 ids,
             } => {
                 run_random_actions(
@@ -262,11 +211,9 @@ fn main() -> Result<()> {
                     iters,
                     seconds,
                     actions_per_iter,
-                    r#impl,
                     binary,
                     verbose,
                     parallel,
-                    test_import,
                     ids,
                 )
                 .await
@@ -303,19 +250,16 @@ async fn run_migration_test(
     let exe_dir = exe_path
         .parent()
         .expect("Failed to get executable directory");
-    let minibeads_binary = exe_dir.join(format!("mb{}", std::env::consts::EXE_SUFFIX));
+    let tazk_binary = exe_dir.join(format!("tz{}", std::env::consts::EXE_SUFFIX));
 
     // Validate binary exists
-    if !minibeads_binary.exists() {
-        eprintln!(
-            "ERROR: Minibeads binary not found at: {}",
-            minibeads_binary.display()
-        );
+    if !tazk_binary.exists() {
+        eprintln!("ERROR: Tazk binary not found at: {}", tazk_binary.display());
         eprintln!("Build it first with: cargo build");
         std::process::exit(1);
     }
 
-    println!("📦 Minibeads: {}", minibeads_binary.display());
+    println!("📦 Tazk: {}", tazk_binary.display());
     println!();
 
     // Create working directory
@@ -339,11 +283,7 @@ async fn run_migration_test(
     let mut generator = ActionGenerator::new_with_mode(base_seed, false); // numeric mode
     let mut reference = ReferenceInterpreter::new("test".to_string());
 
-    let executor = ActionExecutor::new(
-        minibeads_binary.to_str().unwrap(),
-        work_dir.to_str().unwrap(),
-        false,
-    );
+    let executor = ActionExecutor::new(tazk_binary.to_str().unwrap(), work_dir.to_str().unwrap());
 
     let actions = generator.generate_sequence(num_actions);
     logger.log(format!("Generated {} actions", actions.len()));
@@ -361,11 +301,11 @@ async fn run_migration_test(
     println!("Phase 2: Migrate to hash IDs");
     println!("{}", "=".repeat(70));
 
-    logger.log("Running mb mb-migrate...".to_string());
+    logger.log("Running tz tz-migrate...".to_string());
 
-    let migrate_output = std::process::Command::new(&minibeads_binary)
+    let migrate_output = std::process::Command::new(&tazk_binary)
         .current_dir(work_dir)
-        .args(["mb-migrate"])
+        .args(["tz-migrate"])
         .output()?;
 
     if !migrate_output.status.success() {
@@ -403,7 +343,7 @@ async fn run_migration_test(
     logger.log("Verifying migration integrity...".to_string());
 
     // Count issues after migration
-    let list_output = std::process::Command::new(&minibeads_binary)
+    let list_output = std::process::Command::new(&tazk_binary)
         .current_dir(work_dir)
         .args(["list"])
         .output()?;
@@ -489,7 +429,7 @@ async fn run_migration_test(
     }
 
     // Verify dependencies are intact by checking a few issues
-    let show_output = std::process::Command::new(&minibeads_binary)
+    let show_output = std::process::Command::new(&tazk_binary)
         .current_dir(work_dir)
         .args(["stats"])
         .output()?;
@@ -518,187 +458,6 @@ async fn run_migration_test(
     Ok(())
 }
 
-/// Bidirectional sync test - alternates between minibeads and upstream
-async fn run_sync_test(
-    seed: Option<u64>,
-    seed_from_entropy: bool,
-    cycles: usize,
-    actions_per_phase: usize,
-    verbose: bool,
-) -> Result<()> {
-    use rand::RngCore;
-
-    // Sample entropy ONCE at the beginning if requested
-    let base_seed = if seed_from_entropy {
-        let mut rng = rand::thread_rng();
-        let entropy_seed = rng.next_u64();
-        println!("🎲 Sampled entropy seed: {}", entropy_seed);
-        println!("   (Use --seed {} to reproduce this run)\n", entropy_seed);
-        entropy_seed
-    } else {
-        seed.unwrap_or(42u64) // Default seed
-    };
-
-    println!("🔄 Bidirectional Sync Test");
-    println!("Seed: {}", base_seed);
-    println!("Cycles: {}", cycles);
-    println!("Actions per phase: {}", actions_per_phase);
-    println!();
-
-    // Find binary paths
-    let exe_path = std::env::current_exe()?;
-    let exe_dir = exe_path
-        .parent()
-        .expect("Failed to get executable directory");
-    let minibeads_binary = exe_dir.join(format!("mb{}", std::env::consts::EXE_SUFFIX));
-
-    // Find project root for upstream binary
-    let mut current = exe_dir;
-    while !current.join("Cargo.toml").exists() {
-        current = current
-            .parent()
-            .unwrap_or_else(|| panic!("Could not find project root"));
-    }
-    let upstream_binary = current
-        .join("beads")
-        .join(format!("bd-upstream{}", std::env::consts::EXE_SUFFIX));
-
-    // Validate binaries exist
-    if !minibeads_binary.exists() {
-        eprintln!(
-            "ERROR: Minibeads binary not found at: {}",
-            minibeads_binary.display()
-        );
-        eprintln!("Build it first with: cargo build");
-        std::process::exit(1);
-    }
-    if !upstream_binary.exists() {
-        eprintln!(
-            "ERROR: Upstream binary not found at: {}",
-            upstream_binary.display()
-        );
-        eprintln!("Build it first with: make upstream");
-        std::process::exit(1);
-    }
-
-    println!("📦 Minibeads: {}", minibeads_binary.display());
-    println!("📦 Upstream: {}", upstream_binary.display());
-    println!();
-
-    // Create working directory
-    let temp_dir = tempfile::tempdir()?;
-    let work_dir = temp_dir.path();
-    println!("📁 Working directory: {}", work_dir.display());
-    println!();
-
-    let verbosity = if verbose {
-        LogLevel::Verbose
-    } else {
-        LogLevel::Normal
-    };
-    let logger = Logger::new(verbosity, false);
-
-    // Phase 1: Initialize with minibeads and populate with random actions
-    println!("{}", "=".repeat(70));
-    println!("Phase 1: Initialize with minibeads and populate");
-    println!("{}", "=".repeat(70));
-
-    let phase1_seed = base_seed;
-    let mut generator = ActionGenerator::new_with_mode(phase1_seed, true); // hash mode for upstream compat
-    let mut reference = ReferenceInterpreter::new_with_hash_ids("test".to_string());
-
-    let executor = ActionExecutor::new(
-        minibeads_binary.to_str().unwrap(),
-        work_dir.to_str().unwrap(),
-        false,
-    );
-
-    let actions = generator.generate_sequence(actions_per_phase);
-    logger.log(format!("Generated {} initial actions", actions.len()));
-
-    execute_actions(&executor, &actions, &mut reference, &logger)?;
-
-    // Phase 2: Sync to create JSONL
-    println!("\n{}", "=".repeat(70));
-    println!("Phase 2: Sync to create JSONL");
-    println!("{}", "=".repeat(70));
-
-    run_minibeads_sync(work_dir, &minibeads_binary, &logger)?;
-
-    // Main test loop: Alternate between minibeads and upstream
-    for cycle in 1..=cycles {
-        println!("\n{}", "=".repeat(70));
-        println!("Cycle {}/{}: Upstream phase", cycle, cycles);
-        println!("{}", "=".repeat(70));
-
-        // Generate actions for upstream phase
-        let upstream_seed = base_seed.wrapping_add((cycle * 2 - 1) as u64);
-        let mut upstream_gen = ActionGenerator::new_with_mode(upstream_seed, true);
-        let upstream_actions = upstream_gen.generate_sequence(actions_per_phase);
-
-        logger.log(format!(
-            "Generated {} actions for upstream",
-            upstream_actions.len()
-        ));
-
-        // Execute with upstream
-        let upstream_executor = ActionExecutor::new(
-            upstream_binary.to_str().unwrap(),
-            work_dir.to_str().unwrap(),
-            false,
-        );
-
-        execute_actions(
-            &upstream_executor,
-            &upstream_actions,
-            &mut reference,
-            &logger,
-        )?;
-
-        // Flush upstream to JSONL
-        run_upstream_sync_flush(work_dir, &upstream_binary, &logger)?;
-        copy_upstream_jsonl_to_minibeads(work_dir, &logger)?;
-
-        println!("\n{}", "=".repeat(70));
-        println!("Cycle {}/{}: Minibeads phase", cycle, cycles);
-        println!("{}", "=".repeat(70));
-
-        // Generate actions for minibeads phase
-        let minibeads_seed = base_seed.wrapping_add((cycle * 2) as u64);
-        let mut minibeads_gen = ActionGenerator::new_with_mode(minibeads_seed, true);
-        let minibeads_actions = minibeads_gen.generate_sequence(actions_per_phase);
-
-        logger.log(format!(
-            "Generated {} actions for minibeads",
-            minibeads_actions.len()
-        ));
-
-        // Execute with minibeads
-        execute_actions(&executor, &minibeads_actions, &mut reference, &logger)?;
-
-        // Sync minibeads (bidirectional)
-        run_minibeads_sync(work_dir, &minibeads_binary, &logger)?;
-        copy_minibeads_jsonl_to_upstream(work_dir, &logger)?;
-
-        // Verify consistency at end of cycle
-        println!("\n🔍 Verifying consistency after cycle {}...", cycle);
-        verify_sync_consistency(
-            work_dir,
-            &minibeads_binary,
-            &upstream_binary,
-            &reference,
-            &logger,
-        )?;
-        println!("✅ Cycle {} completed successfully", cycle);
-    }
-
-    println!("\n{}", "=".repeat(70));
-    println!("✅ All {} cycles completed successfully!", cycles);
-    println!("{}", "=".repeat(70));
-
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_random_actions(
     seed: Option<u64>,
@@ -706,11 +465,9 @@ async fn run_random_actions(
     iters: usize,
     seconds: Option<u64>,
     actions_per_iter: usize,
-    implementation: Implementation,
     binary: Option<String>,
     verbose: bool,
     parallel: Option<usize>,
-    test_import: bool,
     ids: IdMode,
 ) -> Result<()> {
     // Sample entropy ONCE at the beginning if requested
@@ -730,73 +487,23 @@ async fn run_random_actions(
         // Explicit path provided
         path
     } else {
-        // Default based on implementation
-        match implementation {
-            Implementation::Minibeads => {
-                // minibeads bd is in same directory as test_minibeads
-                let exe_path =
-                    std::env::current_exe().expect("Failed to get current executable path");
-                let exe_dir = exe_path
-                    .parent()
-                    .expect("Failed to get executable directory");
-                let binary_name = format!("mb{}", std::env::consts::EXE_SUFFIX);
-                exe_dir.join(&binary_name).to_str().unwrap().to_string()
-            }
-            Implementation::Upstream => {
-                // upstream bd is in beads/bd-upstream relative to project root
-                // Find project root by going up from current_exe until we find Cargo.toml
-                let exe_path =
-                    std::env::current_exe().expect("Failed to get current executable path");
-                let mut current = exe_path
-                    .parent()
-                    .expect("Failed to get executable directory");
-
-                // Go up directories to find project root (has Cargo.toml)
-                while !current.join("Cargo.toml").exists() {
-                    current = current
-                        .parent()
-                        .unwrap_or_else(|| panic!("Could not find project root (Cargo.toml)"));
-                }
-
-                let binary_name = format!("bd-upstream{}", std::env::consts::EXE_SUFFIX);
-                current
-                    .join("beads")
-                    .join(&binary_name)
-                    .to_str()
-                    .unwrap()
-                    .to_string()
-            }
-        }
+        // The tz binary lives in the same directory as test_tazk
+        let exe_path = std::env::current_exe().expect("Failed to get current executable path");
+        let exe_dir = exe_path
+            .parent()
+            .expect("Failed to get executable directory");
+        let binary_name = format!("tz{}", std::env::consts::EXE_SUFFIX);
+        exe_dir.join(&binary_name).to_str().unwrap().to_string()
     };
-
-    let impl_name = match implementation {
-        Implementation::Minibeads => "minibeads",
-        Implementation::Upstream => "upstream bd",
-    };
-
-    // Validate ID mode compatibility with implementation
-    if matches!(implementation, Implementation::Upstream) && ids == IdMode::Numeric {
-        eprintln!("ERROR: Upstream bd only supports hash-based IDs");
-        eprintln!("       Use --ids=hash when testing with --impl=upstream");
-        std::process::exit(1);
-    }
 
     // Check if binary exists
     if !PathBuf::from(&binary_path).exists() {
         eprintln!("ERROR: Binary not found at: {}", binary_path);
-        match implementation {
-            Implementation::Minibeads => eprintln!("Build it first with: cargo build"),
-            Implementation::Upstream => eprintln!("Build it first with: make upstream"),
-        }
+        eprintln!("Build it first with: cargo build");
         std::process::exit(1);
     }
 
-    println!("Testing implementation: {}", impl_name);
     println!("Binary: {}", binary_path);
-
-    // No longer use --no-db flag - let upstream use SQLite database
-    // We'll export to JSONL after execution for verification
-    let use_no_db = false;
 
     // Check for parallel execution
     if let Some(num_workers) = parallel {
@@ -820,18 +527,13 @@ async fn run_random_actions(
         println!("Base seed: {}", base_seed);
         println!("Will stop on first failure across all workers\n");
 
-        let is_upstream = matches!(implementation, Implementation::Upstream);
         return run_parallel_stress_test(
             base_seed,
             seconds.unwrap(),
             actions_per_iter,
             &binary_path,
             verbose,
-            use_no_db,
-            is_upstream,
             workers,
-            &implementation,
-            test_import,
             ids,
         )
         .await;
@@ -892,28 +594,11 @@ async fn run_random_actions(
 
         // Run the test
         let logger = Logger::new(verbosity, false);
-        let is_upstream = matches!(implementation, Implementation::Upstream);
-        if let Err(e) = run_test(
-            iter_seed,
-            actions_per_iter,
-            &binary_path,
-            &logger,
-            use_no_db,
-            is_upstream,
-            test_import,
-            ids,
-        ) {
+        if let Err(e) = run_test(iter_seed, actions_per_iter, &binary_path, &logger, ids) {
             eprintln!("\n❌ TEST FAILED with SEED: {}", iter_seed);
             eprintln!("Error: {:?}", e);
             eprintln!("\nTo reproduce this failure, run:");
-            let impl_flag = match implementation {
-                Implementation::Minibeads => "--impl minibeads",
-                Implementation::Upstream => "--impl upstream",
-            };
-            eprintln!(
-                "  test_minibeads random-actions --seed {} {}",
-                iter_seed, impl_flag
-            );
+            eprintln!("  test_tazk random-actions --seed {}", iter_seed);
             if seconds.is_some() {
                 eprintln!("\nStopping on first failure after {} iterations", iter);
             }
@@ -948,11 +633,7 @@ async fn run_parallel_stress_test(
     actions_per_iter: usize,
     binary_path: &str,
     verbose: bool,
-    use_no_db: bool,
-    is_upstream: bool,
     workers: usize,
-    implementation: &Implementation,
-    test_import: bool,
     ids: IdMode,
 ) -> Result<()> {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1010,16 +691,7 @@ async fn run_parallel_stress_test(
                 let iter_seed = worker_base_seed.wrapping_add(local_iterations);
 
                 // Run the test
-                if let Err(e) = run_test(
-                    iter_seed,
-                    actions_per_iter,
-                    &binary_path,
-                    &logger,
-                    use_no_db,
-                    is_upstream,
-                    test_import,
-                    ids,
-                ) {
+                if let Err(e) = run_test(iter_seed, actions_per_iter, &binary_path, &logger, ids) {
                     // Signal all workers to stop
                     should_stop.store(true, Ordering::Relaxed);
 
@@ -1082,14 +754,7 @@ async fn run_parallel_stress_test(
         );
         eprintln!("Total iterations across all workers: {}", total_iters);
         eprintln!("\nTo reproduce this failure, run:");
-        let impl_flag = match implementation {
-            Implementation::Minibeads => "--impl minibeads",
-            Implementation::Upstream => "--impl upstream",
-        };
-        eprintln!(
-            "  test_minibeads random-actions --seed {} {}",
-            iter_seed, impl_flag
-        );
+        eprintln!("  test_tazk random-actions --seed {}", iter_seed);
         std::process::exit(1);
     }
 
@@ -1115,9 +780,6 @@ fn run_test(
     num_actions: usize,
     binary_path: &str,
     logger: &Logger,
-    use_no_db: bool,
-    is_upstream: bool,
-    test_import: bool,
     ids: IdMode,
 ) -> Result<()> {
     // Create a temporary directory for this test
@@ -1142,7 +804,7 @@ fn run_test(
     logger.verbose(String::new());
 
     // Create executor
-    let executor = ActionExecutor::new(binary_path, work_dir, use_no_db);
+    let executor = ActionExecutor::new(binary_path, work_dir);
 
     // Create reference interpreter to maintain golden state
     let mut reference = match ids {
@@ -1165,7 +827,7 @@ fn run_test(
                     // Update reference interpreter with successful actions
                     // For hash mode Create actions, replace the placeholder ID with actual ID
                     let action_for_ref = if let Some(ref actual_id) = result.actual_issue_id {
-                        if let BeadsAction::Create {
+                        if let TazkAction::Create {
                             expected_id,
                             title,
                             priority,
@@ -1175,7 +837,7 @@ fn run_test(
                         {
                             if expected_id.contains("HASH") {
                                 // Replace placeholder with actual ID for hash mode
-                                BeadsAction::Create {
+                                TazkAction::Create {
                                     expected_id: actual_id.clone(),
                                     title: title.clone(),
                                     priority: *priority,
@@ -1246,15 +908,8 @@ fn run_test(
     ));
 
     // Verify final state consistency
-    let (bytes_written, num_issues) = verify_consistency(
-        &executor,
-        work_dir,
-        binary_path,
-        logger,
-        use_no_db,
-        is_upstream,
-        &mut reference,
-    )?;
+    let (bytes_written, num_issues) =
+        verify_consistency(&executor, work_dir, logger, &mut reference)?;
 
     // Print summary stats
     logger.log(format!("📊 Issues generated: {}", num_issues));
@@ -1264,17 +919,11 @@ fn run_test(
         bytes_written as f64 / 1024.0
     ));
 
-    // If testing upstream and import test is enabled, verify JSONL import
-    if is_upstream && test_import {
-        logger.log("\n📦 Testing JSONL import capability...".to_string());
-        test_jsonl_import(work_dir, binary_path, logger, &reference)?;
-    }
-
     Ok(())
 }
 
 /// Check if a failure is critical (unexpected) vs expected (validation error)
-fn is_critical_failure(result: &minibeads::beads_generator::ExecutionResult) -> bool {
+fn is_critical_failure(result: &tazk::action_generator::ExecutionResult) -> bool {
     // These are expected validation errors, not critical failures
     let expected_errors = [
         "already exists",
@@ -1299,12 +948,11 @@ fn is_critical_failure(result: &minibeads::beads_generator::ExecutionResult) -> 
 /// Check if an ID is a valid base36 hash ID (contains only 0-9, a-z after prefix)
 ///
 /// Base36 encoding uses characters [0-9a-z], giving better information density than hex.
-/// Upstream bd uses base36 for hash IDs.
-///
+/// ///
 /// Examples of valid base36 hash IDs:
 /// - "test-3s9"
-/// - "minibeads-0qeg"
-/// - "bd-12f8393"
+/// - "tazk-0qeg"
+/// - "tz-12f8393"
 ///
 /// Examples of invalid (contains hex-only chars or uppercase):
 /// - "test-4f10" (valid hex but 'f' is valid in base36 too, but if it has ONLY hex it might be wrong impl)
@@ -1381,7 +1029,7 @@ fn is_hex_hash_id(id: &str, prefix: &str) -> bool {
 /// Note: Some base36 IDs may only contain hex characters (0-9, a-f) by random chance.
 /// This is normal and not an error.
 fn validate_hash_ids_are_base36(
-    issues: &std::collections::HashMap<String, minibeads::beads_generator::ReferenceIssue>,
+    issues: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
     prefix: &str,
     logger: &Logger,
 ) -> Result<()> {
@@ -1439,7 +1087,7 @@ fn validate_hash_ids_are_base36(
 
 /// Detect if we're in hash ID mode by checking if any ID contains non-numeric characters
 fn is_hash_id_mode(
-    issues: &std::collections::HashMap<String, minibeads::beads_generator::ReferenceIssue>,
+    issues: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
     prefix: &str,
 ) -> bool {
     for id in issues.keys() {
@@ -1457,10 +1105,7 @@ fn is_hash_id_mode(
 fn verify_consistency(
     _executor: &ActionExecutor,
     work_dir: &str,
-    binary_path: &str,
     logger: &Logger,
-    _use_no_db: bool,
-    is_upstream: bool,
     reference: &mut ReferenceInterpreter,
 ) -> Result<(u64, usize)> {
     logger.verbose(
@@ -1468,16 +1113,16 @@ fn verify_consistency(
     );
 
     // Check that the implementation's storage directory exists.
-    let beads_dir = PathBuf::from(work_dir).join(if is_upstream { ".beads" } else { ".minibeads" });
-    if !beads_dir.exists() {
+    let tazk_dir = PathBuf::from(work_dir).join(".tazk");
+    if !tazk_dir.exists() {
         return Err(anyhow::anyhow!(
             "{} directory does not exist",
-            beads_dir.display()
+            tazk_dir.display()
         ));
     }
 
     // Step 1: Recursively walk storage directory and report files
-    let (files, total_size) = walk_beads_directory(&beads_dir, logger)?;
+    let (files, total_size) = walk_tazk_directory(&tazk_dir, logger)?;
 
     logger.verbose(format!(
         "   Found {} files, total size: {} bytes",
@@ -1486,18 +1131,10 @@ fn verify_consistency(
     ));
 
     // Step 2: Verify config.yaml and compare prefix
-    // For upstream, we need to accept whatever prefix it chose (it ignores --prefix flag)
-    // and update the reference interpreter to match
-    verify_config(&beads_dir, reference, logger, is_upstream)?;
+    verify_config(&tazk_dir, reference, logger)?;
 
     // Step 3: Compare actual issues with reference state
-    if is_upstream {
-        // Upstream: Export database to JSONL in two ways and verify both match reference
-        verify_upstream_dual_export(work_dir, binary_path, reference, logger)?;
-    } else {
-        // Minibeads: verify markdown files in issues/ directory
-        verify_minibeads_state(&beads_dir, reference, logger)?;
-    }
+    verify_tazk_state(&tazk_dir, reference, logger)?;
 
     logger.log("✅ Verification passed".to_string());
 
@@ -1514,8 +1151,8 @@ struct FileInfo {
 }
 
 /// Recursively walk storage directory and collect file info
-fn walk_beads_directory(
-    beads_dir: &std::path::Path,
+fn walk_tazk_directory(
+    tazk_dir: &std::path::Path,
     logger: &Logger,
 ) -> Result<(Vec<FileInfo>, u64)> {
     let mut files = Vec::new();
@@ -1544,72 +1181,46 @@ fn walk_beads_directory(
         Ok(())
     }
 
-    walk_recursive(beads_dir, &mut files, &mut total_size, logger)?;
+    walk_recursive(tazk_dir, &mut files, &mut total_size, logger)?;
     Ok((files, total_size))
 }
 
 /// Parse and verify config.yaml using shared Storage code
 fn verify_config(
-    beads_dir: &std::path::Path,
+    tazk_dir: &std::path::Path,
     reference: &mut ReferenceInterpreter,
     logger: &Logger,
-    is_upstream: bool,
 ) -> Result<()> {
-    use minibeads::storage::Storage;
+    use tazk::storage::Storage;
 
     // Use Storage::get_prefix() to read config - this is the single source of truth
-    let storage = Storage::open(beads_dir.to_path_buf())?;
+    let storage = Storage::open(tazk_dir.to_path_buf())?;
     let expected_prefix = reference.get_prefix().to_string(); // Clone to avoid borrow issues
 
-    // Upstream bd stores issues (and the prefix) in its SQLite database and
-    // leaves `issue-prefix` commented out in config.yaml, so minibeads cannot
-    // recover the prefix from the on-disk markdown view. The prefix is verified
-    // for real via the JSONL dual-export step, so here we tolerate an
-    // undeterminable prefix for upstream and only warn.
-    let actual_prefix = match storage.get_prefix() {
-        Ok(prefix) => prefix,
-        Err(e) if is_upstream => {
-            logger.verbose(format!(
-                "   ⚠️  Upstream prefix not readable from markdown view ({e}); \
-                 expected '{expected_prefix}' (verified via JSONL export)"
-            ));
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
+    let actual_prefix = storage.get_prefix()?;
 
     if actual_prefix != expected_prefix {
-        if is_upstream {
-            // Upstream bd writes directory name to config.json but DOES use the requested
-            // prefix for issue IDs. So tolerate config mismatch for upstream.
-            logger.verbose(format!(
-                "   ⚠️  Upstream config.json has prefix '{}' but uses '{}' for issue IDs",
-                actual_prefix, expected_prefix
-            ));
-        } else {
-            return Err(anyhow::anyhow!(
-                "Prefix mismatch: expected '{}', got '{}'",
-                expected_prefix,
-                actual_prefix
-            ));
-        }
-    } else {
-        logger.verbose(format!(
-            "   ✓ config.yaml: prefix matches ('{}')",
+        return Err(anyhow::anyhow!(
+            "Prefix mismatch: expected '{}', got '{}'",
+            expected_prefix,
             actual_prefix
         ));
     }
+    logger.verbose(format!(
+        "   ✓ config.yaml: prefix matches ('{}')",
+        actual_prefix
+    ));
 
     Ok(())
 }
 
-/// Verify minibeads state (markdown files)
-fn verify_minibeads_state(
-    beads_dir: &std::path::Path,
+/// Verify tazk state (markdown files)
+fn verify_tazk_state(
+    tazk_dir: &std::path::Path,
     reference: &ReferenceInterpreter,
     logger: &Logger,
 ) -> Result<()> {
-    let issues_dir = beads_dir.join("issues");
+    let issues_dir = tazk_dir.join("issues");
     if !issues_dir.exists() {
         // No issues created yet is valid
         if reference.get_final_state().is_empty() {
@@ -1623,7 +1234,7 @@ fn verify_minibeads_state(
         }
     }
 
-    // Read all markdown files. Minibeads supports both flat and sharded issue
+    // Read all markdown files. Tazk supports both flat and sharded issue
     // layouts, so verification must recurse through issues/.
     let mut actual_issues = std::collections::HashMap::new();
     let mut stack = vec![issues_dir];
@@ -1635,7 +1246,7 @@ fn verify_minibeads_state(
             if file_type.is_dir() {
                 stack.push(path);
             } else if file_type.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
-                let issue = parse_minibeads_issue(&path)?;
+                let issue = parse_tazk_issue(&path)?;
                 actual_issues.insert(issue.id.clone(), issue);
             }
         }
@@ -1653,133 +1264,10 @@ fn verify_minibeads_state(
     Ok(())
 }
 
-/// Verify upstream state with dual export verification
-/// Exports database using both `bd export` and `bd sync --flush-only` and verifies both match reference
-fn verify_upstream_dual_export(
-    work_dir: &str,
-    binary_path: &str,
-    reference: &ReferenceInterpreter,
-    logger: &Logger,
-) -> Result<()> {
-    logger.verbose("   Performing dual export verification...".to_string());
-
-    // Path 1: Export using `bd export -o custom.jsonl`
-    let custom_export_path = PathBuf::from(work_dir).join("custom.jsonl");
-    logger.verbose(format!(
-        "   Exporting via 'bd export -o {}'...",
-        custom_export_path.display()
-    ));
-
-    let export_output = std::process::Command::new(binary_path)
-        .current_dir(work_dir)
-        .args(["export", "-o", custom_export_path.to_str().unwrap()])
-        .output()?;
-
-    if !export_output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Failed to export database via 'bd export':\n{}",
-            String::from_utf8_lossy(&export_output.stderr)
-        ));
-    }
-
-    logger.verbose("   ✓ bd export completed".to_string());
-
-    // Path 2: Export using `bd sync --flush-only` to create .beads/issues.jsonl
-    logger.verbose("   Flushing via 'bd sync --flush-only'...".to_string());
-
-    let sync_output = std::process::Command::new(binary_path)
-        .current_dir(work_dir)
-        .args(["sync", "--flush-only"])
-        .output()?;
-
-    if !sync_output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Failed to flush database via 'bd sync --flush-only':\n{}",
-            String::from_utf8_lossy(&sync_output.stderr)
-        ));
-    }
-
-    logger.verbose("   ✓ bd sync --flush-only completed".to_string());
-
-    // Parse both JSONL files
-    let beads_dir = PathBuf::from(work_dir).join(".beads");
-    let sync_jsonl_path = beads_dir.join("issues.jsonl");
-
-    // Verify both files exist
-    if !custom_export_path.exists() {
-        return Err(anyhow::anyhow!("custom.jsonl not created by bd export"));
-    }
-    if !sync_jsonl_path.exists() {
-        return Err(anyhow::anyhow!(
-            ".beads/issues.jsonl not created by bd sync --flush-only"
-        ));
-    }
-
-    // Parse custom export
-    logger.verbose("   Parsing custom.jsonl...".to_string());
-    let custom_issues = parse_jsonl_file(&custom_export_path)?;
-    logger.verbose(format!(
-        "   ✓ Parsed {} issues from custom.jsonl",
-        custom_issues.len()
-    ));
-
-    // Validate hash ID encoding if in hash mode
-    if !custom_issues.is_empty() && is_hash_id_mode(&custom_issues, reference.get_prefix()) {
-        logger.verbose("   Validating hash ID encoding format...".to_string());
-        validate_hash_ids_are_base36(&custom_issues, reference.get_prefix(), logger)?;
-    }
-
-    // Parse sync export
-    logger.verbose("   Parsing .beads/issues.jsonl...".to_string());
-    let sync_issues = parse_jsonl_file(&sync_jsonl_path)?;
-    logger.verbose(format!(
-        "   ✓ Parsed {} issues from issues.jsonl",
-        sync_issues.len()
-    ));
-
-    // Verify both exports match each other
-    logger.verbose("   Verifying both exports match each other...".to_string());
-    compare_issue_states(&custom_issues, &sync_issues, logger)?;
-    logger.verbose("   ✓ Both exports match each other".to_string());
-
-    // Verify both exports match reference
-    logger.verbose("   Verifying exports match reference...".to_string());
-    compare_issue_states(&custom_issues, reference.get_final_state(), logger)?;
-    logger.verbose("   ✓ Exports match reference".to_string());
-
-    Ok(())
-}
-
-/// Parse a JSONL file into a HashMap of ReferenceIssue
-fn parse_jsonl_file(
-    path: &PathBuf,
-) -> Result<std::collections::HashMap<String, minibeads::beads_generator::ReferenceIssue>> {
-    let mut issues = std::collections::HashMap::new();
-    let jsonl_content = std::fs::read_to_string(path)?;
-
-    for (line_num, line) in jsonl_content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let issue: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to parse JSONL line {} in {}: {}",
-                line_num + 1,
-                path.display(),
-                e
-            )
-        })?;
-        let ref_issue = parse_jsonl_to_reference_issue(&issue)?;
-        issues.insert(ref_issue.id.clone(), ref_issue);
-    }
-
-    Ok(issues)
-}
-
-/// Parse a minibeads markdown issue file to ReferenceIssue using shared format code
-fn parse_minibeads_issue(path: &PathBuf) -> Result<minibeads::beads_generator::ReferenceIssue> {
-    use minibeads::beads_generator::ReferenceIssue;
-    use minibeads::format::markdown_to_issue;
+/// Parse a tazk markdown issue file to ReferenceIssue using shared format code
+fn parse_tazk_issue(path: &PathBuf) -> Result<tazk::action_generator::ReferenceIssue> {
+    use tazk::action_generator::ReferenceIssue;
+    use tazk::format::markdown_to_issue;
 
     // Extract issue ID from filename
     let issue_id = path
@@ -1805,77 +1293,10 @@ fn parse_minibeads_issue(path: &PathBuf) -> Result<minibeads::beads_generator::R
     })
 }
 
-/// Parse JSONL issue to ReferenceIssue
-fn parse_jsonl_to_reference_issue(
-    issue: &serde_json::Value,
-) -> Result<minibeads::beads_generator::ReferenceIssue> {
-    use minibeads::beads_generator::ReferenceIssue;
-
-    let id = issue
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("id not found in JSONL issue"))?
-        .to_string();
-
-    let title = issue
-        .get("title")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("title not found for {}", id))?
-        .to_string();
-
-    let description = issue
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let status_str = issue
-        .get("status")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("status not found for {}", id))?;
-    let status = status_str.parse()?;
-
-    let priority = issue
-        .get("priority")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| anyhow::anyhow!("priority not found for {}", id))? as i32;
-
-    let issue_type_str = issue
-        .get("issue_type")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("issue_type not found for {}", id))?;
-    let issue_type = issue_type_str.parse()?;
-
-    // Parse dependencies
-    let mut depends_on = std::collections::HashMap::new();
-    if let Some(deps) = issue.get("dependencies").and_then(|v| v.as_array()) {
-        for dep in deps {
-            let dep_id = dep
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let dep_type_str = dep.get("type").and_then(|v| v.as_str()).unwrap_or("blocks");
-            let dep_type = dep_type_str.parse()?;
-            depends_on.insert(dep_id, dep_type);
-        }
-    }
-
-    Ok(ReferenceIssue {
-        id,
-        title,
-        description,
-        status,
-        priority,
-        issue_type,
-        depends_on,
-    })
-}
-
 /// Compare actual issues with reference state
 fn compare_issue_states(
-    actual: &std::collections::HashMap<String, minibeads::beads_generator::ReferenceIssue>,
-    expected: &std::collections::HashMap<String, minibeads::beads_generator::ReferenceIssue>,
+    actual: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
+    expected: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
     logger: &Logger,
 ) -> Result<()> {
     use similar_asserts::assert_eq;
@@ -2011,133 +1432,10 @@ fn compare_issue_states(
     Ok(())
 }
 
-/// Test JSONL import from upstream to minibeads
-fn test_jsonl_import(
-    work_dir: &str,
-    upstream_binary: &str,
-    logger: &Logger,
-    reference: &ReferenceInterpreter,
-) -> Result<()> {
-    logger.verbose("   Exporting upstream database to JSONL...".to_string());
-
-    // Find the minibeads binary
-    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
-    let exe_dir = exe_path
-        .parent()
-        .expect("Failed to get executable directory");
-    let binary_name = format!("mb{}", std::env::consts::EXE_SUFFIX);
-    let minibeads_binary = exe_dir.join(&binary_name).to_str().unwrap().to_string();
-
-    if !PathBuf::from(&minibeads_binary).exists() {
-        return Err(anyhow::anyhow!(
-            "Minibeads binary not found at: {}. Build it first with: cargo build",
-            minibeads_binary
-        ));
-    }
-
-    // Export upstream database to JSONL
-    let export_path = PathBuf::from(work_dir).join("export.jsonl");
-    let export_output = std::process::Command::new(upstream_binary)
-        .current_dir(work_dir)
-        .args(["export", "-o", export_path.to_str().unwrap()])
-        .output()?;
-
-    if !export_output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Failed to export upstream database:\n{}",
-            String::from_utf8_lossy(&export_output.stderr)
-        ));
-    }
-
-    logger.verbose(format!("   ✓ Exported to {}", export_path.display()));
-
-    // Parse the exported JSONL
-    logger.verbose("   Parsing exported JSONL...".to_string());
-    let jsonl_content = std::fs::read_to_string(&export_path)?;
-    let mut exported_issues = std::collections::HashMap::new();
-
-    for (line_num, line) in jsonl_content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let issue: serde_json::Value = serde_json::from_str(line)
-            .map_err(|e| anyhow::anyhow!("Failed to parse JSONL line {}: {}", line_num + 1, e))?;
-        let ref_issue = parse_jsonl_to_reference_issue(&issue)?;
-        exported_issues.insert(ref_issue.id.clone(), ref_issue);
-    }
-
-    logger.verbose(format!(
-        "   ✓ Parsed {} issues from JSONL",
-        exported_issues.len()
-    ));
-
-    // Verify exported JSONL matches reference
-    logger.verbose("   Verifying exported JSONL matches reference...".to_string());
-    compare_issue_states(&exported_issues, reference.get_final_state(), logger)?;
-    logger.verbose("   ✓ Exported JSONL matches reference".to_string());
-
-    // Create a fresh directory for import test
-    let import_dir = tempfile::tempdir()?;
-    let import_work_dir = import_dir.path().to_str().unwrap();
-
-    logger.verbose(format!(
-        "   Testing minibeads import in fresh directory: {}",
-        import_work_dir
-    ));
-
-    // Initialize minibeads in import directory with same prefix
-    let init_output = std::process::Command::new(&minibeads_binary)
-        .current_dir(import_work_dir)
-        .args(["init", "--prefix", reference.get_prefix()])
-        .output()?;
-
-    if !init_output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Failed to init minibeads in import directory:\n{}",
-            String::from_utf8_lossy(&init_output.stderr)
-        ));
-    }
-
-    // Copy JSONL to import directory
-    let import_jsonl_path = PathBuf::from(import_work_dir).join("export.jsonl");
-    std::fs::copy(&export_path, &import_jsonl_path)?;
-
-    // Import into minibeads
-    logger.verbose("   Importing JSONL into minibeads...".to_string());
-    let import_output = std::process::Command::new(&minibeads_binary)
-        .current_dir(import_work_dir)
-        .args(["import", "-i", import_jsonl_path.to_str().unwrap()])
-        .output()?;
-
-    if !import_output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Failed to import JSONL into minibeads:\n{}",
-            String::from_utf8_lossy(&import_output.stderr)
-        ));
-    }
-
-    logger.verbose(format!(
-        "   ✓ Import completed: {}",
-        String::from_utf8_lossy(&import_output.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-    ));
-
-    // Verify minibeads imported correctly
-    logger.verbose("   Verifying minibeads imported state...".to_string());
-    let import_beads_dir = PathBuf::from(import_work_dir).join(".minibeads");
-    verify_minibeads_state(&import_beads_dir, reference, logger)?;
-
-    logger.log("✅ JSONL import test passed".to_string());
-
-    Ok(())
-}
-
 /// Execute a sequence of actions and update reference
 fn execute_actions(
     executor: &ActionExecutor,
-    actions: &[BeadsAction],
+    actions: &[TazkAction],
     reference: &mut ReferenceInterpreter,
     logger: &Logger,
 ) -> Result<()> {
@@ -2153,7 +1451,7 @@ fn execute_actions(
                     success_count += 1;
                     // Update reference interpreter with successful actions
                     let action_for_ref = if let Some(ref actual_id) = result.actual_issue_id {
-                        if let BeadsAction::Create {
+                        if let TazkAction::Create {
                             expected_id,
                             title,
                             priority,
@@ -2162,7 +1460,7 @@ fn execute_actions(
                         } = action
                         {
                             if expected_id.contains("HASH") {
-                                BeadsAction::Create {
+                                TazkAction::Create {
                                     expected_id: actual_id.clone(),
                                     title: title.clone(),
                                     priority: *priority,
@@ -2209,152 +1507,5 @@ fn execute_actions(
         "Results: {} successful, {} expected failures",
         success_count, failure_count
     ));
-    Ok(())
-}
-
-/// Run minibeads sync (bidirectional)
-fn run_minibeads_sync(
-    work_dir: &std::path::Path,
-    minibeads_binary: &std::path::Path,
-    logger: &Logger,
-) -> Result<()> {
-    logger.log("Running minibeads sync...".to_string());
-
-    let output = std::process::Command::new(minibeads_binary)
-        .current_dir(work_dir)
-        .args(["sync"])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Minibeads sync failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    logger.verbose(format!(
-        "  {}",
-        String::from_utf8_lossy(&output.stdout).trim()
-    ));
-    logger.log("✅ Minibeads sync completed".to_string());
-    Ok(())
-}
-
-/// Run upstream sync --flush-only
-fn run_upstream_sync_flush(
-    work_dir: &std::path::Path,
-    upstream_binary: &std::path::Path,
-    logger: &Logger,
-) -> Result<()> {
-    logger.log("Running upstream sync --flush-only...".to_string());
-
-    let output = std::process::Command::new(upstream_binary)
-        .current_dir(work_dir)
-        .args(["sync", "--flush-only"])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Upstream sync --flush-only failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    logger.verbose(format!(
-        "  {}",
-        String::from_utf8_lossy(&output.stdout).trim()
-    ));
-    logger.log("✅ Upstream sync --flush-only completed".to_string());
-    Ok(())
-}
-
-fn copy_upstream_jsonl_to_minibeads(work_dir: &std::path::Path, logger: &Logger) -> Result<()> {
-    copy_sync_jsonl(
-        &work_dir.join(".beads").join("issues.jsonl"),
-        &work_dir.join(".minibeads").join("issues.jsonl"),
-        "upstream JSONL",
-        "minibeads JSONL",
-        logger,
-    )
-}
-
-fn copy_minibeads_jsonl_to_upstream(work_dir: &std::path::Path, logger: &Logger) -> Result<()> {
-    copy_sync_jsonl(
-        &work_dir.join(".minibeads").join("issues.jsonl"),
-        &work_dir.join(".beads").join("issues.jsonl"),
-        "minibeads JSONL",
-        "upstream JSONL",
-        logger,
-    )
-}
-
-fn copy_sync_jsonl(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-    source_name: &str,
-    destination_name: &str,
-    logger: &Logger,
-) -> Result<()> {
-    if !source.exists() {
-        return Err(anyhow::anyhow!(
-            "{} does not exist: {}",
-            source_name,
-            source.display()
-        ));
-    }
-
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::copy(source, destination)?;
-    logger.verbose(format!(
-        "Copied {} to {}: {} -> {}",
-        source_name,
-        destination_name,
-        source.display(),
-        destination.display()
-    ));
-    Ok(())
-}
-
-/// Verify sync consistency by comparing both implementations' states with reference
-fn verify_sync_consistency(
-    work_dir: &std::path::Path,
-    _minibeads_binary: &std::path::Path,
-    upstream_binary: &std::path::Path,
-    reference: &ReferenceInterpreter,
-    logger: &Logger,
-) -> Result<()> {
-    let beads_dir = work_dir.join(".minibeads");
-
-    // Verify minibeads markdown state
-    logger.verbose("Verifying minibeads markdown state...".to_string());
-    verify_minibeads_state(&beads_dir, reference, logger)?;
-    logger.verbose("✅ Minibeads markdown matches reference".to_string());
-
-    // Verify upstream by exporting and comparing
-    logger.verbose("Verifying upstream state via export...".to_string());
-    verify_upstream_dual_export(
-        work_dir.to_str().unwrap(),
-        upstream_binary.to_str().unwrap(),
-        reference,
-        logger,
-    )?;
-    logger.verbose("✅ Upstream state matches reference".to_string());
-
-    // Verify .minibeads/issues.jsonl exists and matches.
-    let jsonl_path = beads_dir.join("issues.jsonl");
-    if !jsonl_path.exists() {
-        return Err(anyhow::anyhow!(
-            ".minibeads/issues.jsonl does not exist after sync"
-        ));
-    }
-
-    logger.verbose("Verifying .minibeads/issues.jsonl...".to_string());
-    let jsonl_issues = parse_jsonl_file(&jsonl_path)?;
-    compare_issue_states(&jsonl_issues, reference.get_final_state(), logger)?;
-    logger.verbose("✅ .minibeads/issues.jsonl matches reference".to_string());
-
     Ok(())
 }

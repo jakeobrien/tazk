@@ -1,12 +1,11 @@
 //! Cargo test wrapper for random property-based testing
 //!
-//! This test invokes the test_minibeads binary with the random-actions subcommand.
+//! This test invokes the test_tazk binary with the random-actions subcommand.
 //! For manual testing with custom parameters, use the binary directly:
 //!
-//!   cargo build --locked --bin mb --bin test_minibeads --features test-tools
-//!   ./target/debug/test_minibeads random-actions --seed 42 --verbose
-//!   ./target/debug/test_minibeads random-actions --seed 42 --impl upstream
-//!   ./target/debug/test_minibeads random-actions --seed-from-entropy --iters 10
+//!   cargo build --locked --bin tz --bin test_tazk --features test-tools
+//!   ./target/debug/test_tazk random-actions --seed 42 --verbose
+//!   ./target/debug/test_tazk random-actions --seed-from-entropy --iters 10
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,7 +29,7 @@ struct CargoTarget {
 
 #[derive(serde::Deserialize)]
 enum CargoBinary {
-    #[serde(rename = "test_minibeads")]
+    #[serde(rename = "test_tazk")]
     Harness,
     #[serde(other)]
     Other,
@@ -44,9 +43,9 @@ fn harness_build_command() -> Command {
         "--profile",
         "dev",
         "--bin",
-        "mb",
+        "tz",
         "--bin",
-        "test_minibeads",
+        "test_tazk",
         "--features",
         "test-tools",
         "--message-format=json",
@@ -69,7 +68,7 @@ fn harness_executable(messages: &[u8]) -> anyhow::Result<PathBuf> {
             return Ok(path);
         }
     }
-    anyhow::bail!("Cargo did not report the test_minibeads executable");
+    anyhow::bail!("Cargo did not report the test_tazk executable");
 }
 
 fn initialize_harness(
@@ -79,39 +78,23 @@ fn initialize_harness(
     build.get_or_init(builder).as_deref()
 }
 
-fn build_minibeads() -> &'static Path {
+fn build_tazk() -> &'static Path {
     static BUILD: OnceLock<anyhow::Result<PathBuf>> = OnceLock::new();
     initialize_harness(&BUILD, || {
         let output = harness_build_command().output()?;
         anyhow::ensure!(
             output.status.success(),
-            "Failed to build minibeads binaries: {}\n{}\n{}",
+            "Failed to build tazk binaries: {}\n{}\n{}",
             output.status,
             String::from_utf8_lossy(&output.stderr),
             String::from_utf8_lossy(&output.stdout)
         );
         harness_executable(&output.stdout)
     })
-    .expect("Failed to initialize minibeads test harness")
+    .expect("Failed to initialize tazk test harness")
 }
 
-/// Build upstream bd binary
-fn build_upstream() -> bool {
-    let upstream_build = Command::new("make")
-        .arg("upstream")
-        .status()
-        .expect("Failed to build upstream bd binary");
-
-    if !upstream_build.success() {
-        println!("⚠️  Skipping upstream test: make upstream failed");
-        println!("   This is expected if beads/ submodule is not initialized");
-        return false;
-    }
-
-    true
-}
-
-/// Run test_minibeads random-actions with specified arguments
+/// Run test_tazk random-actions with specified arguments
 fn run_test(binary_path: &Path, args: &[&str], test_name: &str) {
     println!(
         "\nRunning: {} random-actions {}",
@@ -123,35 +106,7 @@ fn run_test(binary_path: &Path, args: &[&str], test_name: &str) {
         .arg("random-actions")
         .args(args)
         .output()
-        .expect("Failed to execute test_minibeads");
-
-    // Print output for debugging
-    println!("{}", String::from_utf8_lossy(&output.stdout));
-    if !output.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    assert!(
-        output.status.success(),
-        "{} failed with exit code: {:?}",
-        test_name,
-        output.status.code()
-    );
-}
-
-/// Run test_minibeads sync-test with specified arguments
-fn run_sync_test(binary_path: &Path, args: &[&str], test_name: &str) {
-    println!(
-        "\nRunning: {} sync-test {}",
-        binary_path.display(),
-        args.join(" ")
-    );
-
-    let output = Command::new(binary_path)
-        .arg("sync-test")
-        .args(args)
-        .output()
-        .expect("Failed to execute test_minibeads sync-test");
+        .expect("Failed to execute test_tazk");
 
     // Print output for debugging
     println!("{}", String::from_utf8_lossy(&output.stdout));
@@ -169,144 +124,68 @@ fn run_sync_test(binary_path: &Path, args: &[&str], test_name: &str) {
 
 #[test]
 #[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-fn test_random_actions_minibeads_numeric() {
-    let binary_path = build_minibeads();
+fn test_random_actions_tazk_numeric() {
+    let binary_path = build_tazk();
     run_test(
         binary_path,
-        &["--seed", "42", "--impl", "minibeads", "--ids", "numeric"],
-        "Random test against minibeads with numeric IDs",
+        &["--seed", "42", "--ids", "numeric"],
+        "Random test against tazk with numeric IDs",
     );
 }
 
 #[test]
 #[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-fn test_random_actions_minibeads_hash() {
-    let binary_path = build_minibeads();
+fn test_random_actions_tazk_hash() {
+    let binary_path = build_tazk();
     run_test(
         binary_path,
-        &["--seed", "42", "--impl", "minibeads", "--ids", "hash"],
-        "Random test against minibeads with hash IDs",
+        &["--seed", "42", "--ids", "hash"],
+        "Random test against tazk with hash IDs",
     );
 }
 
 #[test]
 #[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-fn test_stress_minibeads_parallel_numeric() {
-    let binary_path = build_minibeads();
+fn test_stress_tazk_parallel_numeric() {
+    let binary_path = build_tazk();
     run_test(
         binary_path,
         &[
             "--seed",
             "42",
-            "--impl",
-            "minibeads",
             "--seconds",
             "3",
             "--parallel=3",
             "--ids",
             "numeric",
         ],
-        "Parallel stress test against minibeads with numeric IDs",
+        "Parallel stress test against tazk with numeric IDs",
     );
 }
 
 #[test]
 #[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-fn test_stress_minibeads_parallel_hash() {
-    let binary_path = build_minibeads();
+fn test_stress_tazk_parallel_hash() {
+    let binary_path = build_tazk();
     run_test(
         binary_path,
         &[
             "--seed",
             "42",
-            "--impl",
-            "minibeads",
             "--seconds",
             "3",
             "--parallel=3",
             "--ids",
             "hash",
         ],
-        "Parallel stress test against minibeads with hash IDs",
-    );
-}
-
-#[test]
-#[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-fn test_random_actions_upstream() {
-    if !build_upstream() {
-        return;
-    }
-    let binary_path = build_minibeads();
-    run_test(
-        binary_path,
-        &[
-            "--seed",
-            "42",
-            "--impl",
-            "upstream",
-            "--ids",
-            "hash",
-            "--test-import=false",
-        ],
-        "Random test against upstream bd with hash IDs",
-    );
-}
-
-#[test]
-#[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-#[ignore] // Requires upstream bd to be built
-fn test_stress_upstream_parallel() {
-    if !build_upstream() {
-        return;
-    }
-    let binary_path = build_minibeads();
-    run_test(
-        binary_path,
-        &[
-            "--seed",
-            "42",
-            "--impl",
-            "upstream",
-            "--seconds",
-            "3",
-            "--parallel=3",
-            "--test-import",
-            "true",
-            "--ids",
-            "hash",
-        ],
-        "Parallel stress test against upstream bd with hash IDs and import",
-    );
-}
-
-#[test]
-#[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
-fn test_sync_stress() {
-    // Check if upstream is available
-    if !build_upstream() {
-        return;
-    }
-
-    let binary_path = build_minibeads();
-    run_sync_test(
-        binary_path,
-        &[
-            "--seed",
-            "12345",
-            "--cycles",
-            "10",
-            "--actions-per-phase",
-            "15",
-        ],
-        "Bidirectional sync stress test (10 cycles, 15 actions/phase, ~3s)",
+        "Parallel stress test against tazk with hash IDs",
     );
 }
 
 #[test]
 #[cfg(not(tarpaulin))] // Skip under coverage - this test invokes external binaries
 fn test_migration_stress() {
-    let binary_path = build_minibeads();
+    let binary_path = build_tazk();
     run_migration_test(
         binary_path,
         &["--seed", "54321", "--actions", "50"],
@@ -326,7 +205,7 @@ fn run_migration_test(binary_path: &Path, args: &[&str], test_name: &str) {
         .arg("migration-test")
         .args(args)
         .output()
-        .expect("Failed to execute test_minibeads migration-test");
+        .expect("Failed to execute test_tazk migration-test");
 
     // Print output for debugging
     println!("{}", String::from_utf8_lossy(&output.stdout));
@@ -360,10 +239,10 @@ mod harness_initialization {
                     start.wait();
                     let binary = initialize_harness(&build, || {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Ok(PathBuf::from("custom-target/debug/test_minibeads"))
+                        Ok(PathBuf::from("custom-target/debug/test_tazk"))
                     })
                     .unwrap();
-                    assert_eq!(binary, Path::new("custom-target/debug/test_minibeads"));
+                    assert_eq!(binary, Path::new("custom-target/debug/test_tazk"));
                 });
             }
         });
@@ -394,9 +273,9 @@ mod harness_initialization {
             "--profile",
             "dev",
             "--bin",
-            "mb",
+            "tz",
             "--bin",
-            "test_minibeads",
+            "test_tazk",
             "--features",
             "test-tools",
             "--message-format=json",
@@ -407,13 +286,13 @@ mod harness_initialization {
     #[test]
     fn cargo_artifact_preserves_target_directory_and_executable_suffix() {
         for executable in [
-            "custom target/debug/test_minibeads",
-            "custom target/debug/test_minibeads.exe",
+            "custom target/debug/test_tazk",
+            "custom target/debug/test_tazk.exe",
         ] {
             let messages = format!(
                 "{{\"reason\":\"compiler-message\"}}\n\
-                 {{\"reason\":\"compiler-artifact\",\"target\":{{\"name\":\"mb\"}},\"executable\":\"custom target/debug/mb\"}}\n\
-                 {{\"reason\":\"compiler-artifact\",\"target\":{{\"name\":\"test_minibeads\"}},\"executable\":\"{executable}\"}}\n"
+                 {{\"reason\":\"compiler-artifact\",\"target\":{{\"name\":\"tz\"}},\"executable\":\"custom target/debug/tz\"}}\n\
+                 {{\"reason\":\"compiler-artifact\",\"target\":{{\"name\":\"test_tazk\"}},\"executable\":\"{executable}\"}}\n"
             );
             assert_eq!(
                 harness_executable(messages.as_bytes()).unwrap(),

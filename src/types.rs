@@ -5,8 +5,8 @@ use std::collections::HashMap;
 /// Default lifetime of a claim when no explicit duration is given (48 hours).
 ///
 /// After this window elapses, the claim is considered stale and another worker
-/// may reclaim the issue. This is the stale-recovery mechanism that upstream bd
-/// lacks: a crashed or abandoned agent's claim does not pin an issue forever.
+/// may reclaim the issue. This is the stale-recovery mechanism: a crashed or
+/// abandoned agent's claim does not pin an issue forever.
 pub const DEFAULT_CLAIM_HOURS: i64 = 48;
 
 /// How long a claim should be held, parsed from a compact duration string such
@@ -61,34 +61,6 @@ impl std::str::FromStr for ClaimDuration {
         };
 
         Ok(ClaimDuration(duration))
-    }
-}
-
-/// A `--since` cutoff for incremental GitHub sync (minibeads-specific): either an
-/// absolute RFC3339 timestamp, or a compact relative duration in the same form as
-/// [`ClaimDuration`] (`24h`, `2d`, `90m`, or a bare number of hours), meaning "now
-/// minus that long". Lets `mb github sync` walk only recently-changed issues
-/// instead of the whole linked set, which matters once that set is in the
-/// hundreds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SyncSince(pub DateTime<Utc>);
-
-impl std::str::FromStr for SyncSince {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
-            return Ok(SyncSince(dt.with_timezone(&Utc)));
-        }
-        match trimmed.parse::<ClaimDuration>() {
-            Ok(ClaimDuration(duration)) => Ok(SyncSince(Utc::now() - duration)),
-            Err(_) => anyhow::bail!(
-                "Invalid --since value '{}'. Use an RFC3339 timestamp (e.g. 2026-07-30T00:00:00Z) \
-                 or a relative duration like '24h', '2d', '90m'.",
-                s
-            ),
-        }
     }
 }
 
@@ -242,11 +214,11 @@ impl std::str::FromStr for IssueType {
 
 /// A free-text field of an issue that a targeted search/replace edit can rewrite.
 ///
-/// `mb update --search/--replace` swaps a substring of one of these fields rather
+/// `tz update --search/--replace` swaps a substring of one of these fields rather
 /// than overwriting the whole field, which is the safer interface for agents
 /// editing long descriptions (the "aider" search/replace pattern). We use an
 /// explicit enum rather than a bare string key so the set of editable fields is
-/// closed and checked at compile time. (minibeads-specific)
+/// closed and checked at compile time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditField {
     Title,
@@ -341,18 +313,10 @@ impl std::str::FromStr for DependencyType {
     }
 }
 
-/// Dependency representation for JSON output (MCP compatibility)
+/// Dependency representation for JSON output
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dependency {
     /// The issue this one depends on.
-    ///
-    /// Upstream beads (steveyegge/beads) names this field `depends_on_id` and
-    /// ships extra metadata alongside it (`issue_id`, `created_at`,
-    /// `created_by`). The alias accepts that spelling on READ while we keep
-    /// emitting `id`, and serde already ignores the extra fields, so an
-    /// upstream database imports without a bespoke parallel type. Without the
-    /// alias the import fails outright with `missing field \`id\``.
-    #[serde(alias = "depends_on_id")]
     pub id: String,
     #[serde(rename = "type")]
     pub dep_type: String,
@@ -360,8 +324,8 @@ pub struct Dependency {
 
 /// File-backed issue comment.
 ///
-/// Comments are stored outside the markdown issue body so syncing them to
-/// systems such as GitHub does not churn the main issue description.
+/// Comments are stored outside the markdown issue body so they do not churn
+/// the main issue description.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Comment {
     pub id: String,
@@ -370,10 +334,6 @@ pub struct Comment {
     pub body: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<String>,
 }
 
 /// Custom serialization for depends_on HashMap -> dependencies array, sorted by
@@ -462,10 +422,10 @@ pub struct Issue {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
-    /// When the current claim was taken (minibeads-specific). `None` if unclaimed.
+    /// When the current claim was taken. `None` if unclaimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<DateTime<Utc>>,
-    /// When the current claim expires (minibeads-specific). After this instant
+    /// When the current claim expires. After this instant
     /// the claim is stale and another worker may reclaim the issue. `None` if
     /// unclaimed (or claimed via a plain `--assignee` with no expiry).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -638,76 +598,5 @@ mod claim_type_tests {
         // Assignee but no expiry => held indefinitely.
         issue.claimed_until = None;
         assert!(issue.is_actively_claimed(now));
-    }
-}
-
-#[cfg(test)]
-mod sync_since_tests {
-    use super::*;
-    use std::str::FromStr;
-
-    #[test]
-    fn parses_absolute_rfc3339_timestamp() {
-        let SyncSince(dt) = SyncSince::from_str("2026-07-01T12:00:00Z").unwrap();
-        assert_eq!(
-            dt,
-            DateTime::parse_from_rfc3339("2026-07-01T12:00:00Z").unwrap()
-        );
-    }
-
-    #[test]
-    fn parses_relative_duration_like_claim_duration() {
-        let before = Utc::now() - Duration::hours(24);
-        let SyncSince(dt) = SyncSince::from_str("24h").unwrap();
-        let after = Utc::now() - Duration::hours(24);
-        assert!(
-            dt >= before - Duration::seconds(2) && dt <= after + Duration::seconds(2),
-            "expected ~now-24h, got {dt}"
-        );
-
-        // Bare number is hours, same convention as ClaimDuration.
-        let SyncSince(dt) = SyncSince::from_str("2").unwrap();
-        assert!((Utc::now() - dt - Duration::hours(2)).num_seconds().abs() < 2);
-
-        let SyncSince(dt) = SyncSince::from_str("2d").unwrap();
-        assert!((Utc::now() - dt - Duration::days(2)).num_seconds().abs() < 2);
-    }
-
-    #[test]
-    fn rejects_garbage_since_values() {
-        assert!(SyncSince::from_str("").is_err());
-        assert!(SyncSince::from_str("not-a-time").is_err());
-        assert!(SyncSince::from_str("10y").is_err());
-    }
-}
-
-#[cfg(test)]
-mod upstream_import_compat {
-    use super::*;
-
-    /// Upstream beads emits `depends_on_id` plus metadata we do not model.
-    /// Before the alias this failed with `missing field \`id\``, so importing
-    /// an upstream database was impossible rather than merely lossy.
-    #[test]
-    fn upstream_shaped_dependency_deserializes() {
-        let json = r#"{"issue_id":"a","depends_on_id":"b","type":"blocks",
-                       "created_at":"2025-11-23T00:00:00Z","created_by":"someone"}"#;
-        let dep: Dependency = serde_json::from_str(json).expect("upstream dependency");
-        assert_eq!(dep.id, "b", "depends_on_id must map onto id");
-        assert_eq!(dep.dep_type, "blocks");
-    }
-
-    /// Our own spelling must keep working, and we must keep EMITTING `id`.
-    #[test]
-    fn native_dependency_round_trips_as_id() {
-        let json = r#"{"id":"b","type":"related"}"#;
-        let dep: Dependency = serde_json::from_str(json).expect("native dependency");
-        assert_eq!(dep.id, "b");
-        let out = serde_json::to_string(&dep).expect("serialize");
-        assert!(
-            out.contains("\"id\""),
-            "must serialize as id, not depends_on_id: {out}"
-        );
-        assert!(!out.contains("depends_on_id"), "{out}");
     }
 }

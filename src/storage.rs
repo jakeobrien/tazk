@@ -21,45 +21,9 @@ enum StorageAccess {
 }
 
 pub struct Storage {
-    beads_dir: PathBuf,
+    tazk_dir: PathBuf,
     issues_dir: PathBuf,
     access: StorageAccess,
-}
-
-/// A checked issue snapshot with the database lock held. Destructive external
-/// reconciliation can inspect/delete comments without a nested lock or a rename
-/// changing ownership between the check and the external request.
-pub struct LockedIssue<'a> {
-    storage: &'a Storage,
-    issue: Issue,
-    _lock: Lock,
-}
-
-impl LockedIssue<'_> {
-    pub fn comments(&self) -> Result<Vec<Comment>> {
-        self.storage.read_comments_no_lock(&self.issue.id)
-    }
-
-    pub fn delete_comment(&self, comment_id: &str) -> Result<Comment> {
-        let mut comments = self.comments()?;
-        let index = comments
-            .iter()
-            .position(|comment| comment.id == comment_id)
-            .with_context(|| format!("Comment not found: {comment_id}"))?;
-        let removed = comments.remove(index);
-        self.storage
-            .write_comments_no_lock(&self.issue.id, &comments)?;
-        Ok(removed)
-    }
-
-    pub fn update(mut self, updates: HashMap<String, String>) -> Result<Issue> {
-        apply_issue_updates(&mut self.issue, updates)?;
-        let path = self
-            .storage
-            .existing_or_configured_issue_path(&self.issue.id)?;
-        self.storage.write_issue_to_path(&path, &self.issue)?;
-        markdown_to_issue(&self.issue.id, &fs::read_to_string(path)?)
-    }
 }
 
 /// Replace issue ID references in text fields using word boundaries
@@ -70,8 +34,8 @@ impl LockedIssue<'_> {
 ///
 /// Uses a HashMap for O(1) lookup of replacement mappings.
 /// Extract the trailing numeric component of an issue ID (the part after the
-/// last hyphen) if it is a plain integer, e.g. `minibeads-42` -> `Some(42)`.
-/// Hash-based IDs like `minibeads-a3f9` return `None`.
+/// last hyphen) if it is a plain integer, e.g. `tazk-42` -> `Some(42)`.
+/// Hash-based IDs like `tazk-a3f9` return `None`.
 fn numeric_id_suffix(id: &str) -> Option<u32> {
     let suffix = id.rsplit_once('-').map(|(_, s)| s).unwrap_or(id);
     suffix.parse::<u32>().ok()
@@ -186,18 +150,14 @@ fn replace_issue_ids_in_text(text: &str, id_mapping: &HashMap<String, String>) -
     .to_string()
 }
 
-pub fn is_github_issue_ref(value: &str) -> bool {
-    value.starts_with("https://github.com/") && value.contains("/issues/")
-}
-
 impl Storage {
-    /// Get the beads directory path
-    pub fn get_beads_dir(&self) -> PathBuf {
-        self.beads_dir.clone()
+    /// Get the tazk directory path
+    pub fn get_tazk_dir(&self) -> PathBuf {
+        self.tazk_dir.clone()
     }
 
     fn config_path(&self) -> PathBuf {
-        self.beads_dir.join("config.yaml")
+        self.tazk_dir.join("config.yaml")
     }
 }
 
@@ -220,7 +180,7 @@ impl Storage {
             );
         }
 
-        let mut transaction = FileTransaction::new(&self.beads_dir);
+        let mut transaction = FileTransaction::new(&self.tazk_dir);
         let comment_sources: HashSet<PathBuf> = mapping
             .keys()
             .map(|id| self.comment_path(id))
@@ -287,35 +247,10 @@ impl Storage {
             }
         }
 
-        let state_path = self.beads_dir.join("github-sync-state.json");
-        ensure_contained(&self.beads_dir, &state_path)?;
-        if state_path.exists() {
-            let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
-            let entries = state
-                .get_mut("issues")
-                .and_then(serde_json::Value::as_object_mut)
-                .context("Invalid GitHub sync ancestry")?;
-            let mut changed = false;
-            for entry in entries.values_mut() {
-                if let Some(new_id) = entry
-                    .get("local_id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|old_id| mapping.get(old_id))
-                {
-                    entry["local_id"] = serde_json::Value::String(new_id.clone());
-                    changed = true;
-                }
-            }
-            if changed {
-                transaction.write(state_path, serde_json::to_vec_pretty(&state)?);
-            }
-        }
-        self.stage_github_ancestor_id_migrations(mapping, &mut transaction)?;
-
         // Keep the default JSONL store from resurrecting old IDs at the next
         // sync. Preserve its independently edited fields and timestamps.
-        let jsonl_path = self.beads_dir.join("issues.jsonl");
-        ensure_contained(&self.beads_dir, &jsonl_path)?;
+        let jsonl_path = self.tazk_dir.join("issues.jsonl");
+        ensure_contained(&self.tazk_dir, &jsonl_path)?;
         if jsonl_path.exists() {
             let mut issues = crate::sync::load_jsonl_issues(&jsonl_path)?;
             let mut seen = HashSet::new();
@@ -341,116 +276,51 @@ impl Storage {
         transaction.commit()
     }
 
-    fn stage_github_ancestor_id_migrations(
-        &self,
-        mapping: &HashMap<String, String>,
-        transaction: &mut FileTransaction<'_>,
-    ) -> Result<()> {
-        let directory = self.beads_dir.join("sync_ancestors/github");
-        ensure_contained(&self.beads_dir, &directory)?;
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "Failed to inspect GitHub ancestors in {}",
-                        directory.display()
-                    )
-                });
-            }
-        };
-        for entry in entries {
-            let path = entry?.path();
-            ensure_contained(&self.beads_dir, &path)?;
-            anyhow::ensure!(
-                path.is_file(),
-                "Unexpected GitHub ancestor entry {}",
-                path.display()
-            );
-            let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)
-                .with_context(|| format!("Corrupt GitHub ancestor {}", path.display()))?;
-            anyhow::ensure!(
-                record
-                    .get("schema_version")
-                    .and_then(serde_json::Value::as_u64)
-                    == Some(1),
-                "Unsupported GitHub ancestor schema in {}",
-                path.display()
-            );
-            let remote = record
-                .get("remote")
-                .and_then(serde_json::Value::as_str)
-                .context("GitHub ancestor is missing its remote URL")?;
-            let expected_name = format!("sha256-{:x}.json", Sha256::digest(remote.as_bytes()));
-            anyhow::ensure!(
-                path.file_name().and_then(std::ffi::OsStr::to_str) == Some(expected_name.as_str()),
-                "GitHub ancestor URL/key mismatch in {}",
-                path.display()
-            );
-            let local_id = record
-                .get("local_id")
-                .and_then(serde_json::Value::as_str)
-                .context("GitHub ancestor is missing its local issue ID")?;
-            let Some(next_id) = mapping.get(local_id) else {
-                continue;
-            };
-            IssueId::parse(next_id)?;
-            record["local_id"] = serde_json::Value::String(next_id.clone());
-            let mut content = serde_json::to_vec_pretty(&record)?;
-            content.push(b'\n');
-            transaction.write(path, content);
-        }
-        Ok(())
-    }
-
-    /// Open storage at the given minibeads directory
-    pub fn open(beads_dir: PathBuf) -> Result<Self> {
-        let issues_dir = beads_dir.join("issues");
+    /// Open storage at the given tazk directory
+    pub fn open(tazk_dir: PathBuf) -> Result<Self> {
+        let issues_dir = tazk_dir.join("issues");
 
         // Create directories if they don't exist
         fs::create_dir_all(&issues_dir).context("Failed to create issues directory")?;
 
         // Validate and ensure config.yaml exists
-        let config_path = beads_dir.join("config.yaml");
+        let config_path = tazk_dir.join("config.yaml");
         if !config_path.exists() {
             // Prefer inferring the prefix from issue files that already exist in
-            // issues_dir (ground truth -- e.g. this is upstream `bd` data, or a
-            // config.yaml that was lost/deleted): the directory-name guess below
+            // issues_dir (ground truth -- e.g. a config.yaml that was
+            // lost/deleted): the directory-name guess below
             // has no relation to a project's real issue IDs and can silently
             // produce a wrong prefix (e.g. "tmp" for a checkout under /tmp/...).
-            // Only fall back to the directory-name guess, then to "bd", when
+            // Only fall back to the directory-name guess, then to "tz", when
             // there are no existing issues to learn from.
             let prefix = infer_prefix_from_issues_dir(&issues_dir)
-                .or_else(|| infer_prefix(&beads_dir))
-                .unwrap_or_else(|| "bd".to_string());
+                .or_else(|| infer_prefix(&tazk_dir))
+                .unwrap_or_else(|| "tz".to_string());
             let mut config = HashMap::new();
             config.insert("issue-prefix".to_string(), prefix);
             let config_yaml = serde_yaml::to_string(&config)?;
             fs::write(&config_path, config_yaml).context("Failed to create config.yaml")?;
         } else {
             // Validate that config.yaml parses. We do NOT require an active
-            // `issue-prefix` key here: upstream bd writes a config.yaml template
-            // where `issue-prefix` is commented out (the prefix lives in its
-            // SQLite DB). To stay a drop-in replacement we tolerate that and
-            // infer the prefix from issue filenames on demand (see get_prefix).
+            // `issue-prefix` key here: when it is absent (or commented out) the
+            // prefix is inferred from issue filenames on demand (see get_prefix).
             let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
             serde_yaml::from_str::<HashMap<String, String>>(&content)
                 .context("Failed to parse config.yaml")?;
         }
 
-        // Ensure config-minibeads.yaml exists with defaults (don't clobber if exists)
-        let minibeads_config_path = beads_dir.join("config-minibeads.yaml");
-        if !minibeads_config_path.exists() {
-            create_minibeads_config(&beads_dir, false, IssueStorageLayout::Flat)?;
+        // Ensure config-tazk.yaml exists with defaults (don't clobber if exists)
+        let tazk_config_path = tazk_dir.join("config-tazk.yaml");
+        if !tazk_config_path.exists() {
+            create_tazk_config(&tazk_dir, false, IssueStorageLayout::Flat)?;
             // Default to false/flat for existing repos
         }
 
         // Ensure .gitignore exists and has required entries
-        ensure_gitignore(&beads_dir)?;
+        ensure_gitignore(&tazk_dir)?;
 
         Ok(Self {
-            beads_dir,
+            tazk_dir,
             issues_dir,
             access: StorageAccess::ReadWrite,
         })
@@ -459,15 +329,15 @@ impl Storage {
     /// Open existing storage without bootstrapping config or recovering writes.
     /// Reads still take the transient database lock; this is a logical write
     /// guard, not support for a filesystem mounted without write permission.
-    pub fn open_readonly(beads_dir: PathBuf) -> Result<Self> {
-        let issues_dir = beads_dir.join("issues");
+    pub fn open_readonly(tazk_dir: PathBuf) -> Result<Self> {
+        let issues_dir = tazk_dir.join("issues");
         anyhow::ensure!(
             issues_dir.is_dir(),
             "Existing issues directory required for --readonly"
         );
-        ensure_contained(&beads_dir, &issues_dir)?;
+        ensure_contained(&tazk_dir, &issues_dir)?;
         let storage = Self {
-            beads_dir,
+            tazk_dir,
             issues_dir,
             access: StorageAccess::ReadOnly,
         };
@@ -487,31 +357,31 @@ impl Storage {
 
     fn lock_for_write(&self) -> Result<Lock> {
         self.ensure_writable()?;
-        Lock::acquire(&self.beads_dir)
+        Lock::acquire(&self.tazk_dir)
     }
 
     fn lock_for_read(&self) -> Result<Lock> {
         match self.access {
-            StorageAccess::ReadWrite => Lock::acquire(&self.beads_dir),
-            StorageAccess::ReadOnly => Lock::acquire_without_recovery(&self.beads_dir),
+            StorageAccess::ReadWrite => Lock::acquire(&self.tazk_dir),
+            StorageAccess::ReadOnly => Lock::acquire_without_recovery(&self.tazk_dir),
         }
     }
 
-    /// Initialize a new minibeads database
+    /// Initialize a new tazk database
     pub fn init(
-        beads_dir: PathBuf,
+        tazk_dir: PathBuf,
         prefix: Option<String>,
-        mb_hash_ids: bool,
+        tz_hash_ids: bool,
         issue_layout: IssueStorageLayout,
     ) -> Result<Self> {
         if let Some(value) = prefix.as_deref() {
             IssueId::parse(value)?;
         }
-        // Create minibeads directory
-        fs::create_dir_all(&beads_dir).context("Failed to create minibeads directory")?;
+        // Create tazk directory
+        fs::create_dir_all(&tazk_dir).context("Failed to create tazk directory")?;
 
         // Create issues directory
-        let issues_dir = beads_dir.join("issues");
+        let issues_dir = tazk_dir.join("issues");
         fs::create_dir_all(&issues_dir).context("Failed to create issues directory")?;
 
         // Determine prefix: an explicit --prefix wins; otherwise prefer
@@ -522,25 +392,25 @@ impl Storage {
         // pointed at a directory that already has orphaned issue files.
         let prefix = prefix
             .or_else(|| infer_prefix_from_issues_dir(&issues_dir))
-            .or_else(|| infer_prefix(&beads_dir))
-            .unwrap_or_else(|| "bd".to_string());
+            .or_else(|| infer_prefix(&tazk_dir))
+            .unwrap_or_else(|| "tz".to_string());
 
         IssueId::parse(&prefix)?;
-        // Create config.yaml with only upstream-compatible options
-        let config_path = beads_dir.join("config.yaml");
+        // Create config.yaml with the issue prefix
+        let config_path = tazk_dir.join("config.yaml");
         let mut config = HashMap::new();
         config.insert("issue-prefix".to_string(), prefix);
         let config_yaml = serde_yaml::to_string(&config)?;
         fs::write(&config_path, config_yaml).context("Failed to write config.yaml")?;
 
-        // Create config-minibeads.yaml with minibeads-specific options
-        create_minibeads_config(&beads_dir, mb_hash_ids, issue_layout)?;
+        // Create config-tazk.yaml with tazk-specific options
+        create_tazk_config(&tazk_dir, tz_hash_ids, issue_layout)?;
 
         // Ensure .gitignore exists and has required entries
-        ensure_gitignore(&beads_dir)?;
+        ensure_gitignore(&tazk_dir)?;
 
         Ok(Self {
-            beads_dir,
+            tazk_dir,
             issues_dir,
             access: StorageAccess::ReadWrite,
         })
@@ -559,9 +429,8 @@ impl Storage {
         let config: HashMap<String, String> =
             serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
 
-        // Upstream bd leaves `issue-prefix` commented out in config.yaml and
-        // stores the prefix in its database; fall back to inferring it from the
-        // existing issue filenames so we can operate on upstream-created repos.
+        // When `issue-prefix` is missing from config.yaml, fall back to
+        // inferring it from the existing issue filenames.
         match config.get("issue-prefix") {
             Some(prefix) => {
                 IssueId::parse(prefix)?;
@@ -603,7 +472,7 @@ impl Storage {
         upsert_yaml_key_value(&config_path, &key, value)
     }
 
-    /// Return all config.yaml scalar values for `mb config list`.
+    /// Return all config.yaml scalar values for `tz config list`.
     pub fn list_config_values(&self) -> Result<HashMap<String, String>> {
         let config_path = self.config_path();
 
@@ -621,21 +490,21 @@ impl Storage {
             .collect())
     }
 
-    /// Check if hash-based IDs are enabled in config-minibeads.yaml
+    /// Check if hash-based IDs are enabled in config-tazk.yaml
     fn use_hash_ids(&self) -> Result<bool> {
-        let config_path = self.beads_dir.join("config-minibeads.yaml");
+        let config_path = self.tazk_dir.join("config-tazk.yaml");
 
         if !config_path.exists() {
             return Ok(false); // Default to false if no config
         }
 
         let content =
-            fs::read_to_string(&config_path).context("Failed to read config-minibeads.yaml")?;
+            fs::read_to_string(&config_path).context("Failed to read config-tazk.yaml")?;
         let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config-minibeads.yaml")?;
+            serde_yaml::from_str(&content).context("Failed to parse config-tazk.yaml")?;
 
-        // Parse mb-hash-ids field (default to false if not present)
-        match config.get("mb-hash-ids") {
+        // Parse tz-hash-ids field (default to false if not present)
+        match config.get("tz-hash-ids") {
             Some(value) => Ok(value == "true"),
             None => Ok(false),
         }
@@ -643,16 +512,16 @@ impl Storage {
 
     /// Return the configured issue file layout.
     pub fn issue_storage_layout(&self) -> Result<IssueStorageLayout> {
-        let config_path = self.beads_dir.join("config-minibeads.yaml");
+        let config_path = self.tazk_dir.join("config-tazk.yaml");
 
         if !config_path.exists() {
             return Ok(IssueStorageLayout::Flat);
         }
 
         let content =
-            fs::read_to_string(&config_path).context("Failed to read config-minibeads.yaml")?;
+            fs::read_to_string(&config_path).context("Failed to read config-tazk.yaml")?;
         let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config-minibeads.yaml")?;
+            serde_yaml::from_str(&content).context("Failed to parse config-tazk.yaml")?;
 
         match config.get("issue-storage-layout") {
             Some(value) => IssueStorageLayout::parse(value),
@@ -678,7 +547,7 @@ impl Storage {
     fn configured_issue_path(&self, id: &str) -> Result<PathBuf> {
         let id = IssueId::parse(id)?;
         let path = self.issue_path_for_layout(id.as_str(), self.issue_storage_layout()?);
-        ensure_contained(&self.beads_dir, &path)?;
+        ensure_contained(&self.tazk_dir, &path)?;
         Ok(path)
     }
 
@@ -690,13 +559,13 @@ impl Storage {
 
         let flat_path = self.flat_issue_path(id);
         if flat_path.exists() {
-            ensure_contained(&self.beads_dir, &flat_path)?;
+            ensure_contained(&self.tazk_dir, &flat_path)?;
             return Ok(Some(flat_path));
         }
 
         let sharded_path = self.sharded_issue_path(id);
         if sharded_path.exists() {
-            ensure_contained(&self.beads_dir, &sharded_path)?;
+            ensure_contained(&self.tazk_dir, &sharded_path)?;
             return Ok(Some(sharded_path));
         }
 
@@ -716,7 +585,7 @@ impl Storage {
 
     fn write_issue_to_path(&self, path: &Path, issue: &Issue) -> Result<()> {
         IssueId::parse(&issue.id)?;
-        ensure_contained(&self.beads_dir, path)?;
+        ensure_contained(&self.tazk_dir, path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create issue directory: {}", parent.display())
@@ -736,7 +605,7 @@ impl Storage {
     /// makes that collision an explicit error instead.
     fn write_new_issue_to_path(&self, path: &Path, issue: &Issue) -> Result<()> {
         IssueId::parse(&issue.id)?;
-        ensure_contained(&self.beads_dir, path)?;
+        ensure_contained(&self.tazk_dir, path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create issue directory: {}", parent.display())
@@ -760,18 +629,18 @@ impl Storage {
         issue_file_paths_in(&self.issues_dir)
     }
 
-    /// Get hash encoding format from config-minibeads.yaml
+    /// Get hash encoding format from config-tazk.yaml
     fn get_hash_encoding(&self) -> Result<hash::HashEncoding> {
-        let config_path = self.beads_dir.join("config-minibeads.yaml");
+        let config_path = self.tazk_dir.join("config-tazk.yaml");
 
         if !config_path.exists() {
             return Ok(hash::HashEncoding::Base36); // Default to base36 if no config
         }
 
         let content =
-            fs::read_to_string(&config_path).context("Failed to read config-minibeads.yaml")?;
+            fs::read_to_string(&config_path).context("Failed to read config-tazk.yaml")?;
         let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config-minibeads.yaml")?;
+            serde_yaml::from_str(&content).context("Failed to parse config-tazk.yaml")?;
 
         // Parse hash-encoding field (default to base36 if not present)
         match config.get("hash-encoding") {
@@ -780,7 +649,7 @@ impl Storage {
                 "base36" => Ok(hash::HashEncoding::Base36),
                 _ => {
                     eprintln!(
-                        "Warning: Unknown hash-encoding value '{}' in config-minibeads.yaml, using base36",
+                        "Warning: Unknown hash-encoding value '{}' in config-tazk.yaml, using base36",
                         value
                     );
                     Ok(hash::HashEncoding::Base36)
@@ -919,13 +788,13 @@ impl Storage {
     }
 
     fn comments_dir(&self) -> PathBuf {
-        self.beads_dir.join("comments")
+        self.tazk_dir.join("comments")
     }
 
     fn comment_path(&self, issue_id: &str) -> Result<PathBuf> {
         let id = IssueId::parse(issue_id)?;
         let path = self.comments_dir().join(format!("{}.json", id.as_str()));
-        ensure_contained(&self.beads_dir, &path)?;
+        ensure_contained(&self.tazk_dir, &path)?;
         Ok(path)
     }
 
@@ -949,7 +818,7 @@ impl Storage {
 
     fn write_comments_no_lock(&self, issue_id: &str, comments: &[Comment]) -> Result<()> {
         let comments_dir = self.comments_dir();
-        ensure_contained(&self.beads_dir, &comments_dir)?;
+        ensure_contained(&self.tazk_dir, &comments_dir)?;
         fs::create_dir_all(&comments_dir).context("Failed to create comments directory")?;
 
         let mut sorted = comments.to_vec();
@@ -990,8 +859,6 @@ impl Storage {
             body: body.to_string(),
             created_at: now,
             updated_at: now,
-            source_url: None,
-            source_id: None,
         };
         comments.push(comment.clone());
         self.write_comments_no_lock(issue_id, &comments)?;
@@ -1018,7 +885,7 @@ impl Storage {
             .position(|c| c.id == comment_id)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Comment not found: {} (on issue {}). Run `mb comments list {}` to see valid comment IDs.",
+                    "Comment not found: {} (on issue {}). Run `tz comments list {}` to see valid comment IDs.",
                     comment_id,
                     issue_id,
                     issue_id
@@ -1026,59 +893,6 @@ impl Storage {
             })?;
         let removed = comments.remove(pos);
         self.write_comments_no_lock(issue_id, &comments)?;
-        Ok(removed)
-    }
-
-    /// Upsert comments imported from an external source.
-    pub fn upsert_comments(&self, issue_id: &str, incoming: Vec<Comment>) -> Result<usize> {
-        let _lock = self.lock_for_write()?;
-        anyhow::ensure!(
-            self.issue_exists_any_layout(issue_id)?,
-            "Issue not found: {issue_id}"
-        );
-        let mut comments = self.read_comments_no_lock(issue_id)?;
-        let mut changed = 0;
-
-        for comment in incoming {
-            let existing = comments.iter_mut().find(|c| {
-                (!comment.source_id.as_deref().unwrap_or("").is_empty()
-                    && c.source_id == comment.source_id)
-                    || (!comment.source_url.as_deref().unwrap_or("").is_empty()
-                        && c.source_url == comment.source_url)
-                    || c.id == comment.id
-            });
-
-            if let Some(existing) = existing {
-                if *existing != comment {
-                    *existing = comment;
-                    changed += 1;
-                }
-            } else {
-                comments.push(comment);
-                changed += 1;
-            }
-        }
-
-        if changed > 0 {
-            self.write_comments_no_lock(issue_id, &comments)?;
-        }
-        Ok(changed)
-    }
-
-    /// Remove comments whose body contains the given marker string.
-    pub fn remove_comments_containing(&self, issue_id: &str, marker: &str) -> Result<usize> {
-        let _lock = self.lock_for_write()?;
-        let comments = self.read_comments_no_lock(issue_id)?;
-        let original_len = comments.len();
-        let comments: Vec<Comment> = comments
-            .into_iter()
-            .filter(|comment| !comment.body.contains(marker))
-            .collect();
-        let removed = original_len.saturating_sub(comments.len());
-
-        if removed > 0 {
-            self.write_comments_no_lock(issue_id, &comments)?;
-        }
         Ok(removed)
     }
 
@@ -1111,47 +925,6 @@ impl Storage {
         }
 
         target_issue.dependents = dependents;
-    }
-
-    /// Acquire the database lock only if all persisted issue fields still match
-    /// the analyzed version. Derived dependents and collection order are ignored.
-    pub fn lock_issue_snapshot(&self, expected: &Issue) -> Result<Option<LockedIssue<'_>>> {
-        let lock = self.lock_for_write()?;
-        let Some(path) = self.existing_issue_path(&expected.id)? else {
-            return Ok(None);
-        };
-        let current = markdown_to_issue(&expected.id, &fs::read_to_string(path)?)?;
-        if crate::sync::canonical_issue(&current)? != crate::sync::canonical_issue(expected)? {
-            return Ok(None);
-        }
-        Ok(Some(LockedIssue {
-            storage: self,
-            issue: current,
-            _lock: lock,
-        }))
-    }
-
-    pub fn issue_matches_snapshot(&self, expected: &Issue) -> Result<bool> {
-        Ok(self.lock_issue_snapshot(expected)?.is_some())
-    }
-
-    pub fn issue_matches_snapshot_readonly(&self, expected: &Issue) -> Result<bool> {
-        let _lock = self.lock_for_read()?;
-        let Some(path) = self.existing_issue_path(&expected.id)? else {
-            return Ok(false);
-        };
-        let current = markdown_to_issue(&expected.id, &fs::read_to_string(path)?)?;
-        Ok(crate::sync::canonical_issue(&current)? == crate::sync::canonical_issue(expected)?)
-    }
-
-    pub fn update_issue_if_unchanged(
-        &self,
-        expected: &Issue,
-        updates: HashMap<String, String>,
-    ) -> Result<Option<Issue>> {
-        self.lock_issue_snapshot(expected)?
-            .map(|locked| locked.update(updates))
-            .transpose()
     }
 
     /// Update an issue
@@ -1345,7 +1118,7 @@ impl Storage {
 
     /// Atomically claim an issue for `actor`.
     ///
-    /// This is the local half of minibeads' git-as-coordination model: the claim
+    /// This is the local half of tazk' git-as-coordination model: the claim
     /// records `assignee`/`status=in_progress`/`claimed_at`/`claimed_until` in the
     /// markdown file. The cross-machine "compare-and-swap" is the subsequent
     /// `git push` (a losing push is rejected, the loser pulls and sees the issue
@@ -1355,7 +1128,7 @@ impl Storage {
     /// (`claimed_until` in the past), or when `actor` already holds it (refresh /
     /// extend). Fails with an "already claimed" error when another worker holds an
     /// active claim. `extra_updates` carries any sibling field edits from
-    /// `mb update --claim` (the `status`/`assignee` keys are ignored: the claim
+    /// `tz update --claim` (the `status`/`assignee` keys are ignored: the claim
     /// controls those).
     pub fn claim_issue(
         &self,
@@ -1430,7 +1203,7 @@ impl Storage {
     /// Release a claim, returning the issue to the backlog.
     ///
     /// Clears `assignee`/`claimed_at`/`claimed_until` and, if the issue was
-    /// `in_progress`, flips it back to `open` so `mb ready` surfaces it again.
+    /// `in_progress`, flips it back to `open` so `tz ready` surfaces it again.
     /// Refuses to release a claim held by a different worker unless `force` is
     /// set (a stale claim can also simply be reclaimed via [`claim_issue`]).
     pub fn release_issue(&self, id: &str, actor: &str, force: bool) -> Result<Issue> {
@@ -2389,7 +2162,7 @@ impl Storage {
         let mut changes = Vec::new();
         if update_config && current_layout != target_layout {
             changes.push(format!(
-                "Update config-minibeads.yaml: issue-storage-layout: {} -> {}",
+                "Update config-tazk.yaml: issue-storage-layout: {} -> {}",
                 current_layout.as_str(),
                 target_layout.as_str()
             ));
@@ -2399,11 +2172,11 @@ impl Storage {
                 "Move issue {}: {} -> {}",
                 issue_id,
                 old_path
-                    .strip_prefix(&self.beads_dir)
+                    .strip_prefix(&self.tazk_dir)
                     .unwrap_or(old_path)
                     .display(),
                 new_path
-                    .strip_prefix(&self.beads_dir)
+                    .strip_prefix(&self.tazk_dir)
                     .unwrap_or(new_path)
                     .display()
             ));
@@ -2420,10 +2193,10 @@ impl Storage {
             return Ok(changes);
         }
 
-        let mut transaction = FileTransaction::new(&self.beads_dir);
+        let mut transaction = FileTransaction::new(&self.tazk_dir);
         for (_issue_id, old_path, new_path) in &moves {
-            ensure_contained(&self.beads_dir, old_path)?;
-            ensure_contained(&self.beads_dir, new_path)?;
+            ensure_contained(&self.tazk_dir, old_path)?;
+            ensure_contained(&self.tazk_dir, new_path)?;
             transaction.remove(old_path.clone());
             transaction.write_with_mtime(
                 new_path.clone(),
@@ -2433,7 +2206,7 @@ impl Storage {
         }
         if update_config {
             transaction.config(
-                "config-minibeads.yaml",
+                "config-tazk.yaml",
                 "issue-storage-layout",
                 target_layout.as_str(),
             )?;
@@ -2488,7 +2261,7 @@ impl Storage {
     /// - Renames all issue files from prefix-N to prefix-hash
     /// - Updates all dependency references
     /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
-    /// - Updates config-minibeads.yaml to set mb-hash-ids: true (unless update_config is false)
+    /// - Updates config-tazk.yaml to set tz-hash-ids: true (unless update_config is false)
     /// - Is atomic (all updates succeed or none)
     pub fn migrate_to_hash_ids(
         &self,
@@ -2499,7 +2272,9 @@ impl Storage {
 
         // Check if already using hash IDs
         if self.use_hash_ids()? {
-            anyhow::bail!("Database is already using hash-based IDs (mb-hash-ids: true in config-minibeads.yaml)");
+            anyhow::bail!(
+                "Database is already using hash-based IDs (tz-hash-ids: true in config-tazk.yaml)"
+            );
         }
 
         // Get current prefix
@@ -2544,7 +2319,7 @@ impl Storage {
         // Track all changes for dry-run mode
         let mut changes = Vec::new();
         if update_config {
-            changes.push("Update config-minibeads.yaml: mb-hash-ids: false -> true".to_string());
+            changes.push("Update config-tazk.yaml: tz-hash-ids: false -> true".to_string());
         }
 
         // Plan all file renames and content updates
@@ -2576,7 +2351,7 @@ impl Storage {
         }
 
         let configs = if update_config {
-            vec![("config-minibeads.yaml", "mb-hash-ids", "true")]
+            vec![("config-tazk.yaml", "tz-hash-ids", "true")]
         } else {
             Vec::new()
         };
@@ -2593,7 +2368,7 @@ impl Storage {
     /// - Assigns sequential numbers starting from MAX_ID+1
     /// - Updates all dependency references
     /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
-    /// - Updates config-minibeads.yaml to set mb-hash-ids: false (unless update_config is false)
+    /// - Updates config-tazk.yaml to set tz-hash-ids: false (unless update_config is false)
     /// - Is atomic (all updates succeed or none)
     pub fn migrate_to_numeric_ids(
         &self,
@@ -2688,7 +2463,7 @@ impl Storage {
         // Track all changes for dry-run mode
         let mut changes = Vec::new();
         if update_config {
-            changes.push("Update config-minibeads.yaml: mb-hash-ids: true -> false".to_string());
+            changes.push("Update config-tazk.yaml: tz-hash-ids: true -> false".to_string());
         }
 
         // Plan all file renames and content updates
@@ -2720,7 +2495,7 @@ impl Storage {
         }
 
         let configs = if update_config {
-            vec![("config-minibeads.yaml", "mb-hash-ids", "false")]
+            vec![("config-tazk.yaml", "tz-hash-ids", "false")]
         } else {
             Vec::new()
         };
@@ -2776,7 +2551,7 @@ impl Storage {
         }
 
         if numeric_issues.is_empty() {
-            anyhow::bail!("No numeric IDs found to repack. Use 'mb migrate --to numeric' first.");
+            anyhow::bail!("No numeric IDs found to repack. Use 'tz migrate --to numeric' first.");
         }
 
         // Sort by creation timestamp to preserve chronological order
@@ -2945,8 +2720,7 @@ pub(crate) fn issue_file_paths_in(issues_dir: &Path) -> Result<Vec<(String, Path
 /// when issues already exist and must be preferred over guessing from the
 /// directory name: opening or initializing a store whose config.yaml is
 /// missing (but whose issues/ directory already has real issues in it, e.g.
-/// upstream `bd` data being read for the first time, or a deleted/lost
-/// config.yaml) must not silently invent a prefix that ignores the issues
+/// a deleted/lost config.yaml) must not silently invent a prefix that ignores the issues
 /// that are right there. Returns `None` only when there is nothing to infer
 /// from (empty or newly-created issues/ directory).
 fn infer_prefix_from_issues_dir(issues_dir: &Path) -> Option<String> {
@@ -2967,8 +2741,8 @@ fn infer_prefix_from_issues_dir(issues_dir: &Path) -> Option<String> {
 /// this directory-name guess has no relation to a project's actual issue IDs
 /// and can produce a silently-wrong prefix (e.g. "tmp" for a store opened
 /// from a path under `/tmp/...`).
-fn infer_prefix(beads_dir: &Path) -> Option<String> {
-    let parent = beads_dir.parent()?.parent()?;
+fn infer_prefix(tazk_dir: &Path) -> Option<String> {
+    let parent = tazk_dir.parent()?.parent()?;
     let name = parent.file_name()?.to_str()?;
 
     let prefix = name.to_lowercase().replace([' ', '_'], "-");
@@ -2976,31 +2750,25 @@ fn infer_prefix(beads_dir: &Path) -> Option<String> {
     Some(prefix)
 }
 
-/// Create config-minibeads.yaml with minibeads-specific options
-/// This file contains options that are NOT compatible with upstream bd
-fn create_minibeads_config(
-    beads_dir: &Path,
-    mb_hash_ids: bool,
+/// Create config-tazk.yaml with tazk-specific options
+fn create_tazk_config(
+    tazk_dir: &Path,
+    tz_hash_ids: bool,
     issue_layout: IssueStorageLayout,
 ) -> Result<()> {
     use std::io::Write;
 
-    let config_path = beads_dir.join("config-minibeads.yaml");
+    let config_path = tazk_dir.join("config-tazk.yaml");
 
     // Don't clobber existing config
     if config_path.exists() {
         return Ok(());
     }
 
-    let mut file =
-        fs::File::create(&config_path).context("Failed to create config-minibeads.yaml")?;
+    let mut file = fs::File::create(&config_path).context("Failed to create config-tazk.yaml")?;
 
     // Write header with commented explanation
-    writeln!(file, "# Minibeads-specific configuration options")?;
-    writeln!(
-        file,
-        "# This file contains options that are NOT compatible with upstream bd"
-    )?;
+    writeln!(file, "# Tazk-specific configuration options")?;
     writeln!(file)?;
 
     writeln!(
@@ -3018,14 +2786,17 @@ fn create_minibeads_config(
     writeln!(file, "# Default: false")?;
     writeln!(
         file,
-        "mb-hash-ids: {}",
-        if mb_hash_ids { "true" } else { "false" }
+        "tz-hash-ids: {}",
+        if tz_hash_ids { "true" } else { "false" }
     )?;
     writeln!(file)?;
 
     // Hash encoding format
     writeln!(file, "# Hash encoding format for hash-based IDs")?;
-    writeln!(file, "# base36: Uses characters [0-9a-z] for better information density (recommended, matches upstream bd)")?;
+    writeln!(
+        file,
+        "# base36: Uses characters [0-9a-z] for better information density (recommended)"
+    )?;
     writeln!(
         file,
         "# hex: Uses characters [0-9a-f] for hexadecimal encoding (legacy format)"
@@ -3052,15 +2823,15 @@ fn create_minibeads_config(
 }
 
 /// Ensure .gitignore exists and contains required entries
-fn ensure_gitignore(beads_dir: &Path) -> Result<()> {
+fn ensure_gitignore(tazk_dir: &Path) -> Result<()> {
     use std::io::{BufRead, BufReader, Write};
 
-    let gitignore_path = beads_dir.join(".gitignore");
+    let gitignore_path = tazk_dir.join(".gitignore");
     let required_entries = [
-        "minibeads.lock",
+        "tazk.lock",
         "command_history.log",
-        "minibeads-transaction.json",
-        ".mb-write-*",
+        "tazk-transaction.json",
+        ".tz-write-*",
         "sync_ancestors/",
     ];
 
@@ -3246,9 +3017,9 @@ mod create_integrity_tests {
     #[test]
     fn duplicate_create_id_fails_without_overwriting_existing_issue() {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir.clone(),
+            tazk_dir.clone(),
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Flat,
@@ -3270,7 +3041,7 @@ mod create_integrity_tests {
                 Vec::new(),
             )
             .unwrap();
-        let original_markdown = fs::read_to_string(beads_dir.join("issues/demo-2.md")).unwrap();
+        let original_markdown = fs::read_to_string(tazk_dir.join("issues/demo-2.md")).unwrap();
 
         let result = storage.create_issue(
             "Accidental replacement".to_string(),
@@ -3288,7 +3059,7 @@ mod create_integrity_tests {
 
         assert!(result.is_err(), "duplicate creation must fail loudly");
         assert_eq!(
-            fs::read_to_string(beads_dir.join("issues/demo-2.md")).unwrap(),
+            fs::read_to_string(tazk_dir.join("issues/demo-2.md")).unwrap(),
             original_markdown,
             "a failed create must preserve the existing issue"
         );
@@ -3309,9 +3080,9 @@ mod list_order_tests {
 
     #[test]
     fn numeric_suffix_parsing() {
-        assert_eq!(numeric_id_suffix("minibeads-42"), Some(42));
-        assert_eq!(numeric_id_suffix("minibeads-1"), Some(1));
-        assert_eq!(numeric_id_suffix("minibeads-a3f9"), None);
+        assert_eq!(numeric_id_suffix("tazk-42"), Some(42));
+        assert_eq!(numeric_id_suffix("tazk-1"), Some(1));
+        assert_eq!(numeric_id_suffix("tazk-a3f9"), None);
         assert_eq!(numeric_id_suffix("foo-bar-7"), Some(7));
     }
 
@@ -3319,24 +3090,18 @@ mod list_order_tests {
     fn numeric_cluster_first_then_hash() {
         let base = chrono::Utc::now();
         let mut issues = [
-            issue_at("minibeads-a3f9", base + Duration::seconds(1)),
-            issue_at("minibeads-10", base + Duration::seconds(2)),
-            issue_at("minibeads-2", base + Duration::seconds(3)),
-            issue_at("minibeads-b001", base),
-            issue_at("minibeads-1", base + Duration::seconds(4)),
+            issue_at("tazk-a3f9", base + Duration::seconds(1)),
+            issue_at("tazk-10", base + Duration::seconds(2)),
+            issue_at("tazk-2", base + Duration::seconds(3)),
+            issue_at("tazk-b001", base),
+            issue_at("tazk-1", base + Duration::seconds(4)),
         ];
         issues.sort_by(compare_for_list);
         let order: Vec<&str> = issues.iter().map(|i| i.id.as_str()).collect();
         // Numeric ascending first (1, 2, 10), then hash-based by creation date.
         assert_eq!(
             order,
-            vec![
-                "minibeads-1",
-                "minibeads-2",
-                "minibeads-10",
-                "minibeads-b001",
-                "minibeads-a3f9",
-            ]
+            vec!["tazk-1", "tazk-2", "tazk-10", "tazk-b001", "tazk-a3f9",]
         );
     }
 }
@@ -3347,9 +3112,9 @@ mod ready_tests {
 
     fn storage_with_open_issues(count: usize) -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir,
+            tazk_dir,
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Flat,
@@ -3393,23 +3158,23 @@ mod ready_tests {
 }
 
 #[cfg(test)]
-mod config_compat_tests {
+mod config_tests {
     use super::*;
 
-    /// Upstream bd leaves `issue-prefix` commented out in config.yaml (the
-    /// prefix lives in its database). Opening such a repo must succeed, and the
+    /// A config.yaml may have `issue-prefix` commented out. Opening such a
+    /// repo must succeed, and the
     /// prefix must be inferred from the issue filenames rather than erroring.
     #[test]
     fn open_tolerates_commented_issue_prefix() {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
-        let issues_dir = beads_dir.join("issues");
+        let tazk_dir = tmp.path().join(".tazk");
+        let issues_dir = tazk_dir.join("issues");
         fs::create_dir_all(&issues_dir).unwrap();
 
-        // Upstream-style config.yaml: issue-prefix only appears as a comment.
+        // config.yaml where issue-prefix only appears as a comment.
         fs::write(
-            beads_dir.join("config.yaml"),
-            "# Beads Configuration File\n# issue-prefix: \"\"\nno-db: false\n",
+            tazk_dir.join("config.yaml"),
+            "# Configuration File\n# issue-prefix: \"\"\n",
         )
         .unwrap();
 
@@ -3417,27 +3182,26 @@ mod config_compat_tests {
         fs::write(issues_dir.join("acme-1.md"), "placeholder").unwrap();
         fs::write(issues_dir.join("acme-2.md"), "placeholder").unwrap();
 
-        let storage = Storage::open(beads_dir).expect("open must tolerate commented prefix");
+        let storage = Storage::open(tazk_dir).expect("open must tolerate commented prefix");
         assert_eq!(storage.get_prefix().unwrap(), "acme");
     }
 
     /// Regression test: opening a store whose config.yaml is MISSING entirely
-    /// (e.g. upstream `bd` data seen for the first time, or a lost/deleted
-    /// config.yaml) must infer the prefix from issue files that already exist,
+    /// (e.g. a lost/deleted config.yaml) must infer the prefix from issue files that already exist,
     /// not from the parent directory's name. A directory-name guess is
     /// unrelated to a project's real issue IDs and can be actively misleading
     /// -- e.g. a checkout living under a path containing "tmp" would silently
-    /// bootstrap `issue-prefix: tmp` and every later `mb create` would then
+    /// bootstrap `issue-prefix: tmp` and every later `tz create` would then
     /// use that wrong prefix, ignoring the `ds-*` issues sitting right there.
     #[test]
     fn open_infers_prefix_from_existing_issues_over_directory_name() {
         let tmp = tempfile::tempdir().unwrap();
-        // Simulate a checkout living under a path whose grandparent-of-.beads
+        // Simulate a checkout living under a path whose grandparent-of-.tazk
         // directory is named "tmp" -- exactly the directory-name heuristic's
         // input (see `infer_prefix`) -- so it would mislead it into guessing
         // "tmp" as the prefix.
-        let beads_dir = tmp.path().join("tmp").join("checkout").join(".beads");
-        let issues_dir = beads_dir.join("issues");
+        let tazk_dir = tmp.path().join("tmp").join("checkout").join(".tazk");
+        let issues_dir = tazk_dir.join("issues");
         fs::create_dir_all(&issues_dir).unwrap();
 
         // No config.yaml at all yet -- but real issues already exist.
@@ -3445,7 +3209,7 @@ mod config_compat_tests {
         fs::write(issues_dir.join("ds-2.md"), "placeholder").unwrap();
         fs::write(issues_dir.join("ds-3.md"), "placeholder").unwrap();
 
-        let storage = Storage::open(beads_dir.clone()).expect("open must succeed");
+        let storage = Storage::open(tazk_dir.clone()).expect("open must succeed");
         assert_eq!(
             storage.get_prefix().unwrap(),
             "ds",
@@ -3454,7 +3218,7 @@ mod config_compat_tests {
 
         // And the inferred prefix must have actually been written into
         // config.yaml, not just returned transiently.
-        let config_yaml = fs::read_to_string(beads_dir.join("config.yaml")).unwrap();
+        let config_yaml = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
         assert!(
             config_yaml.contains("ds"),
             "config.yaml should record the inferred prefix: {config_yaml}"
@@ -3466,22 +3230,22 @@ mod config_compat_tests {
     }
 
     /// Companion case: with NO existing issues to learn from, falling back to
-    /// the directory-name guess (then "bd") is still the reasonable default --
+    /// the directory-name guess (then "tz") is still the reasonable default --
     /// this fix must not regress that.
     #[test]
     fn open_falls_back_to_directory_name_when_no_issues_exist() {
         let tmp = tempfile::tempdir().unwrap();
-        // `infer_prefix`'s directory-name guess reads the grandparent-of-.beads
+        // `infer_prefix`'s directory-name guess reads the grandparent-of-.tazk
         // directory name (see the `open`/`init` bootstrap: it's the fallback
         // consulted only when there are no existing issues to learn from).
-        let beads_dir = tmp
+        let tazk_dir = tmp
             .path()
             .join("acme-project")
             .join("checkout")
-            .join(".beads");
-        fs::create_dir_all(&beads_dir).unwrap();
+            .join(".tazk");
+        fs::create_dir_all(&tazk_dir).unwrap();
 
-        let storage = Storage::open(beads_dir).expect("open must succeed");
+        let storage = Storage::open(tazk_dir).expect("open must succeed");
         assert_eq!(storage.get_prefix().unwrap(), "acme-project");
     }
 }
@@ -3517,9 +3281,9 @@ mod issue_layout_tests {
     #[test]
     fn create_uses_configured_sharded_layout() {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir.clone(),
+            tazk_dir.clone(),
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Sharded,
@@ -3543,17 +3307,17 @@ mod issue_layout_tests {
             .unwrap();
 
         assert_eq!(issue.id, "demo-1");
-        assert!(beads_dir.join("issues/n/0/1/demo-1.md").exists());
-        assert!(!beads_dir.join("issues/demo-1.md").exists());
+        assert!(tazk_dir.join("issues/n/0/1/demo-1.md").exists());
+        assert!(!tazk_dir.join("issues/demo-1.md").exists());
         assert!(storage.get_issue("demo-1").unwrap().is_some());
     }
 
     #[test]
     fn migrate_layout_moves_existing_files_and_updates_config() {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir.clone(),
+            tazk_dir.clone(),
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Flat,
@@ -3596,9 +3360,9 @@ mod issue_layout_tests {
             .unwrap();
 
         assert!(changes.iter().any(|c| c.contains("issue-storage-layout")));
-        assert!(beads_dir.join("issues/n/0/1/demo-1.md").exists());
-        assert!(beads_dir.join("issues/n/0/2/demo-2.md").exists());
-        assert!(!beads_dir.join("issues/demo-1.md").exists());
+        assert!(tazk_dir.join("issues/n/0/1/demo-1.md").exists());
+        assert!(tazk_dir.join("issues/n/0/2/demo-2.md").exists());
+        assert!(!tazk_dir.join("issues/demo-1.md").exists());
         assert_eq!(
             storage.issue_storage_layout().unwrap(),
             IssueStorageLayout::Sharded
@@ -3620,7 +3384,7 @@ mod issue_layout_tests {
             )
             .unwrap();
         assert_eq!(next.id, "demo-3");
-        assert!(beads_dir.join("issues/n/0/3/demo-3.md").exists());
+        assert!(tazk_dir.join("issues/n/0/3/demo-3.md").exists());
     }
 }
 
@@ -3632,9 +3396,9 @@ mod claim_tests {
     /// Create an initialized storage in a temp dir with a single open issue.
     fn storage_with_one_issue() -> (tempfile::TempDir, Storage, String) {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir,
+            tazk_dir,
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Flat,
@@ -3775,85 +3539,20 @@ mod claim_tests {
 }
 
 #[cfg(test)]
-mod github_metadata_tests {
+mod comment_tests {
     use super::*;
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir,
+            tazk_dir,
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Flat,
         )
         .expect("init storage");
         (tmp, storage)
-    }
-
-    #[test]
-    fn create_with_github_external_ref_preserves_labels() {
-        let (_tmp, storage) = storage();
-        let issue = storage
-            .create_issue(
-                "linked".to_string(),
-                String::new(),
-                None,
-                None,
-                2,
-                IssueType::Task,
-                None,
-                vec!["bug".to_string()],
-                Some("https://github.com/owner/repo/issues/123".to_string()),
-                None,
-                Vec::new(),
-            )
-            .unwrap();
-
-        assert_eq!(issue.labels, vec!["bug".to_string()]);
-    }
-
-    #[test]
-    fn github_external_ref_can_be_detected_without_labels() {
-        let (_tmp, storage) = storage();
-        let issue = storage
-            .create_issue(
-                "local".to_string(),
-                String::new(),
-                None,
-                None,
-                2,
-                IssueType::Task,
-                None,
-                Vec::new(),
-                None,
-                None,
-                Vec::new(),
-            )
-            .unwrap();
-
-        storage
-            .update_issue(
-                &issue.id,
-                HashMap::from([(
-                    "external_ref".to_string(),
-                    "https://github.com/owner/repo/issues/456".to_string(),
-                )]),
-            )
-            .unwrap();
-
-        let issues = storage.list_issues(None, None, None, None, None).unwrap();
-        let github_ids: Vec<_> = issues
-            .iter()
-            .filter(|issue| {
-                issue
-                    .external_ref
-                    .as_deref()
-                    .is_some_and(is_github_issue_ref)
-            })
-            .map(|issue| issue.id.as_str())
-            .collect();
-        assert_eq!(github_ids, vec![issue.id.as_str()]);
     }
 
     #[test]
@@ -3959,9 +3658,9 @@ mod search_replace_tests {
     /// Create an initialized storage with one issue whose description is `desc`.
     fn storage_with_description(desc: &str) -> (tempfile::TempDir, Storage, String) {
         let tmp = tempfile::tempdir().unwrap();
-        let beads_dir = tmp.path().join(".beads");
+        let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(
-            beads_dir,
+            tazk_dir,
             Some("demo".to_string()),
             false,
             IssueStorageLayout::Flat,

@@ -1,12 +1,12 @@
 //! Bidirectional sync between markdown and JSONL formats
 //!
 //! This module implements bidirectional synchronization between:
-//! - Markdown files (.minibeads/issues/*.md) - human-friendly, git-mergeable
-//! - JSONL file (issues.jsonl) - machine-friendly, upstream bd compatible
+//! - Markdown files (.tazk/issues/*.md) - human-friendly, git-mergeable
+//! - JSONL file (issues.jsonl) - machine-friendly
 //!
 //! ## Architecture
 //!
-//! Either format can be modified independently, and `bd sync` merges changes
+//! Either format can be modified independently, and `tz sync` merges changes
 //! bidirectionally using timestamps:
 //! - **Markdown**: Uses filesystem mtime (last modified time)
 //! - **JSONL**: Uses updated_at field from JSON
@@ -125,8 +125,8 @@ impl SyncReport {
 }
 
 /// Load all markdown issues with their filesystem mtimes
-pub fn load_markdown_issues(beads_dir: &Path) -> Result<HashMap<String, MarkdownIssue>> {
-    let issues_dir = beads_dir.join("issues");
+pub fn load_markdown_issues(tazk_dir: &Path) -> Result<HashMap<String, MarkdownIssue>> {
+    let issues_dir = tazk_dir.join("issues");
 
     if !issues_dir.exists() {
         return Ok(HashMap::new());
@@ -136,7 +136,7 @@ pub fn load_markdown_issues(beads_dir: &Path) -> Result<HashMap<String, Markdown
 
     for (issue_id, path) in issue_file_paths_in(&issues_dir)? {
         IssueId::parse(&issue_id)?;
-        ensure_contained(beads_dir, &path)?;
+        ensure_contained(tazk_dir, &path)?;
         // Get filesystem mtime
         let metadata = fs::metadata(&path)
             .with_context(|| format!("Failed to get metadata for {}", path.display()))?;
@@ -317,15 +317,15 @@ impl SyncEngine {
         plan: &SyncPlan,
         markdown_issues: &HashMap<String, MarkdownIssue>,
         jsonl_issues: &HashMap<String, JsonlIssue>,
-        beads_dir: &Path,
+        tazk_dir: &Path,
         dry_run: bool,
     ) -> Result<SyncReport> {
         self.apply_to_path(
             plan,
             markdown_issues,
             jsonl_issues,
-            beads_dir,
-            &beads_dir.join("issues.jsonl"),
+            tazk_dir,
+            &tazk_dir.join("issues.jsonl"),
             dry_run,
         )
     }
@@ -337,12 +337,12 @@ impl SyncEngine {
         plan: &SyncPlan,
         markdown_issues: &HashMap<String, MarkdownIssue>,
         jsonl_issues: &HashMap<String, JsonlIssue>,
-        beads_dir: &Path,
+        tazk_dir: &Path,
         jsonl_path: &Path,
         dry_run: bool,
     ) -> Result<SyncReport> {
-        let _lock = Lock::acquire(beads_dir)?;
-        let fresh_markdown = load_markdown_issues(beads_dir)?;
+        let _lock = Lock::acquire(tazk_dir)?;
+        let fresh_markdown = load_markdown_issues(tazk_dir)?;
         let fresh_jsonl = load_jsonl_issues(jsonl_path)?;
         anyhow::ensure!(
             same_markdown_snapshot(markdown_issues, &fresh_markdown)?
@@ -350,8 +350,8 @@ impl SyncEngine {
             "Sync inputs changed after analysis; rerun sync to avoid overwriting a concurrent edit"
         );
 
-        let storage = Storage::open(beads_dir.to_path_buf())?;
-        let mut transaction = FileTransaction::new(beads_dir);
+        let storage = Storage::open(tazk_dir.to_path_buf())?;
+        let mut transaction = FileTransaction::new(tazk_dir);
         let mut planned_ids = std::collections::HashSet::new();
         let report = SyncReport {
             dry_run,
@@ -428,8 +428,8 @@ impl SyncEngine {
             return Ok(report);
         }
         if let Some(content) = jsonl_content {
-            if jsonl_path.starts_with(beads_dir) {
-                ensure_contained(beads_dir, jsonl_path)?;
+            if jsonl_path.starts_with(tazk_dir) {
+                ensure_contained(tazk_dir, jsonl_path)?;
                 transaction.write(jsonl_path.to_path_buf(), content);
             } else {
                 // A user-selected external JSONL path is replaced atomically
