@@ -68,30 +68,24 @@ impl std::str::FromStr for ClaimDuration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
+    Triage,
     Open,
     InProgress,
+    Closed,
     Blocked,
     Deferred,
-    Hooked,
-    Pinned,
-    StagedReady,
-    StagedWarnings,
-    Closed,
 }
 
 impl Status {
     /// Get the string representation of this status
     pub fn as_str(&self) -> &'static str {
         match self {
+            Status::Triage => "triage",
             Status::Open => "open",
             Status::InProgress => "in_progress",
+            Status::Closed => "closed",
             Status::Blocked => "blocked",
             Status::Deferred => "deferred",
-            Status::Hooked => "hooked",
-            Status::Pinned => "pinned",
-            Status::StagedReady => "staged_ready",
-            Status::StagedWarnings => "staged_warnings",
-            Status::Closed => "closed",
         }
     }
 }
@@ -107,17 +101,14 @@ impl std::str::FromStr for Status {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "triage" => Ok(Status::Triage),
             "open" => Ok(Status::Open),
             "in_progress" => Ok(Status::InProgress),
+            "closed" => Ok(Status::Closed),
             "blocked" => Ok(Status::Blocked),
             "deferred" => Ok(Status::Deferred),
-            "hooked" => Ok(Status::Hooked),
-            "pinned" => Ok(Status::Pinned),
-            "staged_ready" => Ok(Status::StagedReady),
-            "staged_warnings" => Ok(Status::StagedWarnings),
-            "closed" => Ok(Status::Closed),
             _ => Err(anyhow::anyhow!(
-                "Invalid status: '{}'. Valid values are: open, in_progress, blocked, deferred, hooked, pinned, staged_ready, staged_warnings, closed",
+                "Invalid status: '{}'. Valid values are: triage, open, in_progress, closed, blocked, deferred",
                 s
             )),
         }

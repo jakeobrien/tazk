@@ -27,7 +27,7 @@ overview, see the [README](README.md).
     you only want to add to the end.
 - `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue
 - `tz reopen ISSUE_ID...` - Reopen closed issues
-- `tz comments add ISSUE_ID --body TEXT` - Add a local issue comment
+- `tz comments add ISSUE_ID --body TEXT [--author NAME]` - Add a local issue comment (author defaults to the machine's short hostname)
 - `tz comments list ISSUE_ID` - List local issue comments
 - `tz comments delete ISSUE_ID COMMENT_ID...` - Delete local issue comment(s) by ID
 
@@ -187,15 +187,12 @@ empty.
 
 | Value | Meaning |
 |-------|---------|
+| `triage` | Newly reported, not yet reviewed. Not listed by `tz ready`. |
 | `open` | Not started. Open issues with no unresolved blockers are reported by `tz ready`. |
 | `in_progress` | Being worked on. Set by `tz update --claim` / `tz claim`. |
-| `blocked` | Marked as blocked by hand. |
-| `deferred` | Postponed. Not listed by `tz ready`. |
-| `hooked` | Accepted for agent/workflow tooling; `tz` gives it no special behaviour. |
-| `pinned` | Accepted for agent/workflow tooling; no special behaviour. |
-| `staged_ready` | Accepted for staging workflows; no special behaviour. |
-| `staged_warnings` | Accepted for staging workflows; no special behaviour. |
 | `closed` | Complete. Sets `closed_at`. |
+| `blocked` | Marked as blocked by hand. Not listed by `tz ready`. |
+| `deferred` | Postponed. Not listed by `tz ready`. |
 
 Status values are lowercase with underscores. Only `open` issues appear in `tz ready`. Note that `tz blocked` reports
 issues that have unresolved `blocked_by` dependencies; it does not depend on the

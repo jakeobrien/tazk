@@ -77,10 +77,6 @@ struct GlobalOpts {
     #[arg(long = "tz-dir", global = true)]
     tz_dir: Option<PathBuf>,
 
-    /// Actor name for audit trail
-    #[arg(long, global = true)]
-    actor: Option<String>,
-
     /// Change working directory before running the command
     #[arg(short = 'C', long = "directory", global = true, hide = true)]
     directory: Option<PathBuf>,
@@ -249,7 +245,7 @@ enum Commands {
 
     /// List issues
     List {
-        /// Filter by status: open, in_progress, blocked, closed
+        /// Filter by status: triage, open, in_progress, closed, blocked, deferred
         #[arg(short = 's', long)]
         status: Option<String>,
 
@@ -311,7 +307,7 @@ enum Commands {
         /// Issue IDs to update
         issue_ids: Vec<String>,
 
-        /// New status: open, in_progress, blocked, closed
+        /// New status: triage, open, in_progress, closed, blocked, deferred
         #[arg(short = 's', long)]
         status: Option<Status>,
 
@@ -576,7 +572,7 @@ enum Commands {
         #[arg(long = "tz-output-default")]
         tz_output_default: bool,
 
-        /// Filter by status: open, in_progress, blocked, closed
+        /// Filter by status: triage, open, in_progress, closed, blocked, deferred
         #[arg(long)]
         status: Option<Status>,
 
@@ -899,6 +895,10 @@ enum CommentCommands {
         /// Comment body
         #[arg(short, long, allow_hyphen_values = true)]
         body: String,
+
+        /// Comment author (default: the machine's short hostname)
+        #[arg(long)]
+        author: Option<String>,
     },
 
     /// List comments for an issue
@@ -1488,7 +1488,6 @@ fn run() -> Result<()> {
     let tz_dir = &cli.global_opts.tz_dir;
     let json = cli.global_opts.json;
     let tz_no_cmd_logging = cli.global_opts.tz_no_cmd_logging || readonly;
-    let actor = cli.global_opts.actor.clone();
 
     match cli.command {
         Commands::Init {
@@ -2432,8 +2431,12 @@ fn run() -> Result<()> {
             }
 
             match command {
-                CommentCommands::Add { issue_id, body } => {
-                    let author = actor
+                CommentCommands::Add {
+                    issue_id,
+                    body,
+                    author,
+                } => {
+                    let author = author
                         .as_deref()
                         .map(ToString::to_string)
                         .unwrap_or_else(|| resolve_actor(None, None));
