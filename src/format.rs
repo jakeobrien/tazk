@@ -1,4 +1,4 @@
-use crate::types::{DependencyType, Issue};
+use crate::types::{validate_effort, DependencyType, Issue};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,10 @@ pub struct Frontmatter {
     pub issue_type: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub assignee: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -84,6 +88,8 @@ pub fn frontmatter_yaml(issue: &Issue) -> Result<String> {
         priority: issue.priority,
         issue_type: issue.issue_type.to_string(),
         assignee: issue.assignee.clone(),
+        role: issue.role.map(|role| role.to_string()),
+        effort: issue.effort,
         external_ref: issue.external_ref.clone(),
         labels: issue.labels.clone(),
         dependencies: issue
@@ -320,6 +326,11 @@ pub fn markdown_to_issue(issue_id: &str, content: &str) -> Result<Issue> {
         priority: fm.priority,
         issue_type: fm.issue_type.parse()?,
         assignee: fm.assignee,
+        role: fm.role.as_deref().map(str::parse).transpose()?,
+        effort: fm
+            .effort
+            .map(|effort| validate_effort(effort).map(|()| effort))
+            .transpose()?,
         external_ref: fm.external_ref,
         labels: fm.labels,
         depends_on: HashMap::new(),
@@ -610,6 +621,33 @@ mod tests {
         assert_eq!(parsed.status, crate::types::Status::InProgress);
         assert_eq!(parsed.claimed_at, issue.claimed_at);
         assert_eq!(parsed.claimed_until, issue.claimed_until);
+    }
+
+    #[test]
+    fn test_role_and_effort_roundtrip_and_are_omitted_when_unset() {
+        let mut issue = Issue::new("test-7".to_string(), "R".to_string(), 2, IssueType::Task);
+        let plain = issue_to_markdown(&issue).unwrap();
+        assert!(!plain.contains("role"));
+        assert!(!plain.contains("effort"));
+
+        issue.role = Some(crate::types::Role::Agent);
+        issue.effort = Some(4);
+        let markdown = issue_to_markdown(&issue).unwrap();
+        assert!(markdown.contains("role: agent\n"));
+        assert!(markdown.contains("effort: 4\n"));
+        let parsed = markdown_to_issue("test-7", &markdown).unwrap();
+        assert_eq!(parsed.role, Some(crate::types::Role::Agent));
+        assert_eq!(parsed.effort, Some(4));
+    }
+
+    #[test]
+    fn test_invalid_role_or_effort_in_file_is_rejected() {
+        let issue = Issue::new("test-6".to_string(), "R".to_string(), 2, IssueType::Task);
+        let markdown = issue_to_markdown(&issue).unwrap();
+        for extra in ["role: robot", "effort: 0", "effort: 6"] {
+            let bad = markdown.replacen("created_at:", &format!("{extra}\ncreated_at:"), 1);
+            assert!(markdown_to_issue("test-6", &bad).is_err(), "{extra}");
+        }
     }
 
     #[test]

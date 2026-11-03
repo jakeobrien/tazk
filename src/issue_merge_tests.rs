@@ -1,6 +1,6 @@
 use super::*;
 use crate::diff3::MarkerSize;
-use crate::types::{DependencyType, IssueType};
+use crate::types::{DependencyType, IssueType, Role};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -120,6 +120,8 @@ fn field_value(issue: &Issue, field: &IssueField) -> String {
         IssueField::Priority => issue.priority.to_string(),
         IssueField::IssueType => issue.issue_type.to_string(),
         IssueField::Assignee => issue.assignee.clone(),
+        IssueField::Role => format!("{:?}", issue.role),
+        IssueField::Effort => format!("{:?}", issue.effort),
         IssueField::ExternalRef => format!("{:?}", issue.external_ref),
         IssueField::ClaimedAt => format!("{:?}", issue.claimed_at),
         IssueField::ClaimedUntil => format!("{:?}", issue.claimed_until),
@@ -128,12 +130,14 @@ fn field_value(issue: &Issue, field: &IssueField) -> String {
     }
 }
 
-const FRONTMATTER_FIELDS: [IssueField; 8] = [
+const FRONTMATTER_FIELDS: [IssueField; 10] = [
     IssueField::Title,
     IssueField::Status,
     IssueField::Priority,
     IssueField::IssueType,
     IssueField::Assignee,
+    IssueField::Role,
+    IssueField::Effort,
     IssueField::ExternalRef,
     IssueField::ClaimedAt,
     IssueField::ClaimedUntil,
@@ -162,6 +166,26 @@ fn disjoint_field_edits_merge_cleanly() {
     assert_eq!(merged.assignee, "bob");
     assert_eq!(merged.updated_at, at(20));
     assert_eq!(result.text, render(&merged), "clean output is canonical");
+}
+
+#[test]
+fn role_and_effort_merge_per_field() {
+    let base = base_issue();
+    let mut ours = base.clone();
+    ours.role = Some(Role::Agent);
+    let mut theirs = base.clone();
+    theirs.effort = Some(3);
+
+    let result = merge(&base, &ours, &theirs);
+    assert!(result.is_clean(), "{result:?}");
+    let merged = parse(&result.text);
+    assert_eq!(merged.role, Some(Role::Agent));
+    assert_eq!(merged.effort, Some(3));
+
+    // Both sides changing the same field differently is a conflict.
+    ours.effort = Some(5);
+    let result = merge(&base, &ours, &theirs);
+    assert_eq!(conflict_fields(&result), vec![IssueField::Effort]);
 }
 
 #[test]

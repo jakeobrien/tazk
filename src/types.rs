@@ -212,6 +212,78 @@ impl std::str::FromStr for IssueType {
     }
 }
 
+/// Who an issue is intended for: a person or an automated agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Human,
+    Agent,
+}
+
+impl Role {
+    /// Get the string representation of this role
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Human => "human",
+            Role::Agent => "agent",
+        }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for Role {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "human" => Ok(Role::Human),
+            "agent" => Ok(Role::Agent),
+            _ => Err(anyhow::anyhow!(
+                "Invalid role: '{}'. Valid values are: human, agent",
+                s
+            )),
+        }
+    }
+}
+
+/// Lowest valid [`Issue::effort`] value.
+pub const MIN_EFFORT: u8 = 1;
+/// Highest valid [`Issue::effort`] value.
+pub const MAX_EFFORT: u8 = 5;
+
+/// Parse and validate an effort estimate (an integer from [`MIN_EFFORT`] to
+/// [`MAX_EFFORT`], where the maximum is the most effort).
+pub fn parse_effort(s: &str) -> anyhow::Result<u8> {
+    let value: u8 = s.trim().parse().map_err(|_| {
+        anyhow::anyhow!(
+            "Invalid effort: '{}'. Must be an integer from {} to {}",
+            s,
+            MIN_EFFORT,
+            MAX_EFFORT
+        )
+    })?;
+    validate_effort(value)?;
+    Ok(value)
+}
+
+/// Check that an already-numeric effort estimate is in range.
+pub fn validate_effort(value: u8) -> anyhow::Result<()> {
+    if !(MIN_EFFORT..=MAX_EFFORT).contains(&value) {
+        anyhow::bail!(
+            "Invalid effort: '{}'. Must be an integer from {} to {}",
+            value,
+            MIN_EFFORT,
+            MAX_EFFORT
+        );
+    }
+    Ok(())
+}
+
 /// A free-text field of an issue that a targeted search/replace edit can rewrite.
 ///
 /// `tz update --search/--replace` swaps a substring of one of these fields rather
@@ -274,7 +346,7 @@ pub enum DependencyType {
     RelatedTo,
     #[serde(rename = "child_of")]
     ChildOf,
-    #[serde(rename = "discovered-from")]
+    #[serde(rename = "discovered_from", alias = "discovered-from")]
     DiscoveredFrom,
     #[serde(rename = "tracks")]
     Tracks,
@@ -287,7 +359,7 @@ impl DependencyType {
             DependencyType::BlockedBy => "blocked_by",
             DependencyType::RelatedTo => "related_to",
             DependencyType::ChildOf => "child_of",
-            DependencyType::DiscoveredFrom => "discovered-from",
+            DependencyType::DiscoveredFrom => "discovered_from",
             DependencyType::Tracks => "tracks",
         }
     }
@@ -307,10 +379,10 @@ impl std::str::FromStr for DependencyType {
             "blocked_by" => Ok(DependencyType::BlockedBy),
             "related_to" => Ok(DependencyType::RelatedTo),
             "child_of" => Ok(DependencyType::ChildOf),
-            "discovered-from" => Ok(DependencyType::DiscoveredFrom),
+            "discovered_from" | "discovered-from" => Ok(DependencyType::DiscoveredFrom),
             "tracks" => Ok(DependencyType::Tracks),
             _ => Err(anyhow::anyhow!(
-                "Invalid dependency type: '{}'. Valid values are: blocked_by, related_to, child_of, discovered-from, tracks",
+                "Invalid dependency type: '{}'. Valid values are: blocked_by, related_to, child_of, discovered_from, tracks",
                 s
             )),
         }
@@ -411,6 +483,12 @@ pub struct Issue {
     pub issue_type: IssueType,
     #[serde(default)]
     pub assignee: String,
+    /// Whether the issue is meant for a human or an agent. `None` if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    /// Effort estimate from 1 to 5 (5 is the most effort). `None` if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<u8>,
     pub external_ref: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
@@ -450,6 +528,8 @@ impl Issue {
             priority,
             issue_type,
             assignee: String::new(),
+            role: None,
+            effort: None,
             external_ref: None,
             labels: Vec::new(),
             depends_on: HashMap::new(),

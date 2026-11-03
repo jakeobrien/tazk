@@ -9,9 +9,12 @@ overview, see the [README](README.md).
 
 - `tz init [--prefix PREFIX]` - Initialize a database
 - `tz create TITLE [OPTIONS]` - Create new issue
-- `tz list [FILTERS]` - List issues with optional filters
+  - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `-r/--role human|agent`, `--effort 1-5`, `-l LABEL`
+- `tz list [FILTERS]` - List issues with optional filters (including `--assignee USER` and `-r/--role ROLE`)
 - `tz show ISSUE_ID` - Show detailed issue information
 - `tz update ISSUE_ID [OPTIONS]` - Update issue fields
+  - `-r/--role ROLE`, `--effort N` set the role or effort; `--clear-role` and
+    `--clear-effort` remove them.
   - `--search TEXT --replace TEXT [--field FIELD] [--replace-all]` - targeted,
     aider-style edit of a text field (default `description`) instead of
     overwriting it wholesale. By default the search text must match exactly once;
@@ -31,12 +34,12 @@ overview, see the [README](README.md).
 ### Dependencies
 
 - `tz dep add ISSUE_ID --target DEPENDENCY_ID [--type TYPE]` - Add dependency (ISSUE_ID has the dependency on DEPENDENCY_ID)
-  - Types: `blocked_by` (default), `related_to`, `child_of`, `discovered-from`, `tracks`
+  - Types: `blocked_by` (default), `related_to`, `child_of`, `discovered_from`, `tracks`
 - `tz dep remove ISSUE_ID --target DEPENDENCY_ID` - Remove dependency
 
 ### Queries
 
-- `tz ready [--assignee USER] [--priority N]` - Find ready work (no blockers)
+- `tz ready [--assignee USER] [-r/--role ROLE] [--priority N]` - Find ready work (no blockers)
 - `tz blocked` - Show blocked issues and what blocks them
 - `tz stats` - Show statistics (total, open, blocked, average lead time)
 
@@ -74,7 +77,7 @@ ATTRS
 
 Merge rules:
 
-- **Scalar fields** (title, status, priority, type, assignee, external ref,
+- **Scalar fields** (title, status, priority, type, assignee, role, effort, external ref,
   claim window) take the side that changed; two different changes conflict.
 - **Labels** merge as a set (additions and removals from both sides).
   **Dependencies** merge per target issue; changing a dependency's type on one
@@ -154,6 +157,8 @@ are emitted using the same names.
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |
 | `issue_type` | yes | See [Issue type](#issue-type) | Default `task`. Set with `-t/--issue-type`. |
 | `assignee` | no | Any text | Omitted when empty. Clear with `update --unassign`. |
+| `role` | no | `human`, `agent` | Who the issue is for. Omitted when unset. Set with `tz create/update -r/--role`; clear with `update --clear-role`. Filter with `-r/--role` on `tz list`, `tz ready` and `tz export`. |
+| `effort` | no | Integer `1`–`5`; `5` is the most effort | Omitted when unset. Set with `tz create/update --effort`; clear with `update --clear-effort`. Values outside 1–5 are rejected, including in hand-edited files. |
 | `external_ref` | no | Any text (e.g. a URL or ticket key in another tracker) | Omitted when unset. |
 | `labels` | no | List of free-form strings | Stored sorted and de-duplicated; empty entries are dropped. Commas separate labels in `--labels`, `--set-labels`. |
 | `dependencies` | no | Map of issue ID to [dependency type](#dependency-types) | Sorted by ID. |
@@ -220,10 +225,10 @@ depends on B.
 | `blocked_by` | Default. The issue is not ready until the target is closed. The only type that affects `tz ready` and `tz blocked`. |
 | `related_to` | Informational link. |
 | `child_of` | The issue is a child of the target (e.g. an epic). |
-| `discovered-from` | The issue was discovered while working on the target. |
+| `discovered_from` | The issue was discovered while working on the target. |
 | `tracks` | The issue tracks the target. |
 
-Note the spelling: `discovered-from` uses a hyphen; the others use underscores.
+The legacy spelling `discovered-from` is still accepted when reading, but files are written with `discovered_from`.
 
 ### Claims
 

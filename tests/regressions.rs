@@ -45,6 +45,8 @@ fn create(storage: &Storage, id: &str, title: &str) -> anyhow::Result<Issue> {
         None,
         Some(id.into()),
         Vec::new(),
+        None,
+        None,
     )
 }
 

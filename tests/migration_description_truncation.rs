@@ -49,6 +49,8 @@ fn migration_preserves_description_with_indented_code_block() {
             None,
             Some("ds-hkj8lo".to_string()),
             Vec::new(),
+            None,
+            None,
         )
         .expect("create issue");
 

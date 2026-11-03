@@ -64,6 +64,8 @@ pub(crate) enum IssueField {
     Priority,
     IssueType,
     Assignee,
+    Role,
+    Effort,
     ExternalRef,
     ClaimedAt,
     ClaimedUntil,
@@ -90,6 +92,8 @@ impl IssueField {
             IssueField::Priority => target.priority = source.priority,
             IssueField::IssueType => target.issue_type = source.issue_type,
             IssueField::Assignee => target.assignee.clone_from(&source.assignee),
+            IssueField::Role => target.role = source.role,
+            IssueField::Effort => target.effort = source.effort,
             IssueField::ExternalRef => target.external_ref.clone_from(&source.external_ref),
             IssueField::ClaimedAt => target.claimed_at = source.claimed_at,
             IssueField::ClaimedUntil => target.claimed_until = source.claimed_until,
@@ -116,6 +120,8 @@ impl fmt::Display for IssueField {
             IssueField::Priority => formatter.write_str("priority"),
             IssueField::IssueType => formatter.write_str("issue_type"),
             IssueField::Assignee => formatter.write_str("assignee"),
+            IssueField::Role => formatter.write_str("role"),
+            IssueField::Effort => formatter.write_str("effort"),
             IssueField::ExternalRef => formatter.write_str("external_ref"),
             IssueField::ClaimedAt => formatter.write_str("claimed_at"),
             IssueField::ClaimedUntil => formatter.write_str("claimed_until"),
@@ -461,6 +467,8 @@ pub(crate) fn merge_issue_versions(
     merge_field!(priority, IssueField::Priority);
     merge_field!(issue_type, IssueField::IssueType);
     merge_field!(assignee, IssueField::Assignee);
+    merge_field!(role, IssueField::Role);
+    merge_field!(effort, IssueField::Effort);
     merge_field!(external_ref, IssueField::ExternalRef);
     merge_field!(claimed_at, IssueField::ClaimedAt);
     merge_field!(claimed_until, IssueField::ClaimedUntil);

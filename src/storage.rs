@@ -4,7 +4,8 @@ use crate::lock::Lock;
 use crate::paths::{ensure_contained, IssueId};
 use crate::transaction::{atomic_write, FileTransaction};
 use crate::types::{
-    BlockedIssue, Comment, DependencyType, EditField, Issue, IssueType, Stats, Status,
+    parse_effort, validate_effort, BlockedIssue, Comment, DependencyType, EditField, Issue,
+    IssueType, Role, Stats, Status,
 };
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -722,7 +723,12 @@ impl Storage {
         external_ref: Option<String>,
         id: Option<String>,
         deps: Vec<(String, DependencyType)>,
+        role: Option<Role>,
+        effort: Option<u8>,
     ) -> Result<Issue> {
+        if let Some(effort) = effort {
+            validate_effort(effort)?;
+        }
         let _lock = self.lock_for_write()?;
 
         // Generate ID if not provided
@@ -752,6 +758,8 @@ impl Storage {
         issue.design = design.unwrap_or_default();
         issue.acceptance_criteria = acceptance.unwrap_or_default();
         issue.assignee = assignee.unwrap_or_default();
+        issue.role = role;
+        issue.effort = effort;
         issue.labels = labels;
         issue.external_ref = external_ref;
 
@@ -1898,6 +1906,7 @@ impl Storage {
         priority: Option<i32>,
         issue_type: Option<IssueType>,
         assignee: Option<&str>,
+        role: Option<Role>,
     ) -> Result<usize> {
         use std::io::Write;
 
@@ -1906,7 +1915,10 @@ impl Storage {
         let priority_list = priority.map(|p| vec![p]);
 
         // Get issues with filters (list_issues acquires its own lock)
-        let issues = self.list_issues(status, priority_list, issue_type, assignee, None)?;
+        let mut issues = self.list_issues(status, priority_list, issue_type, assignee, None)?;
+        if let Some(role) = role {
+            issues.retain(|issue| issue.role == Some(role));
+        }
 
         // Open output file
         let mut file = fs::File::create(output_path)
@@ -3039,6 +3051,8 @@ mod create_integrity_tests {
                 None,
                 Some("demo-2".to_string()),
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         let original_markdown = fs::read_to_string(tazk_dir.join("issues/demo-2.md")).unwrap();
@@ -3055,6 +3069,8 @@ mod create_integrity_tests {
             None,
             Some(original.id.clone()),
             Vec::new(),
+            None,
+            None,
         );
 
         assert!(result.is_err(), "duplicate creation must fail loudly");
@@ -3134,6 +3150,8 @@ mod ready_tests {
                     None,
                     None,
                     Vec::new(),
+                    None,
+                    None,
                 )
                 .expect("create issue");
         }
@@ -3303,6 +3321,8 @@ mod issue_layout_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
 
@@ -3337,6 +3357,8 @@ mod issue_layout_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         storage
@@ -3352,6 +3374,8 @@ mod issue_layout_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
 
@@ -3381,6 +3405,8 @@ mod issue_layout_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         assert_eq!(next.id, "demo-3");
@@ -3417,6 +3443,8 @@ mod claim_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .expect("create issue");
         (tmp, storage, issue.id)
@@ -3539,6 +3567,90 @@ mod claim_tests {
 }
 
 #[cfg(test)]
+mod role_effort_tests {
+    use super::*;
+
+    fn storage() -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = Storage::init(
+            tmp.path().join(".tazk"),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+        (tmp, storage)
+    }
+
+    fn create(storage: &Storage, role: Option<Role>, effort: Option<u8>) -> Result<Issue> {
+        storage.create_issue(
+            "T".to_string(),
+            String::new(),
+            None,
+            None,
+            2,
+            IssueType::Task,
+            None,
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            role,
+            effort,
+        )
+    }
+
+    #[test]
+    fn create_stores_role_and_effort() {
+        let (_tmp, storage) = storage();
+        let issue = create(&storage, Some(Role::Human), Some(2)).unwrap();
+        let stored = storage.get_issue(&issue.id).unwrap().unwrap();
+        assert_eq!(stored.role, Some(Role::Human));
+        assert_eq!(stored.effort, Some(2));
+    }
+
+    #[test]
+    fn create_rejects_out_of_range_effort() {
+        let (_tmp, storage) = storage();
+        assert!(create(&storage, None, Some(0)).is_err());
+        assert!(create(&storage, None, Some(6)).is_err());
+    }
+
+    #[test]
+    fn update_sets_and_clears_role_and_effort() {
+        let (_tmp, storage) = storage();
+        let issue = create(&storage, None, None).unwrap();
+        let mut updates = HashMap::new();
+        updates.insert("role".to_string(), "agent".to_string());
+        updates.insert("effort".to_string(), "5".to_string());
+        let updated = storage.update_issue(&issue.id, updates).unwrap();
+        assert_eq!(updated.role, Some(Role::Agent));
+        assert_eq!(updated.effort, Some(5));
+
+        let mut updates = HashMap::new();
+        updates.insert("role".to_string(), String::new());
+        updates.insert("effort".to_string(), String::new());
+        let cleared = storage.update_issue(&issue.id, updates).unwrap();
+        assert_eq!(cleared.role, None);
+        assert_eq!(cleared.effort, None);
+    }
+
+    #[test]
+    fn update_rejects_invalid_values_and_leaves_issue_untouched() {
+        let (_tmp, storage) = storage();
+        let issue = create(&storage, Some(Role::Human), Some(1)).unwrap();
+        for (key, value) in [("role", "robot"), ("effort", "9"), ("effort", "abc")] {
+            let mut updates = HashMap::new();
+            updates.insert(key.to_string(), value.to_string());
+            assert!(storage.update_issue(&issue.id, updates).is_err());
+        }
+        let stored = storage.get_issue(&issue.id).unwrap().unwrap();
+        assert_eq!(stored.role, Some(Role::Human));
+        assert_eq!(stored.effort, Some(1));
+    }
+}
+
+#[cfg(test)]
 mod comment_tests {
     use super::*;
 
@@ -3571,6 +3683,8 @@ mod comment_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
 
@@ -3605,6 +3719,8 @@ mod comment_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
 
@@ -3635,6 +3751,8 @@ mod comment_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .unwrap();
         let only = storage.add_comment(&issue.id, "alice", "keep me").unwrap();
@@ -3679,6 +3797,8 @@ mod search_replace_tests {
                 None,
                 None,
                 Vec::new(),
+                None,
+                None,
             )
             .expect("create issue");
         (tmp, storage, issue.id)
@@ -3879,6 +3999,20 @@ fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> R
             "priority" => issue.priority = value.parse()?,
             "issue_type" => issue.issue_type = value.parse()?,
             "assignee" => issue.assignee = value,
+            "role" => {
+                issue.role = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.parse()?)
+                }
+            }
+            "effort" => {
+                issue.effort = if value.is_empty() {
+                    None
+                } else {
+                    Some(parse_effort(&value)?)
+                }
+            }
             "external_ref" => {
                 issue.external_ref = if value.is_empty() { None } else { Some(value) }
             }

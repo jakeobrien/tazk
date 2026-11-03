@@ -25,7 +25,10 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use storage::{IssueStorageLayout, Storage};
-use types::{ClaimDuration, Comment, DependencyType, EditField, Issue, IssueType, Status};
+use types::{
+    ClaimDuration, Comment, DependencyType, EditField, Issue, IssueType, Role, Status, MAX_EFFORT,
+    MIN_EFFORT,
+};
 
 const PRIMARY_STORAGE_DIR: &str = ".tazk";
 
@@ -201,6 +204,14 @@ enum Commands {
         #[arg(short = 'a', long)]
         assignee: Option<String>,
 
+        /// Role the issue is for: human, agent
+        #[arg(short = 'r', long)]
+        role: Option<Role>,
+
+        /// Effort estimate from 1 to 5 (5 is the most effort)
+        #[arg(long, value_parser = clap::value_parser!(u8).range(MIN_EFFORT as i64..=MAX_EFFORT as i64))]
+        effort: Option<u8>,
+
         /// Labels (can be specified multiple times)
         #[arg(short, long)]
         label: Vec<String>,
@@ -219,7 +230,7 @@ enum Commands {
 
         /// Dependencies (comma-separated). Formats:
         /// Simple: "tz-1,tz-2" (defaults to 'blocked_by')
-        /// Advanced: "blocked_by:tz-1,related_to:tz-2,discovered-from:tz-3"
+        /// Advanced: "blocked_by:tz-1,related_to:tz-2,discovered_from:tz-3"
         #[arg(long)]
         deps: Option<String>,
 
@@ -253,6 +264,10 @@ enum Commands {
         /// Filter by assignee
         #[arg(long)]
         assignee: Option<String>,
+
+        /// Filter by role: human, agent
+        #[arg(short = 'r', long)]
+        role: Option<Role>,
 
         /// Filter by labels (must have ALL specified labels)
         #[arg(short = 'l', long = "label")]
@@ -311,6 +326,22 @@ enum Commands {
         /// Clear assignee
         #[arg(long)]
         unassign: bool,
+
+        /// New role: human, agent
+        #[arg(short = 'r', long, conflicts_with = "clear_role")]
+        role: Option<Role>,
+
+        /// Clear role
+        #[arg(long = "clear-role")]
+        clear_role: bool,
+
+        /// New effort estimate from 1 to 5 (5 is the most effort)
+        #[arg(long, conflicts_with = "clear_effort", value_parser = clap::value_parser!(u8).range(MIN_EFFORT as i64..=MAX_EFFORT as i64))]
+        effort: Option<u8>,
+
+        /// Clear effort
+        #[arg(long = "clear-effort")]
+        clear_effort: bool,
 
         /// New title
         #[arg(long, allow_hyphen_values = true)]
@@ -560,6 +591,10 @@ enum Commands {
         /// Filter by assignee
         #[arg(long)]
         assignee: Option<String>,
+
+        /// Filter by role: human, agent
+        #[arg(short = 'r', long)]
+        role: Option<Role>,
     },
 
     /// Bidirectional sync between markdown and JSONL formats
@@ -582,6 +617,10 @@ enum Commands {
         /// Filter by assignee
         #[arg(short = 'a', long)]
         assignee: Option<String>,
+
+        /// Filter by role: human, agent
+        #[arg(short = 'r', long)]
+        role: Option<Role>,
 
         /// Filter by priority (repeatable and/or comma-separated, e.g. "-p 0 -p 1" or "-p 0,1")
         #[arg(short = 'p', long)]
@@ -766,7 +805,7 @@ enum DepCommands {
         #[arg(long = "target", value_name = "DEPENDENCY_ID")]
         dependency_id: String,
 
-        /// Dependency type: blocked_by, related_to, child_of, discovered-from, tracks
+        /// Dependency type: blocked_by, related_to, child_of, discovered_from, tracks
         #[arg(short = 't', long, default_value = "blocked_by")]
         r#type: DependencyType,
     },
@@ -956,6 +995,12 @@ fn print_issue_metadata(issue: &Issue, color: bool) {
     }
     if !issue.assignee.is_empty() {
         println!("{} {}", style_label("Assignee:", color), issue.assignee);
+    }
+    if let Some(role) = issue.role {
+        println!("{} {}", style_label("Role:", color), role);
+    }
+    if let Some(effort) = issue.effort {
+        println!("{} {}", style_label("Effort:", color), effort);
     }
     if !issue.labels.is_empty() {
         println!(
@@ -1284,6 +1329,8 @@ struct IssueFilters<'a> {
     title: Option<&'a str>,
     /// Only direct children of this parent issue.
     parent: Option<&'a str>,
+    /// Only issues with this role.
+    role: Option<Role>,
 }
 
 /// Parse priority filters into a flat list, shared by `list` and `ready`. The
@@ -1352,6 +1399,10 @@ impl IssueFilters<'_> {
         if let Some(title_filter) = self.title {
             let title_lower = title_filter.to_lowercase();
             issues.retain(|issue| issue.title.to_lowercase().contains(&title_lower));
+        }
+
+        if let Some(role) = self.role {
+            issues.retain(|issue| issue.role == Some(role));
         }
 
         if let Some(parent_id) = self.parent {
@@ -1492,6 +1543,8 @@ fn run() -> Result<()> {
             design,
             acceptance,
             assignee,
+            role,
+            effort,
             label,
             labels,
             external_ref,
@@ -1530,7 +1583,7 @@ fn run() -> Result<()> {
             // Parse dependencies
             // Supports two formats:
             // 1. Simple: "tz-1,tz-2" (defaults to 'blocked_by' type)
-            // 2. Advanced: "blocked_by:tz-1,related_to:tz-2,discovered-from:tz-3"
+            // 2. Advanced: "blocked_by:tz-1,related_to:tz-2,discovered_from:tz-3"
             let mut parsed_deps = if let Some(deps_str) = deps {
                 deps_str
                     .split(',')
@@ -1590,6 +1643,8 @@ fn run() -> Result<()> {
                 external_ref,
                 id,
                 parsed_deps,
+                role,
+                effort,
             )?;
 
             if json {
@@ -1607,6 +1662,7 @@ fn run() -> Result<()> {
             priority,
             r#type,
             assignee,
+            role,
             labels,
             id,
             title,
@@ -1643,6 +1699,7 @@ fn run() -> Result<()> {
                 id: id.as_deref(),
                 title: title.as_deref(),
                 parent: parent.as_deref(),
+                role,
             }
             .apply(&mut issues);
 
@@ -1763,6 +1820,10 @@ fn run() -> Result<()> {
             priority,
             assignee,
             unassign,
+            role,
+            clear_role,
+            effort,
+            clear_effort,
             title,
             description,
             description_file,
@@ -1849,6 +1910,18 @@ fn run() -> Result<()> {
             }
             if unassign {
                 updates.insert("assignee".to_string(), String::new());
+            }
+            if let Some(r) = role {
+                updates.insert("role".to_string(), r.to_string());
+            }
+            if clear_role {
+                updates.insert("role".to_string(), String::new());
+            }
+            if let Some(e) = effort {
+                updates.insert("effort".to_string(), e.to_string());
+            }
+            if clear_effort {
+                updates.insert("effort".to_string(), String::new());
             }
             if let Some(t) = title {
                 updates.insert("title".to_string(), t);
@@ -2469,6 +2542,7 @@ fn run() -> Result<()> {
             priority,
             r#type,
             assignee,
+            role,
         } => {
             let storage = get_storage(tz_dir, readonly)?;
 
@@ -2486,6 +2560,7 @@ fn run() -> Result<()> {
                     priority,
                     r#type,
                     assignee.as_deref(),
+                    role,
                 )?;
                 eprintln!("Exported {} issues to {}", count, path.display());
             } else if tz_output_default {
@@ -2497,19 +2572,23 @@ fn run() -> Result<()> {
                     priority,
                     r#type,
                     assignee.as_deref(),
+                    role,
                 )?;
                 eprintln!("Exported {} issues to {}", count, path.display());
             } else {
                 // Default: write to stdout
                 // Convert single priority to vector for list_issues
                 let priority_list = priority.map(|p| vec![p]);
-                let issues = storage.list_issues(
+                let mut issues = storage.list_issues(
                     status,
                     priority_list,
                     r#type,
                     assignee.as_deref(),
                     None,
                 )?;
+                if let Some(role) = role {
+                    issues.retain(|issue| issue.role == Some(role));
+                }
                 for issue in &issues {
                     let json = serde_json::to_string(&issue)?;
                     println!("{}", json);
@@ -2661,6 +2740,7 @@ fn run() -> Result<()> {
 
         Commands::Ready {
             assignee,
+            role,
             priority,
             r#type,
             labels,
@@ -2698,6 +2778,7 @@ fn run() -> Result<()> {
                 id: id.as_deref(),
                 title: title.as_deref(),
                 parent: parent.as_deref(),
+                role,
             }
             .apply(&mut ready);
 
@@ -3087,11 +3168,14 @@ CREATING ISSUES
   tz create "Fix login bug"
   tz create "Add auth" -p 0 -t feature
   tz create "Write tests" -d "Unit tests for auth" --assignee alice
+  tz create "Triage logs" --role agent --effort 2   Role: human|agent, effort: 1-5
 
 VIEWING ISSUES
   tz list       List all issues
   tz list --status open  List by status
   tz list --priority 0  List by priority (0-4, 0=highest)
+  tz list --role agent  List by role (human, agent)
+  tz ready --role agent Ready work for a role
   tz show myapp-1       Show issue details
 
 MANAGING DEPENDENCIES
@@ -3101,7 +3185,7 @@ DEPENDENCY TYPES
   blocked_by  This task can't start until the target task is complete
   related_to  Soft connection, doesn't block progress
   child_of  This task is a subtask of the target (epic)
-  discovered-from  Auto-created when AI discovers related work
+  discovered_from  Auto-created when AI discovers related work
   tracks  Tracks the target task
 
 READY WORK
