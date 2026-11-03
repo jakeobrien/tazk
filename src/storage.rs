@@ -1,0 +1,4191 @@
+use crate::format::{issue_to_markdown, markdown_to_issue};
+use crate::hash;
+use crate::lock::Lock;
+use crate::paths::{ensure_contained, IssueId};
+use crate::transaction::{atomic_write, FileTransaction};
+use crate::types::{
+    BlockedIssue, Comment, DependencyType, EditField, Issue, IssueType, Stats, Status,
+};
+use anyhow::{Context, Result};
+use regex::Regex;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorageAccess {
+    ReadWrite,
+    ReadOnly,
+}
+
+pub struct Storage {
+    beads_dir: PathBuf,
+    issues_dir: PathBuf,
+    access: StorageAccess,
+}
+
+/// A checked issue snapshot with the database lock held. Destructive external
+/// reconciliation can inspect/delete comments without a nested lock or a rename
+/// changing ownership between the check and the external request.
+pub struct LockedIssue<'a> {
+    storage: &'a Storage,
+    issue: Issue,
+    _lock: Lock,
+}
+
+impl LockedIssue<'_> {
+    pub fn comments(&self) -> Result<Vec<Comment>> {
+        self.storage.read_comments_no_lock(&self.issue.id)
+    }
+
+    pub fn delete_comment(&self, comment_id: &str) -> Result<Comment> {
+        let mut comments = self.comments()?;
+        let index = comments
+            .iter()
+            .position(|comment| comment.id == comment_id)
+            .with_context(|| format!("Comment not found: {comment_id}"))?;
+        let removed = comments.remove(index);
+        self.storage
+            .write_comments_no_lock(&self.issue.id, &comments)?;
+        Ok(removed)
+    }
+
+    pub fn update(mut self, updates: HashMap<String, String>) -> Result<Issue> {
+        apply_issue_updates(&mut self.issue, updates)?;
+        let path = self
+            .storage
+            .existing_or_configured_issue_path(&self.issue.id)?;
+        self.storage.write_issue_to_path(&path, &self.issue)?;
+        markdown_to_issue(&self.issue.id, &fs::read_to_string(path)?)
+    }
+}
+
+/// Replace issue ID references in text fields using word boundaries
+///
+/// This function replaces all occurrences of issue IDs in text, but only when they appear
+/// as standalone tokens (delimited by non-alphanumeric characters or word boundaries).
+/// This prevents matching IDs that are embedded in longer strings.
+///
+/// Uses a HashMap for O(1) lookup of replacement mappings.
+/// Extract the trailing numeric component of an issue ID (the part after the
+/// last hyphen) if it is a plain integer, e.g. `minibeads-42` -> `Some(42)`.
+/// Hash-based IDs like `minibeads-a3f9` return `None`.
+fn numeric_id_suffix(id: &str) -> Option<u32> {
+    let suffix = id.rsplit_once('-').map(|(_, s)| s).unwrap_or(id);
+    suffix.parse::<u32>().ok()
+}
+
+/// Ordering for `list`: numeric IDs first (ascending, so the most recent
+/// appear last), then hash-based IDs ordered by creation date (oldest first).
+fn compare_for_list(a: &Issue, b: &Issue) -> std::cmp::Ordering {
+    match (numeric_id_suffix(&a.id), numeric_id_suffix(&b.id)) {
+        (Some(an), Some(bn)) => an.cmp(&bn),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.created_at.cmp(&b.created_at),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueStorageLayout {
+    Flat,
+    Sharded,
+}
+
+impl IssueStorageLayout {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IssueStorageLayout::Flat => "flat",
+            IssueStorageLayout::Sharded => "sharded",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "flat" => Ok(IssueStorageLayout::Flat),
+            "sharded" => Ok(IssueStorageLayout::Sharded),
+            _ => anyhow::bail!(
+                "Invalid issue-storage-layout: '{}'. Valid values are: flat, sharded",
+                value
+            ),
+        }
+    }
+}
+
+fn issue_suffix(id: &str) -> &str {
+    id.rsplit_once('-').map(|(_, suffix)| suffix).unwrap_or(id)
+}
+
+fn shard_char(c: Option<char>) -> String {
+    match c {
+        Some(c) if c.is_ascii_alphanumeric() => c.to_ascii_lowercase().to_string(),
+        _ => "_".to_string(),
+    }
+}
+
+fn sharded_relative_path(id: &str) -> PathBuf {
+    let suffix = issue_suffix(id);
+
+    let mut path = PathBuf::new();
+    if suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty() {
+        let mut chars = suffix.chars().rev();
+        let ones = chars.next();
+        let tens = chars.next().or(Some('0'));
+        path.push("n");
+        path.push(shard_char(tens).as_str());
+        path.push(shard_char(ones).as_str());
+    } else {
+        let mut chars = suffix.chars();
+        path.push("h");
+        path.push(shard_char(chars.next()).as_str());
+        path.push(shard_char(chars.next()).as_str());
+    }
+
+    path.push(format!("{}.md", id));
+    path
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("md")
+}
+
+fn replace_issue_ids_in_text(text: &str, id_mapping: &HashMap<String, String>) -> String {
+    if text.is_empty() || id_mapping.is_empty() {
+        return text.to_string();
+    }
+
+    // Build a regex pattern that matches any issue ID with word boundaries
+    // Pattern: \b(prefix1-suffix1|prefix2-suffix2|...)\b
+    let mut patterns: Vec<String> = id_mapping.keys().map(|id| regex::escape(id)).collect();
+
+    if patterns.is_empty() {
+        return text.to_string();
+    }
+
+    // Sort by length (longest first) to avoid partial matches
+    patterns.sort_by_key(|b| std::cmp::Reverse(b.len()));
+
+    let pattern = format!(r"\b({})\b", patterns.join("|"));
+
+    // Compile regex (note: in production code, this could be cached)
+    let re = match Regex::new(&pattern) {
+        Ok(r) => r,
+        Err(_) => return text.to_string(), // Fallback: return original text
+    };
+
+    // Replace all matches using the mapping
+    re.replace_all(text, |caps: &regex::Captures| {
+        let matched_id = &caps[1];
+        id_mapping
+            .get(matched_id)
+            .cloned()
+            .unwrap_or_else(|| matched_id.to_string())
+    })
+    .to_string()
+}
+
+pub fn is_github_issue_ref(value: &str) -> bool {
+    value.starts_with("https://github.com/") && value.contains("/issues/")
+}
+
+impl Storage {
+    /// Get the beads directory path
+    pub fn get_beads_dir(&self) -> PathBuf {
+        self.beads_dir.clone()
+    }
+
+    fn config_path(&self) -> PathBuf {
+        self.beads_dir.join("config.yaml")
+    }
+}
+
+impl Storage {
+    /// Commit one complete ID permutation, preserving comment identity and
+    /// updating all stores that use the issue ID as ownership metadata.
+    fn apply_id_mapping(
+        &self,
+        all_issues: Vec<Issue>,
+        mapping: &HashMap<String, String>,
+        config_updates: &[(&str, &str, &str)],
+    ) -> Result<()> {
+        let mut destinations = HashSet::new();
+        for issue in &all_issues {
+            let destination = mapping.get(&issue.id).unwrap_or(&issue.id);
+            IssueId::parse(destination)?;
+            anyhow::ensure!(
+                destinations.insert(destination),
+                "ID mapping would overwrite issue {destination}"
+            );
+        }
+
+        let mut transaction = FileTransaction::new(&self.beads_dir);
+        let comment_sources: HashSet<PathBuf> = mapping
+            .keys()
+            .map(|id| self.comment_path(id))
+            .collect::<Result<_>>()?;
+        // Schedule removals first. Destination writes below take precedence in
+        // a swap or longer cycle; no iteration can delete an earlier result.
+        for (old_id, new_id) in mapping {
+            if old_id == new_id {
+                continue;
+            }
+            if let Some(path) = self.existing_issue_path(old_id)? {
+                transaction.remove(path);
+            }
+            let source = self.comment_path(old_id)?;
+            let destination = self.comment_path(new_id)?;
+            anyhow::ensure!(
+                !destination.exists() || comment_sources.contains(&destination),
+                "Renaming would overwrite orphaned comments for {new_id}"
+            );
+            if source.exists() {
+                transaction.remove(source);
+            }
+        }
+
+        for mut issue in all_issues {
+            let old_id = issue.id.clone();
+            if remap_issue(&mut issue, mapping) {
+                let source = self
+                    .existing_issue_path(&old_id)?
+                    .context("Migration source issue disappeared")?;
+                let modified = fs::metadata(source)?.modified()?;
+                let path = if old_id != issue.id {
+                    self.configured_issue_path(&issue.id)?
+                } else {
+                    self.existing_or_configured_issue_path(&issue.id)?
+                };
+                transaction.write_with_mtime(
+                    path,
+                    issue_to_markdown(&issue)?.into_bytes(),
+                    modified,
+                );
+            }
+            let mut comments = self.read_comments_no_lock(&old_id)?;
+            let mut comments_changed = old_id != issue.id && !comments.is_empty();
+            for comment in &mut comments {
+                if comment.issue_id != issue.id {
+                    comment.issue_id.clone_from(&issue.id);
+                    comments_changed = true;
+                }
+                // Comment IDs are stable identities; do not regenerate them
+                // just because their owning issue has a different ID.
+                let body = replace_issue_ids_in_text(&comment.body, mapping);
+                if body != comment.body {
+                    comment.body = body;
+                    comment.updated_at = chrono::Utc::now();
+                    comments_changed = true;
+                }
+            }
+            if comments_changed {
+                transaction.write(
+                    self.comment_path(&issue.id)?,
+                    serde_json::to_vec_pretty(&comments)?,
+                );
+            }
+        }
+
+        let state_path = self.beads_dir.join("github-sync-state.json");
+        ensure_contained(&self.beads_dir, &state_path)?;
+        if state_path.exists() {
+            let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+            let entries = state
+                .get_mut("issues")
+                .and_then(serde_json::Value::as_object_mut)
+                .context("Invalid GitHub sync ancestry")?;
+            let mut changed = false;
+            for entry in entries.values_mut() {
+                if let Some(new_id) = entry
+                    .get("local_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|old_id| mapping.get(old_id))
+                {
+                    entry["local_id"] = serde_json::Value::String(new_id.clone());
+                    changed = true;
+                }
+            }
+            if changed {
+                transaction.write(state_path, serde_json::to_vec_pretty(&state)?);
+            }
+        }
+        self.stage_github_ancestor_id_migrations(mapping, &mut transaction)?;
+
+        // Keep the default JSONL store from resurrecting old IDs at the next
+        // sync. Preserve its independently edited fields and timestamps.
+        let jsonl_path = self.beads_dir.join("issues.jsonl");
+        ensure_contained(&self.beads_dir, &jsonl_path)?;
+        if jsonl_path.exists() {
+            let mut issues = crate::sync::load_jsonl_issues(&jsonl_path)?;
+            let mut seen = HashSet::new();
+            let mut changed = false;
+            let mut lines = Vec::with_capacity(issues.len());
+            for record in issues.values_mut() {
+                changed |= remap_issue(&mut record.issue, mapping);
+                anyhow::ensure!(
+                    seen.insert(record.issue.id.as_str()),
+                    "ID mapping would overwrite a JSONL issue"
+                );
+                lines.push(serde_json::to_string(&record.issue)?);
+            }
+            if changed {
+                lines.sort();
+                transaction.write(jsonl_path, (lines.join("\n") + "\n").into_bytes());
+            }
+        }
+
+        for (file, key, value) in config_updates {
+            transaction.config(file, key, value)?;
+        }
+        transaction.commit()
+    }
+
+    fn stage_github_ancestor_id_migrations(
+        &self,
+        mapping: &HashMap<String, String>,
+        transaction: &mut FileTransaction<'_>,
+    ) -> Result<()> {
+        let directory = self.beads_dir.join("sync_ancestors/github");
+        ensure_contained(&self.beads_dir, &directory)?;
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to inspect GitHub ancestors in {}",
+                        directory.display()
+                    )
+                });
+            }
+        };
+        for entry in entries {
+            let path = entry?.path();
+            ensure_contained(&self.beads_dir, &path)?;
+            anyhow::ensure!(
+                path.is_file(),
+                "Unexpected GitHub ancestor entry {}",
+                path.display()
+            );
+            let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| format!("Corrupt GitHub ancestor {}", path.display()))?;
+            anyhow::ensure!(
+                record
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(1),
+                "Unsupported GitHub ancestor schema in {}",
+                path.display()
+            );
+            let remote = record
+                .get("remote")
+                .and_then(serde_json::Value::as_str)
+                .context("GitHub ancestor is missing its remote URL")?;
+            let expected_name = format!("sha256-{:x}.json", Sha256::digest(remote.as_bytes()));
+            anyhow::ensure!(
+                path.file_name().and_then(std::ffi::OsStr::to_str) == Some(expected_name.as_str()),
+                "GitHub ancestor URL/key mismatch in {}",
+                path.display()
+            );
+            let local_id = record
+                .get("local_id")
+                .and_then(serde_json::Value::as_str)
+                .context("GitHub ancestor is missing its local issue ID")?;
+            let Some(next_id) = mapping.get(local_id) else {
+                continue;
+            };
+            IssueId::parse(next_id)?;
+            record["local_id"] = serde_json::Value::String(next_id.clone());
+            let mut content = serde_json::to_vec_pretty(&record)?;
+            content.push(b'\n');
+            transaction.write(path, content);
+        }
+        Ok(())
+    }
+
+    /// Open storage at the given minibeads directory
+    pub fn open(beads_dir: PathBuf) -> Result<Self> {
+        let issues_dir = beads_dir.join("issues");
+
+        // Create directories if they don't exist
+        fs::create_dir_all(&issues_dir).context("Failed to create issues directory")?;
+
+        // Validate and ensure config.yaml exists
+        let config_path = beads_dir.join("config.yaml");
+        if !config_path.exists() {
+            // Prefer inferring the prefix from issue files that already exist in
+            // issues_dir (ground truth -- e.g. this is upstream `bd` data, or a
+            // config.yaml that was lost/deleted): the directory-name guess below
+            // has no relation to a project's real issue IDs and can silently
+            // produce a wrong prefix (e.g. "tmp" for a checkout under /tmp/...).
+            // Only fall back to the directory-name guess, then to "bd", when
+            // there are no existing issues to learn from.
+            let prefix = infer_prefix_from_issues_dir(&issues_dir)
+                .or_else(|| infer_prefix(&beads_dir))
+                .unwrap_or_else(|| "bd".to_string());
+            let mut config = HashMap::new();
+            config.insert("issue-prefix".to_string(), prefix);
+            let config_yaml = serde_yaml::to_string(&config)?;
+            fs::write(&config_path, config_yaml).context("Failed to create config.yaml")?;
+        } else {
+            // Validate that config.yaml parses. We do NOT require an active
+            // `issue-prefix` key here: upstream bd writes a config.yaml template
+            // where `issue-prefix` is commented out (the prefix lives in its
+            // SQLite DB). To stay a drop-in replacement we tolerate that and
+            // infer the prefix from issue filenames on demand (see get_prefix).
+            let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
+            serde_yaml::from_str::<HashMap<String, String>>(&content)
+                .context("Failed to parse config.yaml")?;
+        }
+
+        // Ensure config-minibeads.yaml exists with defaults (don't clobber if exists)
+        let minibeads_config_path = beads_dir.join("config-minibeads.yaml");
+        if !minibeads_config_path.exists() {
+            create_minibeads_config(&beads_dir, false, IssueStorageLayout::Flat)?;
+            // Default to false/flat for existing repos
+        }
+
+        // Ensure .gitignore exists and has required entries
+        ensure_gitignore(&beads_dir)?;
+
+        Ok(Self {
+            beads_dir,
+            issues_dir,
+            access: StorageAccess::ReadWrite,
+        })
+    }
+
+    /// Open existing storage without bootstrapping config or recovering writes.
+    /// Reads still take the transient database lock; this is a logical write
+    /// guard, not support for a filesystem mounted without write permission.
+    pub fn open_readonly(beads_dir: PathBuf) -> Result<Self> {
+        let issues_dir = beads_dir.join("issues");
+        anyhow::ensure!(
+            issues_dir.is_dir(),
+            "Existing issues directory required for --readonly"
+        );
+        ensure_contained(&beads_dir, &issues_dir)?;
+        let storage = Self {
+            beads_dir,
+            issues_dir,
+            access: StorageAccess::ReadOnly,
+        };
+        let _lock = storage.lock_for_read()?;
+        storage.list_config_values()?;
+        storage.issue_storage_layout()?;
+        Ok(storage)
+    }
+
+    fn ensure_writable(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.access == StorageAccess::ReadWrite,
+            "Storage is read-only"
+        );
+        Ok(())
+    }
+
+    fn lock_for_write(&self) -> Result<Lock> {
+        self.ensure_writable()?;
+        Lock::acquire(&self.beads_dir)
+    }
+
+    fn lock_for_read(&self) -> Result<Lock> {
+        match self.access {
+            StorageAccess::ReadWrite => Lock::acquire(&self.beads_dir),
+            StorageAccess::ReadOnly => Lock::acquire_without_recovery(&self.beads_dir),
+        }
+    }
+
+    /// Initialize a new minibeads database
+    pub fn init(
+        beads_dir: PathBuf,
+        prefix: Option<String>,
+        mb_hash_ids: bool,
+        issue_layout: IssueStorageLayout,
+    ) -> Result<Self> {
+        if let Some(value) = prefix.as_deref() {
+            IssueId::parse(value)?;
+        }
+        // Create minibeads directory
+        fs::create_dir_all(&beads_dir).context("Failed to create minibeads directory")?;
+
+        // Create issues directory
+        let issues_dir = beads_dir.join("issues");
+        fs::create_dir_all(&issues_dir).context("Failed to create issues directory")?;
+
+        // Determine prefix: an explicit --prefix wins; otherwise prefer
+        // inferring from issue files that already exist in issues_dir (ground
+        // truth) over the directory-name guess -- see the matching comment in
+        // `open`. `init` usually creates a brand-new, empty issues_dir, but
+        // this keeps both entry points consistent and safe if it's ever
+        // pointed at a directory that already has orphaned issue files.
+        let prefix = prefix
+            .or_else(|| infer_prefix_from_issues_dir(&issues_dir))
+            .or_else(|| infer_prefix(&beads_dir))
+            .unwrap_or_else(|| "bd".to_string());
+
+        IssueId::parse(&prefix)?;
+        // Create config.yaml with only upstream-compatible options
+        let config_path = beads_dir.join("config.yaml");
+        let mut config = HashMap::new();
+        config.insert("issue-prefix".to_string(), prefix);
+        let config_yaml = serde_yaml::to_string(&config)?;
+        fs::write(&config_path, config_yaml).context("Failed to write config.yaml")?;
+
+        // Create config-minibeads.yaml with minibeads-specific options
+        create_minibeads_config(&beads_dir, mb_hash_ids, issue_layout)?;
+
+        // Ensure .gitignore exists and has required entries
+        ensure_gitignore(&beads_dir)?;
+
+        Ok(Self {
+            beads_dir,
+            issues_dir,
+            access: StorageAccess::ReadWrite,
+        })
+    }
+
+    /// Get the issue prefix from config
+    pub fn get_prefix(&self) -> Result<String> {
+        let config_path = self.config_path();
+
+        if !config_path.exists() {
+            // Try to infer from existing issues
+            return self.infer_prefix_from_issues();
+        }
+
+        let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
+        let config: HashMap<String, String> =
+            serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
+
+        // Upstream bd leaves `issue-prefix` commented out in config.yaml and
+        // stores the prefix in its database; fall back to inferring it from the
+        // existing issue filenames so we can operate on upstream-created repos.
+        match config.get("issue-prefix") {
+            Some(prefix) => {
+                IssueId::parse(prefix)?;
+                Ok(prefix.clone())
+            }
+            None => self.infer_prefix_from_issues(),
+        }
+    }
+
+    /// Get a compatibility config value from config.yaml.
+    pub fn get_config_value(&self, key: &str) -> Result<Option<String>> {
+        let key = normalize_config_key(key);
+        let config_path = self.config_path();
+
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
+        let config: HashMap<String, serde_yaml::Value> =
+            serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
+
+        Ok(config.get(&key).map(yaml_value_to_string))
+    }
+
+    /// Set a compatibility config value in config.yaml.
+    pub fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
+        let _lock = self.lock_for_write()?;
+        let key = normalize_config_key(key);
+        if key == "issue-prefix" {
+            IssueId::parse(value)?;
+        }
+        let config_path = self.config_path();
+
+        if !config_path.exists() {
+            fs::write(&config_path, "").context("Failed to create config.yaml")?;
+        }
+
+        upsert_yaml_key_value(&config_path, &key, value)
+    }
+
+    /// Return all config.yaml scalar values for `mb config list`.
+    pub fn list_config_values(&self) -> Result<HashMap<String, String>> {
+        let config_path = self.config_path();
+
+        if !config_path.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
+        let config: HashMap<String, serde_yaml::Value> =
+            serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
+
+        Ok(config
+            .into_iter()
+            .map(|(key, value)| (key, yaml_value_to_string(&value)))
+            .collect())
+    }
+
+    /// Check if hash-based IDs are enabled in config-minibeads.yaml
+    fn use_hash_ids(&self) -> Result<bool> {
+        let config_path = self.beads_dir.join("config-minibeads.yaml");
+
+        if !config_path.exists() {
+            return Ok(false); // Default to false if no config
+        }
+
+        let content =
+            fs::read_to_string(&config_path).context("Failed to read config-minibeads.yaml")?;
+        let config: HashMap<String, String> =
+            serde_yaml::from_str(&content).context("Failed to parse config-minibeads.yaml")?;
+
+        // Parse mb-hash-ids field (default to false if not present)
+        match config.get("mb-hash-ids") {
+            Some(value) => Ok(value == "true"),
+            None => Ok(false),
+        }
+    }
+
+    /// Return the configured issue file layout.
+    pub fn issue_storage_layout(&self) -> Result<IssueStorageLayout> {
+        let config_path = self.beads_dir.join("config-minibeads.yaml");
+
+        if !config_path.exists() {
+            return Ok(IssueStorageLayout::Flat);
+        }
+
+        let content =
+            fs::read_to_string(&config_path).context("Failed to read config-minibeads.yaml")?;
+        let config: HashMap<String, String> =
+            serde_yaml::from_str(&content).context("Failed to parse config-minibeads.yaml")?;
+
+        match config.get("issue-storage-layout") {
+            Some(value) => IssueStorageLayout::parse(value),
+            None => Ok(IssueStorageLayout::Flat),
+        }
+    }
+
+    fn flat_issue_path(&self, id: &str) -> PathBuf {
+        self.issues_dir.join(format!("{}.md", id))
+    }
+
+    fn sharded_issue_path(&self, id: &str) -> PathBuf {
+        self.issues_dir.join(sharded_relative_path(id))
+    }
+
+    fn issue_path_for_layout(&self, id: &str, layout: IssueStorageLayout) -> PathBuf {
+        match layout {
+            IssueStorageLayout::Flat => self.flat_issue_path(id),
+            IssueStorageLayout::Sharded => self.sharded_issue_path(id),
+        }
+    }
+
+    fn configured_issue_path(&self, id: &str) -> Result<PathBuf> {
+        let id = IssueId::parse(id)?;
+        let path = self.issue_path_for_layout(id.as_str(), self.issue_storage_layout()?);
+        ensure_contained(&self.beads_dir, &path)?;
+        Ok(path)
+    }
+
+    fn existing_issue_path(&self, id: &str) -> Result<Option<PathBuf>> {
+        let configured_path = self.configured_issue_path(id)?;
+        if configured_path.exists() {
+            return Ok(Some(configured_path));
+        }
+
+        let flat_path = self.flat_issue_path(id);
+        if flat_path.exists() {
+            ensure_contained(&self.beads_dir, &flat_path)?;
+            return Ok(Some(flat_path));
+        }
+
+        let sharded_path = self.sharded_issue_path(id);
+        if sharded_path.exists() {
+            ensure_contained(&self.beads_dir, &sharded_path)?;
+            return Ok(Some(sharded_path));
+        }
+
+        Ok(None)
+    }
+
+    fn issue_exists_any_layout(&self, id: &str) -> Result<bool> {
+        Ok(self.existing_issue_path(id)?.is_some())
+    }
+
+    pub(crate) fn existing_or_configured_issue_path(&self, id: &str) -> Result<PathBuf> {
+        match self.existing_issue_path(id)? {
+            Some(path) => Ok(path),
+            None => self.configured_issue_path(id),
+        }
+    }
+
+    fn write_issue_to_path(&self, path: &Path, issue: &Issue) -> Result<()> {
+        IssueId::parse(&issue.id)?;
+        ensure_contained(&self.beads_dir, path)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create issue directory: {}", parent.display())
+            })?;
+        }
+        let markdown = issue_to_markdown(issue)?;
+        atomic_write(path, markdown.as_bytes())
+            .with_context(|| format!("Failed to write issue file: {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Write a newly-created issue without ever replacing an existing file.
+    ///
+    /// ID allocation can observe stale or otherwise unexpected state. A
+    /// normal `fs::write` would then replace an unrelated issue and let the
+    /// caller print a fabricated "Created issue" success. `create_new(true)`
+    /// makes that collision an explicit error instead.
+    fn write_new_issue_to_path(&self, path: &Path, issue: &Issue) -> Result<()> {
+        IssueId::parse(&issue.id)?;
+        ensure_contained(&self.beads_dir, path)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create issue directory: {}", parent.display())
+            })?;
+        }
+        let markdown = issue_to_markdown(issue)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .with_context(|| format!("Failed to create issue file: {}", path.display()))?;
+        if let Err(error) = file.write_all(markdown.as_bytes()) {
+            drop(file);
+            let _ = fs::remove_file(path);
+            return Err(error).context("Failed to write newly-created issue file");
+        }
+        Ok(())
+    }
+
+    fn issue_file_paths(&self) -> Result<Vec<(String, PathBuf)>> {
+        issue_file_paths_in(&self.issues_dir)
+    }
+
+    /// Get hash encoding format from config-minibeads.yaml
+    fn get_hash_encoding(&self) -> Result<hash::HashEncoding> {
+        let config_path = self.beads_dir.join("config-minibeads.yaml");
+
+        if !config_path.exists() {
+            return Ok(hash::HashEncoding::Base36); // Default to base36 if no config
+        }
+
+        let content =
+            fs::read_to_string(&config_path).context("Failed to read config-minibeads.yaml")?;
+        let config: HashMap<String, String> =
+            serde_yaml::from_str(&content).context("Failed to parse config-minibeads.yaml")?;
+
+        // Parse hash-encoding field (default to base36 if not present)
+        match config.get("hash-encoding") {
+            Some(value) => match value.as_str() {
+                "hex" => Ok(hash::HashEncoding::Hex),
+                "base36" => Ok(hash::HashEncoding::Base36),
+                _ => {
+                    eprintln!(
+                        "Warning: Unknown hash-encoding value '{}' in config-minibeads.yaml, using base36",
+                        value
+                    );
+                    Ok(hash::HashEncoding::Base36)
+                }
+            },
+            None => Ok(hash::HashEncoding::Base36),
+        }
+    }
+
+    /// Infer prefix from existing issues in the filesystem
+    fn infer_prefix_from_issues(&self) -> Result<String> {
+        infer_prefix_from_issues_dir(&self.issues_dir)
+            .ok_or_else(|| anyhow::anyhow!("No issues found to infer prefix"))
+    }
+
+    /// Get the next issue number
+    fn get_next_number(&self, prefix: &str) -> Result<u32> {
+        let mut max_num = 0;
+        for (issue_id, _) in self.issue_file_paths()? {
+            if let Some(pos) = issue_id.rfind('-') {
+                let issue_prefix = &issue_id[..pos];
+                let num_str = &issue_id[pos + 1..];
+                if issue_prefix == prefix {
+                    if let Ok(num) = num_str.parse::<u32>() {
+                        max_num = max_num.max(num);
+                    }
+                }
+            }
+        }
+
+        Ok(max_num + 1)
+    }
+
+    /// Generate a hash-based ID with adaptive length and collision handling
+    fn generate_hash_id(&self, prefix: &str, title: &str, description: &str) -> Result<String> {
+        use chrono::Utc;
+
+        let timestamp = Utc::now();
+
+        // Count existing issues to determine adaptive length
+        let issue_count = self.issue_file_paths()?.len();
+
+        // Get hash encoding from config
+        let encoding = self.get_hash_encoding()?;
+
+        // Use hash::generate_hash_id_with_collision_check with filesystem checker
+        hash::generate_hash_id_with_collision_check(
+            prefix,
+            title,
+            description,
+            timestamp,
+            issue_count,
+            encoding,
+            |candidate| self.issue_exists_any_layout(candidate).unwrap_or(false),
+        )
+    }
+
+    /// Create a new issue
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_issue(
+        &self,
+        title: String,
+        description: String,
+        design: Option<String>,
+        acceptance: Option<String>,
+        priority: i32,
+        issue_type: IssueType,
+        assignee: Option<String>,
+        labels: Vec<String>,
+        external_ref: Option<String>,
+        id: Option<String>,
+        deps: Vec<(String, DependencyType)>,
+    ) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        // Generate ID if not provided
+        let issue_id = if let Some(id) = id {
+            id
+        } else {
+            let prefix = self.get_prefix()?;
+            let use_hash_ids = self.use_hash_ids()?;
+
+            if use_hash_ids {
+                // Use hash-based ID generation
+                self.generate_hash_id(&prefix, &title, &description)?
+            } else {
+                // Use sequential numbering
+                let num = self.get_next_number(&prefix)?;
+                format!("{}-{}", prefix, num)
+            }
+        };
+
+        // Create issue
+        let mut issue = Issue::new(issue_id.clone(), title, priority, issue_type);
+        issue.description = if description.is_empty() {
+            String::new()
+        } else {
+            description
+        };
+        issue.design = design.unwrap_or_default();
+        issue.acceptance_criteria = acceptance.unwrap_or_default();
+        issue.assignee = assignee.unwrap_or_default();
+        issue.labels = labels;
+        issue.external_ref = external_ref;
+
+        // Add dependencies (with validation)
+        for (dep_id, dep_type) in deps {
+            // Validate dependency target exists (warn if not)
+            self.validate_dependency_exists(&dep_id);
+            issue.depends_on.insert(dep_id, dep_type);
+        }
+
+        // Write to file
+        let issue_path = self.configured_issue_path(&issue_id)?;
+        self.write_new_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Get an issue by ID
+    pub fn get_issue(&self, id: &str) -> Result<Option<Issue>> {
+        let _lock = self.lock_for_read()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            return Ok(None);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        // Populate dependents by scanning all issues
+        let all_issues = self.list_all_issues_no_dependents()?;
+        Self::populate_dependents_for_one(&all_issues, &mut issue);
+
+        Ok(Some(issue))
+    }
+
+    fn comments_dir(&self) -> PathBuf {
+        self.beads_dir.join("comments")
+    }
+
+    fn comment_path(&self, issue_id: &str) -> Result<PathBuf> {
+        let id = IssueId::parse(issue_id)?;
+        let path = self.comments_dir().join(format!("{}.json", id.as_str()));
+        ensure_contained(&self.beads_dir, &path)?;
+        Ok(path)
+    }
+
+    fn read_comments_no_lock(&self, issue_id: &str) -> Result<Vec<Comment>> {
+        let path = self.comment_path(issue_id)?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        if content.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut comments: Vec<Comment> = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
+        comments.sort_by_key(|c| c.created_at);
+        Ok(comments)
+    }
+
+    fn write_comments_no_lock(&self, issue_id: &str, comments: &[Comment]) -> Result<()> {
+        let comments_dir = self.comments_dir();
+        ensure_contained(&self.beads_dir, &comments_dir)?;
+        fs::create_dir_all(&comments_dir).context("Failed to create comments directory")?;
+
+        let mut sorted = comments.to_vec();
+        sorted.sort_by_key(|c| c.created_at);
+        let content =
+            serde_json::to_string_pretty(&sorted).context("Failed to serialize comments")?;
+        let path = self.comment_path(issue_id)?;
+        atomic_write(&path, content.as_bytes())
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Add a local comment to an issue.
+    pub fn add_comment(&self, issue_id: &str, author: &str, body: &str) -> Result<Comment> {
+        let _lock = self.lock_for_write()?;
+
+        if !self.issue_exists_any_layout(issue_id)? {
+            anyhow::bail!("Issue not found: {}", issue_id);
+        }
+
+        let mut comments = self.read_comments_no_lock(issue_id)?;
+        let now = chrono::Utc::now();
+        let hash = Sha256::digest(format!(
+            "{}\n{}\n{}\n{}",
+            issue_id,
+            author,
+            body,
+            now.to_rfc3339()
+        ));
+        let id = format!("{}-c{:x}", issue_id, hash)
+            .chars()
+            .take(issue_id.len() + 12)
+            .collect::<String>();
+        let comment = Comment {
+            id,
+            issue_id: issue_id.to_string(),
+            author: author.to_string(),
+            body: body.to_string(),
+            created_at: now,
+            updated_at: now,
+            source_url: None,
+            source_id: None,
+        };
+        comments.push(comment.clone());
+        self.write_comments_no_lock(issue_id, &comments)?;
+        Ok(comment)
+    }
+
+    /// List comments for an issue.
+    pub fn list_comments(&self, issue_id: &str) -> Result<Vec<Comment>> {
+        let _lock = self.lock_for_read()?;
+        self.read_comments_no_lock(issue_id)
+    }
+
+    /// Delete a single comment from an issue by its comment ID.
+    ///
+    /// Returns the removed [`Comment`]. Errors (leaving the store untouched) when
+    /// no comment on `issue_id` has the given `comment_id`, so a typo or stale ID
+    /// never silently succeeds.
+    pub fn delete_comment(&self, issue_id: &str, comment_id: &str) -> Result<Comment> {
+        let _lock = self.lock_for_write()?;
+
+        let mut comments = self.read_comments_no_lock(issue_id)?;
+        let pos = comments
+            .iter()
+            .position(|c| c.id == comment_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Comment not found: {} (on issue {}). Run `mb comments list {}` to see valid comment IDs.",
+                    comment_id,
+                    issue_id,
+                    issue_id
+                )
+            })?;
+        let removed = comments.remove(pos);
+        self.write_comments_no_lock(issue_id, &comments)?;
+        Ok(removed)
+    }
+
+    /// Upsert comments imported from an external source.
+    pub fn upsert_comments(&self, issue_id: &str, incoming: Vec<Comment>) -> Result<usize> {
+        let _lock = self.lock_for_write()?;
+        anyhow::ensure!(
+            self.issue_exists_any_layout(issue_id)?,
+            "Issue not found: {issue_id}"
+        );
+        let mut comments = self.read_comments_no_lock(issue_id)?;
+        let mut changed = 0;
+
+        for comment in incoming {
+            let existing = comments.iter_mut().find(|c| {
+                (!comment.source_id.as_deref().unwrap_or("").is_empty()
+                    && c.source_id == comment.source_id)
+                    || (!comment.source_url.as_deref().unwrap_or("").is_empty()
+                        && c.source_url == comment.source_url)
+                    || c.id == comment.id
+            });
+
+            if let Some(existing) = existing {
+                if *existing != comment {
+                    *existing = comment;
+                    changed += 1;
+                }
+            } else {
+                comments.push(comment);
+                changed += 1;
+            }
+        }
+
+        if changed > 0 {
+            self.write_comments_no_lock(issue_id, &comments)?;
+        }
+        Ok(changed)
+    }
+
+    /// Remove comments whose body contains the given marker string.
+    pub fn remove_comments_containing(&self, issue_id: &str, marker: &str) -> Result<usize> {
+        let _lock = self.lock_for_write()?;
+        let comments = self.read_comments_no_lock(issue_id)?;
+        let original_len = comments.len();
+        let comments: Vec<Comment> = comments
+            .into_iter()
+            .filter(|comment| !comment.body.contains(marker))
+            .collect();
+        let removed = original_len.saturating_sub(comments.len());
+
+        if removed > 0 {
+            self.write_comments_no_lock(issue_id, &comments)?;
+        }
+        Ok(removed)
+    }
+
+    /// Helper to load all issues without computing dependents (to avoid recursion)
+    fn list_all_issues_no_dependents(&self) -> Result<Vec<Issue>> {
+        let mut issues = Vec::new();
+        for (issue_id, path) in self.issue_file_paths()? {
+            let content = fs::read_to_string(path)?;
+            let issue = markdown_to_issue(&issue_id, &content)?;
+            issues.push(issue);
+        }
+
+        Ok(issues)
+    }
+
+    /// Populate dependents for a single issue given all issues
+    fn populate_dependents_for_one(all_issues: &[Issue], target_issue: &mut Issue) {
+        use crate::types::Dependency;
+
+        let mut dependents = Vec::new();
+        for issue in all_issues {
+            if issue.depends_on.contains_key(&target_issue.id) {
+                if let Some(dep_type) = issue.depends_on.get(&target_issue.id) {
+                    dependents.push(Dependency {
+                        id: issue.id.clone(),
+                        dep_type: dep_type.to_string(),
+                    });
+                }
+            }
+        }
+
+        target_issue.dependents = dependents;
+    }
+
+    /// Acquire the database lock only if all persisted issue fields still match
+    /// the analyzed version. Derived dependents and collection order are ignored.
+    pub fn lock_issue_snapshot(&self, expected: &Issue) -> Result<Option<LockedIssue<'_>>> {
+        let lock = self.lock_for_write()?;
+        let Some(path) = self.existing_issue_path(&expected.id)? else {
+            return Ok(None);
+        };
+        let current = markdown_to_issue(&expected.id, &fs::read_to_string(path)?)?;
+        if crate::sync::canonical_issue(&current)? != crate::sync::canonical_issue(expected)? {
+            return Ok(None);
+        }
+        Ok(Some(LockedIssue {
+            storage: self,
+            issue: current,
+            _lock: lock,
+        }))
+    }
+
+    pub fn issue_matches_snapshot(&self, expected: &Issue) -> Result<bool> {
+        Ok(self.lock_issue_snapshot(expected)?.is_some())
+    }
+
+    pub fn issue_matches_snapshot_readonly(&self, expected: &Issue) -> Result<bool> {
+        let _lock = self.lock_for_read()?;
+        let Some(path) = self.existing_issue_path(&expected.id)? else {
+            return Ok(false);
+        };
+        let current = markdown_to_issue(&expected.id, &fs::read_to_string(path)?)?;
+        Ok(crate::sync::canonical_issue(&current)? == crate::sync::canonical_issue(expected)?)
+    }
+
+    pub fn update_issue_if_unchanged(
+        &self,
+        expected: &Issue,
+        updates: HashMap<String, String>,
+    ) -> Result<Option<Issue>> {
+        self.lock_issue_snapshot(expected)?
+            .map(|locked| locked.update(updates))
+            .transpose()
+    }
+
+    /// Update an issue
+    pub fn update_issue(&self, id: &str, updates: HashMap<String, String>) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        apply_issue_updates(&mut issue, updates)?;
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Add a label to an issue, returning the updated issue.
+    pub fn add_label(&self, id: &str, label: &str) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        if !issue.labels.iter().any(|existing| existing == label) {
+            issue.labels.push(label.to_string());
+            issue.labels.sort();
+        }
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Remove a label from an issue, returning the updated issue.
+    pub fn remove_label(&self, id: &str, label: &str) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        issue.labels.retain(|existing| existing != label);
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Replace all labels on an issue.
+    pub fn set_labels(&self, id: &str, labels: Vec<String>) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        issue.labels = normalize_labels(labels);
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// List all unique labels across issues.
+    pub fn list_all_labels(&self) -> Result<Vec<String>> {
+        let issues = self.list_issues(None, None, None, None, None)?;
+        let labels = issues
+            .into_iter()
+            .flat_map(|issue| issue.labels)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok(labels)
+    }
+
+    /// Apply a targeted search/replace edit to one free-text field of an issue.
+    ///
+    /// This is the safer alternative to overwriting a whole field via
+    /// [`update_issue`]: the caller supplies an exact `search` substring and its
+    /// `replace`ment, mirroring the "aider" edit pattern that LLM agents handle
+    /// far more reliably than wholesale rewrites or line-numbered diffs.
+    ///
+    /// By default the edit is refused unless `search` occurs **exactly once** in
+    /// the field, so an ambiguous or stale search cannot silently corrupt the
+    /// wrong location. Pass `replace_all = true` to rewrite every occurrence.
+    /// An empty `search`, a `search` that is not found, or (without
+    /// `replace_all`) a `search` that matches more than once is an error and the
+    /// file is left untouched.
+    pub fn search_replace_issue(
+        &self,
+        id: &str,
+        field: EditField,
+        search: &str,
+        replace: &str,
+        replace_all: bool,
+    ) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        if search.is_empty() {
+            anyhow::bail!("--search text must not be empty");
+        }
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        let target = issue.text_field_mut(field);
+        let occurrences = target.matches(search).count();
+        if occurrences == 0 {
+            anyhow::bail!(
+                "Search text not found in {} field of {}. The --search text must match the current contents exactly (including whitespace and newlines).",
+                field,
+                id
+            );
+        }
+        if occurrences > 1 && !replace_all {
+            anyhow::bail!(
+                "Search text matches {} times in {} field of {}. Add surrounding context so it matches exactly once, or pass --replace-all to replace every occurrence.",
+                occurrences,
+                field,
+                id
+            );
+        }
+
+        // replacen with the full count is equivalent to replace-all; the
+        // single-match path has already been bounded to one occurrence above.
+        let limit = if replace_all { occurrences } else { 1 };
+        *target = target.replacen(search, replace, limit);
+
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Append `text` to a text field, inserting a blank line before it when the
+    /// field already has content so the appended text becomes its own paragraph.
+    ///
+    /// A safer alternative to overwriting a whole field with `--description` when
+    /// you only want to add to the end, and simpler than a search/replace that
+    /// has to reproduce the field's trailing lines exactly.
+    pub fn append_to_issue(&self, id: &str, field: EditField, text: &str) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        if text.is_empty() {
+            anyhow::bail!("--append text must not be empty");
+        }
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        let target = issue.text_field_mut(field);
+        let existing = target.trim_end();
+        *target = if existing.is_empty() {
+            text.to_string()
+        } else {
+            format!("{existing}\n\n{text}")
+        };
+
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Atomically claim an issue for `actor`.
+    ///
+    /// This is the local half of minibeads' git-as-coordination model: the claim
+    /// records `assignee`/`status=in_progress`/`claimed_at`/`claimed_until` in the
+    /// markdown file. The cross-machine "compare-and-swap" is the subsequent
+    /// `git push` (a losing push is rejected, the loser pulls and sees the issue
+    /// is taken). Within a single working copy the [`Lock`] serializes writers.
+    ///
+    /// Succeeds when the issue is unclaimed, when the existing claim has expired
+    /// (`claimed_until` in the past), or when `actor` already holds it (refresh /
+    /// extend). Fails with an "already claimed" error when another worker holds an
+    /// active claim. `extra_updates` carries any sibling field edits from
+    /// `mb update --claim` (the `status`/`assignee` keys are ignored: the claim
+    /// controls those).
+    pub fn claim_issue(
+        &self,
+        id: &str,
+        actor: &str,
+        claimed_until: chrono::DateTime<chrono::Utc>,
+        extra_updates: &HashMap<String, String>,
+    ) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        if issue.status == Status::Closed {
+            anyhow::bail!("Cannot claim {}: issue is closed", id);
+        }
+
+        // Compare-and-swap precondition: refuse if another worker holds an active
+        // claim. A claim by `actor` is allowed through (refresh/extend), as is a
+        // stale (expired) claim by anyone.
+        let now = chrono::Utc::now();
+        if issue.is_actively_claimed(now) && issue.assignee != actor {
+            let until = issue
+                .claimed_until
+                .map(|u| format!(" until {}", u.to_rfc3339()))
+                .unwrap_or_default();
+            anyhow::bail!(
+                "Issue {} is already claimed by '{}'{}",
+                id,
+                issue.assignee,
+                until
+            );
+        }
+
+        // Apply any sibling field edits, but never let them override the claim's
+        // own assignee/status.
+        for (key, value) in extra_updates {
+            match key.as_str() {
+                "title" => issue.title = value.clone(),
+                "description" => issue.description = value.clone(),
+                "design" => issue.design = value.clone(),
+                "notes" => issue.notes = value.clone(),
+                "acceptance_criteria" => issue.acceptance_criteria = value.clone(),
+                "priority" => issue.priority = value.parse()?,
+                "issue_type" => issue.issue_type = value.parse()?,
+                "external_ref" => {
+                    issue.external_ref = if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.clone())
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        issue.assignee = actor.to_string();
+        issue.status = Status::InProgress;
+        issue.claimed_at = Some(now);
+        issue.claimed_until = Some(claimed_until);
+        issue.updated_at = now;
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Release a claim, returning the issue to the backlog.
+    ///
+    /// Clears `assignee`/`claimed_at`/`claimed_until` and, if the issue was
+    /// `in_progress`, flips it back to `open` so `mb ready` surfaces it again.
+    /// Refuses to release a claim held by a different worker unless `force` is
+    /// set (a stale claim can also simply be reclaimed via [`claim_issue`]).
+    pub fn release_issue(&self, id: &str, actor: &str, force: bool) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        if !issue.assignee.is_empty() && issue.assignee != actor && !force {
+            anyhow::bail!(
+                "Issue {} is claimed by '{}', not '{}'. Use --force to release it anyway.",
+                id,
+                issue.assignee,
+                actor
+            );
+        }
+
+        issue.assignee = String::new();
+        issue.claimed_at = None;
+        issue.claimed_until = None;
+        if issue.status == Status::InProgress {
+            issue.status = Status::Open;
+        }
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Close an issue
+    pub fn close_issue(&self, id: &str, _reason: &str) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        issue.status = Status::Closed;
+        issue.closed_at = Some(chrono::Utc::now());
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Reopen an issue
+    pub fn reopen_issue(&self, id: &str) -> Result<Issue> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        issue.status = Status::Open;
+        issue.closed_at = None;
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Rename an issue ID
+    ///
+    /// This operation:
+    /// - Renames the markdown file
+    /// - Updates the ID in the issue frontmatter
+    /// - Updates all references in other issues' dependencies
+    /// - Updates all text mentions of the old ID in all issues (title, description, design, notes, acceptance_criteria)
+    /// - Is atomic (all updates succeed or none)
+    pub fn rename_issue(&self, old_id: &str, new_id: &str, dry_run: bool) -> Result<Vec<String>> {
+        let _lock = self.lock_for_write()?;
+        anyhow::ensure!(
+            self.issue_exists_any_layout(old_id)?,
+            "Issue not found: {old_id}"
+        );
+        anyhow::ensure!(
+            !self.issue_exists_any_layout(new_id)?,
+            "Target issue ID already exists: {new_id}"
+        );
+        let all_issues = self.list_all_issues_no_dependents()?;
+        let mapping = HashMap::from([(old_id.to_owned(), new_id.to_owned())]);
+        let mut changes = vec![format!("Rename file: {old_id}.md -> {new_id}.md")];
+        for issue in &all_issues {
+            if issue.depends_on.contains_key(old_id) {
+                changes.push(format!(
+                    "Update dependency in {}: {old_id} -> {new_id}",
+                    issue.id
+                ));
+            }
+        }
+        changes.push("Preserve comments and update synchronization ownership".to_owned());
+        if !dry_run {
+            self.apply_id_mapping(all_issues, &mapping, &[])?;
+        }
+        Ok(changes)
+    }
+
+    /// Repair broken references by scanning all issues and fixing stale references
+    ///
+    /// This scans all issues and removes references to nonexistent issues
+    pub fn repair_references(&self, dry_run: bool) -> Result<Vec<String>> {
+        let _lock = self.lock_for_write()?;
+
+        let mut changes = Vec::new();
+        let all_issues = self.list_all_issues_no_dependents()?;
+
+        // Build a set of all valid issue IDs
+        let valid_ids: std::collections::HashSet<String> =
+            all_issues.iter().map(|i| i.id.clone()).collect();
+
+        // Find issues with broken references
+        for issue in all_issues {
+            let mut broken_refs = Vec::new();
+
+            for dep_id in issue.depends_on.keys() {
+                if !valid_ids.contains(dep_id) {
+                    broken_refs.push(dep_id.clone());
+                }
+            }
+
+            if !broken_refs.is_empty() {
+                for broken_ref in &broken_refs {
+                    changes.push(format!(
+                        "Remove broken reference in {}: {} (does not exist)",
+                        issue.id, broken_ref
+                    ));
+                }
+
+                // If not dry-run, apply the fix
+                if !dry_run {
+                    let mut updated_issue = issue.clone();
+                    for broken_ref in &broken_refs {
+                        updated_issue.depends_on.remove(broken_ref);
+                    }
+                    updated_issue.updated_at = chrono::Utc::now();
+
+                    let issue_path = self.existing_or_configured_issue_path(&updated_issue.id)?;
+                    self.write_issue_to_path(&issue_path, &updated_issue)
+                        .context(format!("Failed to update issue: {}", updated_issue.id))?;
+                }
+            }
+        }
+
+        if changes.is_empty() {
+            changes.push("No broken references found".to_string());
+        }
+
+        Ok(changes)
+    }
+
+    /// Validate that a dependency target exists (warns if not)
+    fn validate_dependency_exists(&self, dep_id: &str) -> bool {
+        let exists = self.issue_exists_any_layout(dep_id).unwrap_or(false);
+
+        if !exists {
+            eprintln!("Warning: Dependency target does not exist: {}", dep_id);
+            eprintln!("  This issue will be blocked until {} is created.", dep_id);
+        }
+
+        exists
+    }
+
+    /// Add a dependency between issues
+    pub fn add_dependency(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        dep_type: DependencyType,
+    ) -> Result<()> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(from_id)? else {
+            anyhow::bail!("Issue not found: {}", from_id);
+        };
+
+        // Validate dependency target exists (warn if not)
+        self.validate_dependency_exists(to_id);
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(from_id, &content)?;
+
+        // Add dependency
+        issue.depends_on.insert(to_id.to_string(), dep_type);
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(())
+    }
+
+    pub fn remove_dependency(&self, from_id: &str, to_id: &str) -> Result<()> {
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(from_id)? else {
+            anyhow::bail!("Issue not found: {}", from_id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(from_id, &content)?;
+
+        // Remove dependency
+        if issue.depends_on.remove(to_id).is_none() {
+            anyhow::bail!("Dependency not found: {} -> {}", from_id, to_id);
+        }
+        issue.updated_at = chrono::Utc::now();
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(())
+    }
+
+    /// Get dependency tree starting from a given issue
+    pub fn get_dependency_tree(
+        &self,
+        issue_id: &str,
+        max_depth: usize,
+        show_all_paths: bool,
+    ) -> Result<crate::types::TreeNode> {
+        use std::collections::HashSet;
+
+        // Load all issues to build the tree
+        let issues = self.list_issues(None, None, None, None, None)?;
+        let issues_map: HashMap<String, Issue> = issues
+            .into_iter()
+            .map(|issue| (issue.id.clone(), issue))
+            .collect();
+
+        // Find the root issue
+        let root_issue = issues_map
+            .get(issue_id)
+            .ok_or_else(|| anyhow::anyhow!("Issue not found: {}", issue_id))?;
+
+        // Track visited nodes for cycle detection (if not showing all paths)
+        let mut visited = HashSet::new();
+
+        // Build tree recursively
+        build_tree_node(
+            root_issue,
+            &issues_map,
+            &mut visited,
+            0,
+            max_depth,
+            show_all_paths,
+            None,
+        )
+    }
+
+    /// Detect dependency cycles in the issue graph
+    pub fn detect_dependency_cycles(&self) -> Result<Vec<Vec<String>>> {
+        use std::collections::{HashMap, HashSet};
+
+        // Load all issues
+        let issues = self.list_issues(None, None, None, None, None)?;
+        let issues_map: HashMap<String, Issue> = issues
+            .into_iter()
+            .map(|issue| (issue.id.clone(), issue))
+            .collect();
+
+        let mut cycles = Vec::new();
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+        let mut path = Vec::new();
+
+        // Try to find cycles starting from each unvisited node
+        for issue_id in issues_map.keys() {
+            if !visited.contains(issue_id) {
+                find_cycles_dfs(
+                    issue_id,
+                    &issues_map,
+                    &mut visited,
+                    &mut rec_stack,
+                    &mut path,
+                    &mut cycles,
+                );
+            }
+        }
+
+        Ok(cycles)
+    }
+}
+
+fn normalize_config_key(key: &str) -> String {
+    match key {
+        "issue_prefix" => "issue-prefix".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn yaml_value_to_string(value: &serde_yaml::Value) -> String {
+    match value {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::Null => String::new(),
+        other => serde_yaml::to_string(other)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    }
+}
+
+fn normalize_labels(labels: Vec<String>) -> Vec<String> {
+    labels
+        .into_iter()
+        .flat_map(|label| {
+            label
+                .split(',')
+                .map(|part| part.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|label| !label.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Recursively build a tree node
+fn build_tree_node(
+    issue: &Issue,
+    issues_map: &HashMap<String, Issue>,
+    visited: &mut std::collections::HashSet<String>,
+    current_depth: usize,
+    max_depth: usize,
+    show_all_paths: bool,
+    dep_type: Option<String>,
+) -> Result<crate::types::TreeNode> {
+    let mut node = crate::types::TreeNode {
+        id: issue.id.clone(),
+        title: issue.title.clone(),
+        status: issue.status,
+        priority: issue.priority,
+        dep_type,
+        children: Vec::new(),
+        is_cycle: false,
+        depth_exceeded: false,
+    };
+
+    // Check for cycle
+    if !show_all_paths && visited.contains(&issue.id) {
+        node.is_cycle = true;
+        return Ok(node);
+    }
+
+    // Check depth limit
+    if current_depth >= max_depth {
+        node.depth_exceeded = true;
+        return Ok(node);
+    }
+
+    // Mark as visited (if not showing all paths)
+    if !show_all_paths {
+        visited.insert(issue.id.clone());
+    }
+
+    // Add children (dependencies)
+    for (dep_id, dep_type_val) in &issue.depends_on {
+        if let Some(dep_issue) = issues_map.get(dep_id) {
+            let child = build_tree_node(
+                dep_issue,
+                issues_map,
+                visited,
+                current_depth + 1,
+                max_depth,
+                show_all_paths,
+                Some(dep_type_val.to_string()),
+            )?;
+            node.children.push(child);
+        }
+    }
+
+    // Unmark as visited (for backtracking if not showing all paths)
+    if !show_all_paths {
+        visited.remove(&issue.id);
+    }
+
+    Ok(node)
+}
+
+/// DFS helper function to find cycles in the dependency graph
+fn find_cycles_dfs(
+    current_id: &str,
+    issues_map: &HashMap<String, Issue>,
+    visited: &mut std::collections::HashSet<String>,
+    rec_stack: &mut std::collections::HashSet<String>,
+    path: &mut Vec<String>,
+    cycles: &mut Vec<Vec<String>>,
+) {
+    // Mark current node as visited and add to recursion stack
+    visited.insert(current_id.to_string());
+    rec_stack.insert(current_id.to_string());
+    path.push(current_id.to_string());
+
+    // Get the current issue
+    if let Some(issue) = issues_map.get(current_id) {
+        // Check all dependencies
+        for dep_id in issue.depends_on.keys() {
+            if !visited.contains(dep_id) {
+                // Recursively visit unvisited dependencies
+                find_cycles_dfs(dep_id, issues_map, visited, rec_stack, path, cycles);
+            } else if rec_stack.contains(dep_id) {
+                // Found a cycle! Extract the cycle from the path
+                if let Some(cycle_start_idx) = path.iter().position(|id| id == dep_id) {
+                    let cycle: Vec<String> = path[cycle_start_idx..].to_vec();
+                    // Only add if this exact cycle hasn't been found before
+                    if !cycles.iter().any(|c| cycles_equal(c, &cycle)) {
+                        cycles.push(cycle);
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove from recursion stack and path
+    rec_stack.remove(current_id);
+    path.pop();
+}
+
+/// Check if two cycles are equal (considering rotation)
+fn cycles_equal(cycle1: &[String], cycle2: &[String]) -> bool {
+    if cycle1.len() != cycle2.len() {
+        return false;
+    }
+
+    // Check all rotations
+    for i in 0..cycle1.len() {
+        let mut match_found = true;
+        for j in 0..cycle1.len() {
+            if cycle1[(i + j) % cycle1.len()] != cycle2[j] {
+                match_found = false;
+                break;
+            }
+        }
+        if match_found {
+            return true;
+        }
+    }
+    false
+}
+
+impl Storage {
+    /// Populate dependents field for a vector of issues
+    fn populate_dependents(issues: &mut [Issue]) {
+        use crate::types::Dependency;
+        use std::collections::HashMap;
+
+        // Build a reverse dependency map: issue_id -> [(dependent_id, dep_type), ...]
+        let mut reverse_deps: HashMap<String, Vec<Dependency>> = HashMap::new();
+
+        for issue in issues.iter() {
+            for (dep_id, dep_type) in &issue.depends_on {
+                reverse_deps
+                    .entry(dep_id.clone())
+                    .or_default()
+                    .push(Dependency {
+                        id: issue.id.clone(),
+                        dep_type: dep_type.to_string(),
+                    });
+            }
+        }
+
+        // Populate dependents for each issue (zero-copy: take ownership from HashMap)
+        for issue in issues.iter_mut() {
+            issue.dependents = reverse_deps.remove(&issue.id).unwrap_or_default();
+        }
+    }
+
+    /// List all issues
+    pub fn list_issues(
+        &self,
+        status: Option<Status>,
+        priority: Option<Vec<i32>>,
+        issue_type: Option<IssueType>,
+        assignee: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Issue>> {
+        let _lock = self.lock_for_read()?;
+
+        let mut issues = Vec::new();
+        for (issue_id, path) in self.issue_file_paths()? {
+            let content = fs::read_to_string(path)?;
+            let issue = markdown_to_issue(&issue_id, &content)?;
+
+            // Apply filters
+            if let Some(s) = status {
+                if issue.status != s {
+                    continue;
+                }
+            }
+            if let Some(ref priorities) = priority {
+                if !priorities.contains(&issue.priority) {
+                    continue;
+                }
+            }
+            if let Some(t) = issue_type {
+                if issue.issue_type != t {
+                    continue;
+                }
+            }
+            if let Some(a) = assignee {
+                if issue.assignee != a {
+                    continue;
+                }
+            }
+
+            issues.push(issue);
+        }
+
+        // Sort so that numeric IDs are clustered first, in ascending numeric
+        // order (1..N) so the most recent ones appear at the end, followed by
+        // hash-based IDs ordered by creation date (oldest first).
+        issues.sort_by(compare_for_list);
+
+        // Apply limit
+        if let Some(limit) = limit {
+            if limit > 0 {
+                issues.truncate(limit);
+            }
+        }
+
+        // Populate dependents
+        Self::populate_dependents(&mut issues);
+
+        Ok(issues)
+    }
+
+    /// Get statistics
+    pub fn get_stats(&self) -> Result<Stats> {
+        let issues = self.list_issues(None, None, None, None, None)?;
+
+        let closed_ids = closed_issue_ids(&issues);
+        let total = issues.len();
+        let open = issues.iter().filter(|i| i.status == Status::Open).count();
+        let in_progress = issues
+            .iter()
+            .filter(|i| i.status == Status::InProgress)
+            .count();
+        let closed = issues.iter().filter(|i| i.status == Status::Closed).count();
+
+        // Calculate blocked issues (those with blocking dependencies)
+        let blocked = issues
+            .iter()
+            .filter(|i| i.status != Status::Closed && has_unresolved_dependencies(i, &closed_ids))
+            .count();
+
+        // Calculate ready issues
+        let ready = issues
+            .iter()
+            .filter(|i| i.status == Status::Open && !has_unresolved_dependencies(i, &closed_ids))
+            .count();
+
+        // Calculate average lead time for closed issues
+        let mut lead_times = Vec::new();
+        for issue in &issues {
+            if issue.status == Status::Closed {
+                if let Some(closed_at) = issue.closed_at {
+                    let duration = closed_at.signed_duration_since(issue.created_at);
+                    lead_times.push(duration.num_hours() as f64);
+                }
+            }
+        }
+
+        let avg_lead_time_hours = if lead_times.is_empty() {
+            0.0
+        } else {
+            lead_times.iter().sum::<f64>() / lead_times.len() as f64
+        };
+
+        Ok(Stats {
+            total_issues: total,
+            open_issues: open,
+            in_progress_issues: in_progress,
+            blocked_issues: blocked,
+            closed_issues: closed,
+            ready_issues: ready,
+            average_lead_time_hours: avg_lead_time_hours,
+        })
+    }
+
+    /// Get blocked issues
+    pub fn get_blocked(&self) -> Result<Vec<BlockedIssue>> {
+        let issues = self.list_issues(None, None, None, None, None)?;
+
+        let closed_ids = closed_issue_ids(&issues);
+        let mut blocked = Vec::new();
+        for issue in issues {
+            if issue.status == Status::Closed {
+                continue;
+            }
+
+            // Zero-copy: collect blocking dependencies directly without intermediate Vec
+            let blocked_by: Vec<String> = issue
+                .get_blocking_dependencies()
+                .filter(|id| !closed_ids.contains(id.as_str()))
+                .cloned()
+                .collect();
+
+            if !blocked_by.is_empty() {
+                let blocked_by_count = blocked_by.len();
+                blocked.push(BlockedIssue {
+                    issue,
+                    blocked_by,
+                    blocked_by_count,
+                });
+            }
+        }
+
+        Ok(blocked)
+    }
+
+    /// Get ready work
+    ///
+    /// The caller is responsible for any post-query in-memory filtering (labels,
+    /// title, etc.) and for applying a result limit afterwards, so that limiting
+    /// happens after every filter has run.
+    pub fn get_ready(
+        &self,
+        assignee: Option<&str>,
+        priority: Option<Vec<i32>>,
+        issue_type: Option<IssueType>,
+        sort_policy: &str,
+    ) -> Result<Vec<Issue>> {
+        // Resolve dependency status from the full snapshot before filtering:
+        // an assignee/priority/type filter must not hide a live prerequisite.
+        let issues = self.list_issues(None, None, None, None, None)?;
+        let closed_ids = closed_issue_ids(&issues);
+        let mut ready: Vec<Issue> = issues
+            .into_iter()
+            .filter(|issue| {
+                issue.status == Status::Open
+                    && priority
+                        .as_ref()
+                        .is_none_or(|priorities| priorities.contains(&issue.priority))
+                    && issue_type.is_none_or(|kind| issue.issue_type == kind)
+                    && assignee.is_none_or(|actor| issue.assignee == actor)
+                    && !has_unresolved_dependencies(issue, &closed_ids)
+            })
+            .collect();
+
+        // Apply sorting based on policy
+        match sort_policy {
+            "priority" => {
+                // Sort by priority (0 is highest priority, so ascending order)
+                ready.sort_by_key(|i| i.priority);
+            }
+            "oldest" => {
+                // Sort by creation date (oldest first)
+                ready.sort_by_key(|i| i.created_at);
+            }
+            "hybrid" => {
+                // Hybrid: Sort by priority first, then by creation date (oldest first) for same priority
+                ready.sort_by(|a, b| {
+                    a.priority
+                        .cmp(&b.priority)
+                        .then_with(|| a.created_at.cmp(&b.created_at))
+                });
+            }
+            "random" => {
+                // No ordering here; the caller shuffles after post-query
+                // filtering so the randomization spans the whole filtered set.
+            }
+            _ => {
+                // Default to hybrid if invalid (shouldn't happen due to CLI validation)
+                ready.sort_by(|a, b| {
+                    a.priority
+                        .cmp(&b.priority)
+                        .then_with(|| a.created_at.cmp(&b.created_at))
+                });
+            }
+        }
+
+        Ok(ready)
+    }
+
+    /// Export issues to JSONL format
+    pub fn export_to_jsonl(
+        &self,
+        output_path: &Path,
+        status: Option<Status>,
+        priority: Option<i32>,
+        issue_type: Option<IssueType>,
+        assignee: Option<&str>,
+    ) -> Result<usize> {
+        use std::io::Write;
+
+        self.ensure_writable()?;
+        // Convert single priority to vector for list_issues
+        let priority_list = priority.map(|p| vec![p]);
+
+        // Get issues with filters (list_issues acquires its own lock)
+        let issues = self.list_issues(status, priority_list, issue_type, assignee, None)?;
+
+        // Open output file
+        let mut file = fs::File::create(output_path)
+            .with_context(|| format!("Failed to create output file: {}", output_path.display()))?;
+
+        // Write each issue as a JSON line
+        for issue in &issues {
+            let json =
+                serde_json::to_string(&issue).context("Failed to serialize issue to JSON")?;
+            writeln!(file, "{}", json).context("Failed to write to output file")?;
+        }
+
+        Ok(issues.len())
+    }
+
+    /// Import issues from JSONL format
+    ///
+    /// Returns: (imported_count, skipped_count, errors)
+    #[allow(dead_code)] // Used by sync command (not yet implemented)
+    pub fn import_from_jsonl(
+        &self,
+        input_path: &Path,
+        overwrite: bool,
+    ) -> Result<(usize, usize, Vec<String>)> {
+        use std::io::{BufRead, BufReader};
+
+        let _lock = self.lock_for_write()?;
+
+        // Open input file
+        let file = fs::File::open(input_path)
+            .with_context(|| format!("Failed to open input file: {}", input_path.display()))?;
+        let reader = BufReader::new(file);
+
+        let mut imported = 0;
+        let mut skipped = 0;
+        let mut errors = Vec::new();
+
+        // Read and parse each line
+        for (line_num, line_result) in reader.lines().enumerate() {
+            let line = match line_result {
+                Ok(l) => l,
+                Err(e) => {
+                    errors.push(format!("Line {}: Failed to read line: {}", line_num + 1, e));
+                    continue;
+                }
+            };
+
+            // Skip empty lines
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            // Parse JSON
+            let issue: Issue = match serde_json::from_str(&line) {
+                Ok(i) => i,
+                Err(e) => {
+                    errors.push(format!(
+                        "Line {}: Failed to parse JSON: {}",
+                        line_num + 1,
+                        e
+                    ));
+                    continue;
+                }
+            };
+
+            // Check if markdown file already exists
+            let issue_path = self.existing_or_configured_issue_path(&issue.id)?;
+            if issue_path.exists() && !overwrite {
+                skipped += 1;
+                continue;
+            }
+
+            // Convert to markdown and write
+            match issue_to_markdown(&issue) {
+                Ok(markdown) => {
+                    if let Some(parent) = issue_path.parent() {
+                        if let Err(e) = fs::create_dir_all(parent) {
+                            errors.push(format!(
+                                "Issue {}: Failed to create issue directory: {}",
+                                issue.id, e
+                            ));
+                            continue;
+                        }
+                    }
+
+                    if let Err(e) = fs::write(&issue_path, &markdown) {
+                        errors.push(format!(
+                            "Issue {}: Failed to write markdown file: {}",
+                            issue.id, e
+                        ));
+                        continue;
+                    }
+
+                    // Set file mtime to match issue's updated_at timestamp (preserve timestamp)
+                    if let Err(e) = set_file_mtime_from_issue(&issue_path, &issue) {
+                        // Non-fatal: log warning but don't fail the import
+                        eprintln!("Warning: Failed to set mtime for {}: {}", issue.id, e);
+                    }
+
+                    imported += 1;
+                }
+                Err(e) => {
+                    errors.push(format!(
+                        "Issue {}: Failed to convert to markdown: {}",
+                        issue.id, e
+                    ));
+                }
+            }
+        }
+
+        Ok((imported, skipped, errors))
+    }
+
+    /// Rename the issue prefix for all issues
+    ///
+    /// This operation:
+    /// - Renames all issue files from old-prefix-N to new-prefix-N
+    /// - Updates the ID in all issue frontmatter
+    /// - Updates all dependency references
+    /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
+    /// - Updates the prefix in config.yaml
+    /// - Is atomic (all updates succeed or none)
+    pub fn rename_prefix(
+        &self,
+        new_prefix: &str,
+        dry_run: bool,
+        force: bool,
+    ) -> Result<Vec<String>> {
+        let _lock = self.lock_for_write()?;
+
+        IssueId::parse(new_prefix)?;
+        // Get current prefix
+        let old_prefix = self.get_prefix()?;
+
+        // Validate new prefix is different
+        if old_prefix == new_prefix {
+            anyhow::bail!("New prefix '{}' is the same as current prefix", new_prefix);
+        }
+
+        // Validate new prefix format (alphanumeric and hyphens only)
+        if !new_prefix.chars().all(|c| c.is_alphanumeric() || c == '-') {
+            anyhow::bail!(
+                "Invalid prefix format: '{}'. Use only alphanumeric characters and hyphens.",
+                new_prefix
+            );
+        }
+
+        // Load all issues
+        let all_issues = self.list_all_issues_no_dependents()?;
+
+        // Build mapping from old ID to new ID
+        let mut id_mapping = HashMap::new();
+        for issue in &all_issues {
+            // Check if this issue uses the current prefix
+            if let Some(pos) = issue.id.rfind('-') {
+                let issue_prefix = &issue.id[..pos];
+                let issue_number = &issue.id[pos + 1..];
+
+                if issue_prefix == old_prefix {
+                    let new_id = format!("{}-{}", new_prefix, issue_number);
+
+                    // Check if new ID would conflict with existing issue
+                    if !force && self.issue_exists_any_layout(&new_id)? {
+                        anyhow::bail!(
+                            "Cannot rename: new ID '{}' already exists. Use --force to override.",
+                            new_id
+                        );
+                    }
+
+                    id_mapping.insert(issue.id.clone(), new_id);
+                }
+            }
+        }
+
+        if id_mapping.is_empty() {
+            anyhow::bail!("No issues found with prefix '{}'", old_prefix);
+        }
+
+        // Track all changes for dry-run mode
+        let mut changes = Vec::new();
+        changes.push(format!(
+            "Update config.yaml: issue-prefix: {} -> {}",
+            old_prefix, new_prefix
+        ));
+
+        // Plan all file renames and content updates
+        for issue in &all_issues {
+            if let Some(new_id) = id_mapping.get(&issue.id) {
+                changes.push(format!("Rename file: {}.md -> {}.md", issue.id, new_id));
+                changes.push(format!(
+                    "Update ID in frontmatter: {} -> {}",
+                    issue.id, new_id
+                ));
+
+                // Check if this issue has dependencies that will be renamed
+                for dep_id in issue.depends_on.keys() {
+                    if id_mapping.contains_key(dep_id) {
+                        changes.push(format!(
+                            "Update dependency in {}: {} -> {}",
+                            new_id,
+                            dep_id,
+                            id_mapping.get(dep_id).unwrap()
+                        ));
+                    }
+                }
+            }
+        }
+
+        // If dry-run, return changes without applying
+        if dry_run {
+            return Ok(changes);
+        }
+
+        self.apply_id_mapping(
+            all_issues,
+            &id_mapping,
+            &[("config.yaml", "issue-prefix", new_prefix)],
+        )?;
+
+        Ok(changes)
+    }
+
+    /// Move issue markdown files between flat and sharded on-disk layouts.
+    pub fn migrate_issue_storage_layout(
+        &self,
+        target_layout: IssueStorageLayout,
+        dry_run: bool,
+        update_config: bool,
+    ) -> Result<Vec<String>> {
+        let _lock = self.lock_for_write()?;
+
+        let current_layout = self.issue_storage_layout()?;
+        let issue_paths = self.issue_file_paths()?;
+        let mut moves = Vec::new();
+
+        for (issue_id, old_path) in issue_paths {
+            let new_path = self.issue_path_for_layout(&issue_id, target_layout);
+            if old_path == new_path {
+                continue;
+            }
+
+            if new_path.exists() {
+                anyhow::bail!(
+                    "Cannot migrate layout: target path already exists for {}: {}",
+                    issue_id,
+                    new_path.display()
+                );
+            }
+
+            moves.push((issue_id, old_path, new_path));
+        }
+
+        let mut changes = Vec::new();
+        if update_config && current_layout != target_layout {
+            changes.push(format!(
+                "Update config-minibeads.yaml: issue-storage-layout: {} -> {}",
+                current_layout.as_str(),
+                target_layout.as_str()
+            ));
+        }
+        for (issue_id, old_path, new_path) in &moves {
+            changes.push(format!(
+                "Move issue {}: {} -> {}",
+                issue_id,
+                old_path
+                    .strip_prefix(&self.beads_dir)
+                    .unwrap_or(old_path)
+                    .display(),
+                new_path
+                    .strip_prefix(&self.beads_dir)
+                    .unwrap_or(new_path)
+                    .display()
+            ));
+        }
+
+        if changes.is_empty() {
+            changes.push(format!(
+                "No changes needed - issues are already in {} layout",
+                target_layout.as_str()
+            ));
+        }
+
+        if dry_run {
+            return Ok(changes);
+        }
+
+        let mut transaction = FileTransaction::new(&self.beads_dir);
+        for (_issue_id, old_path, new_path) in &moves {
+            ensure_contained(&self.beads_dir, old_path)?;
+            ensure_contained(&self.beads_dir, new_path)?;
+            transaction.remove(old_path.clone());
+            transaction.write_with_mtime(
+                new_path.clone(),
+                fs::read(old_path)?,
+                fs::metadata(old_path)?.modified()?,
+            );
+        }
+        if update_config {
+            transaction.config(
+                "config-minibeads.yaml",
+                "issue-storage-layout",
+                target_layout.as_str(),
+            )?;
+        }
+        transaction.commit()?;
+
+        self.remove_empty_issue_dirs()?;
+
+        Ok(changes)
+    }
+
+    fn remove_empty_issue_dirs(&self) -> Result<()> {
+        fn remove_empty_below(root: &Path, dir: &Path) -> Result<bool> {
+            let mut is_empty = true;
+
+            for entry in fs::read_dir(dir)
+                .with_context(|| format!("Failed to read directory: {}", dir.display()))?
+            {
+                let entry = entry?;
+                let path = entry.path();
+                let file_type = entry.file_type()?;
+
+                if file_type.is_dir() {
+                    if !remove_empty_below(root, &path)? {
+                        is_empty = false;
+                    }
+                } else {
+                    is_empty = false;
+                }
+            }
+
+            if is_empty && dir != root {
+                fs::remove_dir(dir).with_context(|| {
+                    format!("Failed to remove empty directory: {}", dir.display())
+                })?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+
+        if self.issues_dir.exists() {
+            remove_empty_below(&self.issues_dir, &self.issues_dir)?;
+        }
+        Ok(())
+    }
+
+    /// Migrate from numeric to hash-based IDs
+    ///
+    /// This operation:
+    /// - Generates hash-based IDs for all issues with numeric IDs
+    /// - Renames all issue files from prefix-N to prefix-hash
+    /// - Updates all dependency references
+    /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
+    /// - Updates config-minibeads.yaml to set mb-hash-ids: true (unless update_config is false)
+    /// - Is atomic (all updates succeed or none)
+    pub fn migrate_to_hash_ids(
+        &self,
+        dry_run: bool,
+        update_config: bool,
+    ) -> Result<(Vec<String>, HashMap<String, String>)> {
+        let _lock = self.lock_for_write()?;
+
+        // Check if already using hash IDs
+        if self.use_hash_ids()? {
+            anyhow::bail!("Database is already using hash-based IDs (mb-hash-ids: true in config-minibeads.yaml)");
+        }
+
+        // Get current prefix
+        let prefix = self.get_prefix()?;
+
+        // Load all issues
+        let all_issues = self.list_all_issues_no_dependents()?;
+
+        // Build mapping from old numeric ID to new hash ID
+        let mut id_mapping = HashMap::new();
+        for issue in &all_issues {
+            // Check if this issue has a numeric ID (prefix-N pattern)
+            if let Some(pos) = issue.id.rfind('-') {
+                let issue_prefix = &issue.id[..pos];
+                let issue_suffix = &issue.id[pos + 1..];
+
+                // Only migrate if it's a numeric ID
+                if issue_prefix == prefix && issue_suffix.parse::<u32>().is_ok() {
+                    // Generate hash-based ID
+                    let hash_id =
+                        self.generate_hash_id(&prefix, &issue.title, &issue.description)?;
+
+                    // Check if new ID would conflict with existing issue
+                    if self.issue_exists_any_layout(&hash_id)? {
+                        anyhow::bail!(
+                            "Cannot migrate: generated hash ID '{}' already exists. This is a collision - please report this bug.",
+                            hash_id
+                        );
+                    }
+
+                    id_mapping.insert(issue.id.clone(), hash_id);
+                }
+            }
+        }
+
+        if id_mapping.is_empty() {
+            anyhow::bail!(
+                "No numeric IDs found to migrate. All issues already use hash-based or custom IDs."
+            );
+        }
+
+        // Track all changes for dry-run mode
+        let mut changes = Vec::new();
+        if update_config {
+            changes.push("Update config-minibeads.yaml: mb-hash-ids: false -> true".to_string());
+        }
+
+        // Plan all file renames and content updates
+        for issue in &all_issues {
+            if let Some(new_id) = id_mapping.get(&issue.id) {
+                changes.push(format!("Rename file: {}.md -> {}.md", issue.id, new_id));
+                changes.push(format!(
+                    "Update ID in frontmatter: {} -> {}",
+                    issue.id, new_id
+                ));
+
+                // Check if this issue has dependencies that will be renamed
+                for dep_id in issue.depends_on.keys() {
+                    if id_mapping.contains_key(dep_id) {
+                        changes.push(format!(
+                            "Update dependency in {}: {} -> {}",
+                            new_id,
+                            dep_id,
+                            id_mapping.get(dep_id).unwrap()
+                        ));
+                    }
+                }
+            }
+        }
+
+        // If dry-run, return changes without applying (return empty mapping for dry-run)
+        if dry_run {
+            return Ok((changes, HashMap::new()));
+        }
+
+        let configs = if update_config {
+            vec![("config-minibeads.yaml", "mb-hash-ids", "true")]
+        } else {
+            Vec::new()
+        };
+        self.apply_id_mapping(all_issues, &id_mapping, &configs)?;
+
+        Ok((changes, id_mapping))
+    }
+
+    /// Migrate from hash-based or mixed IDs to pure numeric IDs
+    ///
+    /// This operation:
+    /// - Identifies hash-based IDs (non-numeric chars OR length >= 4)
+    /// - Sorts them by created timestamp
+    /// - Assigns sequential numbers starting from MAX_ID+1
+    /// - Updates all dependency references
+    /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
+    /// - Updates config-minibeads.yaml to set mb-hash-ids: false (unless update_config is false)
+    /// - Is atomic (all updates succeed or none)
+    pub fn migrate_to_numeric_ids(
+        &self,
+        dry_run: bool,
+        update_config: bool,
+    ) -> Result<(Vec<String>, HashMap<String, String>)> {
+        let _lock = self.lock_for_write()?;
+
+        // Get current prefix
+        let prefix = self.get_prefix()?;
+
+        // Load all issues
+        let all_issues = self.list_all_issues_no_dependents()?;
+
+        // Identify hash-based IDs and collect for migration using gap-based heuristic
+        const MAX_GAP: u32 = 100; // Gap size to distinguish numeric vs hash IDs
+
+        let mut hash_issues = Vec::new();
+        let mut numeric_ids = Vec::new();
+        let mut numeric_id_to_issue: HashMap<u32, Issue> = HashMap::new();
+
+        // First pass: collect all numeric IDs with matching prefix
+        for issue in &all_issues {
+            if let Some(pos) = issue.id.rfind('-') {
+                let issue_prefix = &issue.id[..pos];
+                let issue_suffix = &issue.id[pos + 1..];
+
+                if issue_prefix == prefix {
+                    // Check if it's numeric
+                    if let Ok(num) = issue_suffix.parse::<u32>() {
+                        numeric_ids.push(num);
+                        numeric_id_to_issue.insert(num, issue.clone());
+                    } else {
+                        // Non-numeric suffix = hash-based ID
+                        hash_issues.push(issue.clone());
+                    }
+                } else {
+                    // Different prefix, check suffix length >= 4
+                    if issue_suffix.len() >= 4 {
+                        hash_issues.push(issue.clone());
+                    }
+                }
+            }
+        }
+
+        // Use gap-based heuristic to find true max numeric ID and identify hash IDs
+        let (max_numeric_id, ids_above_gap) = find_max_numeric_id_before_gap(&numeric_ids, MAX_GAP);
+
+        // Add numeric IDs above the gap to hash_issues (these are likely hash IDs with all-numeric hashes)
+        if !ids_above_gap.is_empty() {
+            eprintln!("Warning: Found {} numeric ID(s) above a gap of {} (likely hash IDs with all-numeric hashes)",
+                      ids_above_gap.len(), MAX_GAP);
+            eprintln!("         These will be treated as hash IDs and renumbered:");
+            for id_num in &ids_above_gap {
+                if let Some(issue) = numeric_id_to_issue.get(id_num) {
+                    eprintln!("         - {}", issue.id);
+                    hash_issues.push(issue.clone());
+                }
+            }
+            eprintln!(
+                "         True max numeric ID before gap: {}",
+                max_numeric_id
+            );
+        }
+
+        if hash_issues.is_empty() {
+            anyhow::bail!(
+                "No hash-based IDs found to migrate. All issues already use numeric IDs."
+            );
+        }
+
+        // Sort hash issues by created timestamp
+        hash_issues.sort_by_key(|issue| issue.created_at);
+
+        // Build mapping from old hash ID to new numeric ID
+        let mut id_mapping = HashMap::new();
+
+        for (next_id, issue) in (max_numeric_id + 1..).zip(hash_issues.iter()) {
+            let new_id = format!("{}-{}", prefix, next_id);
+
+            // Check if new ID would conflict with existing issue
+            if self.issue_exists_any_layout(&new_id)? {
+                anyhow::bail!(
+                    "Cannot migrate: numeric ID '{}' already exists. This should not happen - please report this bug.",
+                    new_id
+                );
+            }
+
+            id_mapping.insert(issue.id.clone(), new_id);
+        }
+
+        // Track all changes for dry-run mode
+        let mut changes = Vec::new();
+        if update_config {
+            changes.push("Update config-minibeads.yaml: mb-hash-ids: true -> false".to_string());
+        }
+
+        // Plan all file renames and content updates
+        for issue in &all_issues {
+            if let Some(new_id) = id_mapping.get(&issue.id) {
+                changes.push(format!("Rename file: {}.md -> {}.md", issue.id, new_id));
+                changes.push(format!(
+                    "Update ID in frontmatter: {} -> {}",
+                    issue.id, new_id
+                ));
+
+                // Check if this issue has dependencies that will be renamed
+                for dep_id in issue.depends_on.keys() {
+                    if id_mapping.contains_key(dep_id) {
+                        changes.push(format!(
+                            "Update dependency in {}: {} -> {}",
+                            new_id,
+                            dep_id,
+                            id_mapping.get(dep_id).unwrap()
+                        ));
+                    }
+                }
+            }
+        }
+
+        // If dry-run, return changes without applying (return empty mapping for dry-run)
+        if dry_run {
+            return Ok((changes, HashMap::new()));
+        }
+
+        let configs = if update_config {
+            vec![("config-minibeads.yaml", "mb-hash-ids", "false")]
+        } else {
+            Vec::new()
+        };
+        self.apply_id_mapping(all_issues, &id_mapping, &configs)?;
+
+        Ok((changes, id_mapping))
+    }
+
+    /// Repack numeric IDs to fill gaps (make them contiguous)
+    ///
+    /// This operation:
+    /// - Collects all issues with numeric IDs for the current prefix
+    /// - Sorts them by creation timestamp (preserves chronological order)
+    /// - Renumbers them as 1, 2, 3, ... (fills gaps)
+    /// - If closed_issue_start is provided, numbers open and closed issues separately:
+    ///   - Open issues: 1, 2, 3, ...
+    ///   - Closed issues: closed_issue_start, closed_issue_start+1, ...
+    /// - Updates all dependency references
+    /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
+    /// - Is atomic (all updates succeed or none)
+    ///
+    /// Example: If you have issues 1, 3, 5, 7, they become 1, 2, 3, 4
+    /// Example with --closed-issue-start=1000:
+    ///   - Open issues 1, 3, 5 -> 1, 2, 3
+    ///   - Closed issues 2, 4, 6 -> 1000, 1001, 1002
+    pub fn repack_numeric_ids(
+        &self,
+        dry_run: bool,
+        closed_issue_start: Option<u32>,
+    ) -> Result<(Vec<String>, HashMap<String, String>)> {
+        let _lock = self.lock_for_write()?;
+
+        // Get current prefix
+        let prefix = self.get_prefix()?;
+
+        // Load all issues
+        let all_issues = self.list_all_issues_no_dependents()?;
+
+        // Collect all numeric IDs with matching prefix
+        let mut numeric_issues = Vec::new();
+        for issue in &all_issues {
+            if let Some(pos) = issue.id.rfind('-') {
+                let issue_prefix = &issue.id[..pos];
+                let issue_suffix = &issue.id[pos + 1..];
+
+                if issue_prefix == prefix {
+                    // Check if it's numeric
+                    if issue_suffix.parse::<u32>().is_ok() {
+                        numeric_issues.push(issue.clone());
+                    }
+                }
+            }
+        }
+
+        if numeric_issues.is_empty() {
+            anyhow::bail!("No numeric IDs found to repack. Use 'mb migrate --to numeric' first.");
+        }
+
+        // Sort by creation timestamp to preserve chronological order
+        numeric_issues.sort_by_key(|issue| issue.created_at);
+
+        // Build mapping from old ID to new contiguous ID
+        let mut id_mapping = HashMap::new();
+
+        // If closed_issue_start is provided, number open and closed issues separately
+        if let Some(closed_start) = closed_issue_start {
+            // Separate open and closed issues (maintaining chronological order within each group)
+            let mut open_issues = Vec::new();
+            let mut closed_issues = Vec::new();
+
+            for issue in &numeric_issues {
+                if issue.status == Status::Closed {
+                    closed_issues.push(issue.clone());
+                } else {
+                    open_issues.push(issue.clone());
+                }
+            }
+
+            // Validate that we have room for all open issues before the closed_issue_start
+            if open_issues.len() as u32 >= closed_start {
+                anyhow::bail!(
+                    "Cannot repack: {} open issues found, but --closed-issue-start is set to {}. \
+                     Open issues would collide with closed issue numbering. \
+                     Use a larger value for --closed-issue-start (e.g., {}).",
+                    open_issues.len(),
+                    closed_start,
+                    open_issues.len() as u32 + 1
+                );
+            }
+
+            // Number open issues: 1, 2, 3, ...
+            for (next_open_id, issue) in (1u32..).zip(open_issues.iter()) {
+                let new_id = format!("{}-{}", prefix, next_open_id);
+
+                // Only add to mapping if ID actually changes
+                if issue.id != new_id {
+                    id_mapping.insert(issue.id.clone(), new_id);
+                }
+            }
+
+            // Number closed issues: closed_issue_start, closed_issue_start+1, ...
+            for (next_closed_id, issue) in (closed_start..).zip(closed_issues.iter()) {
+                let new_id = format!("{}-{}", prefix, next_closed_id);
+
+                // Only add to mapping if ID actually changes
+                if issue.id != new_id {
+                    id_mapping.insert(issue.id.clone(), new_id);
+                }
+            }
+        } else {
+            // Original behavior: number all issues sequentially
+            for (next_id, issue) in (1u32..).zip(numeric_issues.iter()) {
+                let new_id = format!("{}-{}", prefix, next_id);
+
+                // Only add to mapping if ID actually changes
+                if issue.id != new_id {
+                    id_mapping.insert(issue.id.clone(), new_id);
+                }
+            }
+        }
+
+        if id_mapping.is_empty() {
+            eprintln!("No gaps found - IDs are already contiguous (1, 2, 3, ...)");
+            return Ok((
+                vec!["No changes needed - IDs already contiguous".to_string()],
+                HashMap::new(),
+            ));
+        }
+
+        // Track all changes for dry-run mode
+        let mut changes = Vec::new();
+        changes.push(format!(
+            "Repacking {} numeric IDs to fill gaps",
+            id_mapping.len()
+        ));
+
+        // Plan all file renames and content updates
+        for issue in &all_issues {
+            if let Some(new_id) = id_mapping.get(&issue.id) {
+                changes.push(format!("Rename file: {}.md -> {}.md", issue.id, new_id));
+                changes.push(format!(
+                    "Update ID in frontmatter: {} -> {}",
+                    issue.id, new_id
+                ));
+
+                // Check if this issue has dependencies that will be renamed
+                for dep_id in issue.depends_on.keys() {
+                    if id_mapping.contains_key(dep_id) {
+                        changes.push(format!(
+                            "Update dependency in {}: {} -> {}",
+                            new_id,
+                            dep_id,
+                            id_mapping.get(dep_id).unwrap()
+                        ));
+                    }
+                }
+            }
+        }
+
+        // If dry-run, return changes without applying (return empty mapping for dry-run)
+        if dry_run {
+            return Ok((changes, HashMap::new()));
+        }
+
+        self.apply_id_mapping(all_issues, &id_mapping, &[])?;
+
+        Ok((changes, id_mapping))
+    }
+}
+
+/// Recursively walk `issues_dir` (flat or sharded layout) and return every
+/// issue's ID and path. Free function so it can be used before a `Storage` is
+/// fully constructed (see `infer_prefix_from_issues_dir`, used while
+/// bootstrapping `config.yaml`); `Storage::issue_file_paths` delegates here.
+pub(crate) fn issue_file_paths_in(issues_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+    if !issues_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut stack = vec![issues_dir.to_path_buf()];
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir)
+            .with_context(|| format!("Failed to read issues directory: {}", dir.display()))?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() || !is_markdown_path(&path) {
+                continue;
+            }
+
+            let issue_id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| anyhow::anyhow!("Invalid issue filename: {}", path.display()))?
+                .to_string();
+
+            if !seen.insert(issue_id.clone()) {
+                anyhow::bail!("Duplicate issue file found for ID: {}", issue_id);
+            }
+
+            paths.push((issue_id, path));
+        }
+    }
+
+    paths.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(paths)
+}
+
+/// Infer the dominant issue prefix from issue files already sitting in
+/// `issues_dir` (e.g. `ds-42.md`, `ds-43.md` -> `"ds"`). This is GROUND TRUTH
+/// when issues already exist and must be preferred over guessing from the
+/// directory name: opening or initializing a store whose config.yaml is
+/// missing (but whose issues/ directory already has real issues in it, e.g.
+/// upstream `bd` data being read for the first time, or a deleted/lost
+/// config.yaml) must not silently invent a prefix that ignores the issues
+/// that are right there. Returns `None` only when there is nothing to infer
+/// from (empty or newly-created issues/ directory).
+fn infer_prefix_from_issues_dir(issues_dir: &Path) -> Option<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for (issue_id, _) in issue_file_paths_in(issues_dir).ok()? {
+        if let Some(pos) = issue_id.rfind('-') {
+            *counts.entry(issue_id[..pos].to_string()).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(prefix, _)| prefix)
+}
+
+/// Infer prefix from the parent directory name. Only a fallback: prefer
+/// [`infer_prefix_from_issues_dir`] whenever real issues already exist, since
+/// this directory-name guess has no relation to a project's actual issue IDs
+/// and can produce a silently-wrong prefix (e.g. "tmp" for a store opened
+/// from a path under `/tmp/...`).
+fn infer_prefix(beads_dir: &Path) -> Option<String> {
+    let parent = beads_dir.parent()?.parent()?;
+    let name = parent.file_name()?.to_str()?;
+
+    let prefix = name.to_lowercase().replace([' ', '_'], "-");
+
+    Some(prefix)
+}
+
+/// Create config-minibeads.yaml with minibeads-specific options
+/// This file contains options that are NOT compatible with upstream bd
+fn create_minibeads_config(
+    beads_dir: &Path,
+    mb_hash_ids: bool,
+    issue_layout: IssueStorageLayout,
+) -> Result<()> {
+    use std::io::Write;
+
+    let config_path = beads_dir.join("config-minibeads.yaml");
+
+    // Don't clobber existing config
+    if config_path.exists() {
+        return Ok(());
+    }
+
+    let mut file =
+        fs::File::create(&config_path).context("Failed to create config-minibeads.yaml")?;
+
+    // Write header with commented explanation
+    writeln!(file, "# Minibeads-specific configuration options")?;
+    writeln!(
+        file,
+        "# This file contains options that are NOT compatible with upstream bd"
+    )?;
+    writeln!(file)?;
+
+    writeln!(
+        file,
+        "# Use hash-based issue IDs instead of sequential numbers"
+    )?;
+    writeln!(
+        file,
+        "# When true, issues are named like: prefix-a1b2c3 (based on content hash)"
+    )?;
+    writeln!(
+        file,
+        "# When false, issues are named like: prefix-1, prefix-2, ... (sequential)"
+    )?;
+    writeln!(file, "# Default: false")?;
+    writeln!(
+        file,
+        "mb-hash-ids: {}",
+        if mb_hash_ids { "true" } else { "false" }
+    )?;
+    writeln!(file)?;
+
+    // Hash encoding format
+    writeln!(file, "# Hash encoding format for hash-based IDs")?;
+    writeln!(file, "# base36: Uses characters [0-9a-z] for better information density (recommended, matches upstream bd)")?;
+    writeln!(
+        file,
+        "# hex: Uses characters [0-9a-f] for hexadecimal encoding (legacy format)"
+    )?;
+    writeln!(file, "# Default: base36")?;
+    writeln!(file, "hash-encoding: base36")?;
+    writeln!(file)?;
+
+    // Issue file layout
+    writeln!(file, "# Issue markdown file layout")?;
+    writeln!(file, "# flat: issues are stored directly under issues/")?;
+    writeln!(
+        file,
+        "# sharded: issues are stored under issues/n/<tens>/<ones>/ for numeric IDs"
+    )?;
+    writeln!(
+        file,
+        "#          and issues/h/<first>/<second>/ for hash/custom IDs"
+    )?;
+    writeln!(file, "# Default: flat")?;
+    writeln!(file, "issue-storage-layout: {}", issue_layout.as_str())?;
+
+    Ok(())
+}
+
+/// Ensure .gitignore exists and contains required entries
+fn ensure_gitignore(beads_dir: &Path) -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+
+    let gitignore_path = beads_dir.join(".gitignore");
+    let required_entries = [
+        "minibeads.lock",
+        "command_history.log",
+        "minibeads-transaction.json",
+        ".mb-write-*",
+        "sync_ancestors/",
+    ];
+
+    // Read existing content if file exists
+    let mut existing_lines = Vec::new();
+    if gitignore_path.exists() {
+        let file = fs::File::open(&gitignore_path).context("Failed to read .gitignore")?;
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            existing_lines.push(line?);
+        }
+    }
+
+    // Check which entries are missing
+    let mut missing_entries = Vec::new();
+    for entry in &required_entries {
+        if !existing_lines.iter().any(|line| line.trim() == *entry) {
+            missing_entries.push(*entry);
+        }
+    }
+
+    // Append missing entries if any
+    if !missing_entries.is_empty() {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&gitignore_path)
+            .context("Failed to open .gitignore for writing")?;
+
+        // Add a newline before our entries if file already had content
+        if !existing_lines.is_empty() && !existing_lines.last().unwrap().is_empty() {
+            writeln!(file)?;
+        }
+
+        // Write missing entries
+        for entry in missing_entries {
+            writeln!(file, "{}", entry)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Set file mtime to match issue's updated_at timestamp
+/// This preserves timestamps when importing from JSONL
+#[allow(dead_code)] // Used by import and sync (not yet fully wired up)
+fn set_file_mtime_from_issue(file_path: &Path, issue: &Issue) -> Result<()> {
+    use filetime::{set_file_mtime, FileTime};
+    use std::time::SystemTime;
+
+    // Convert DateTime<Utc> to SystemTime
+    let system_time: SystemTime = issue.updated_at.into();
+
+    // Convert to FileTime
+    let file_time = FileTime::from_system_time(system_time);
+
+    // Set the file's modification time
+    set_file_mtime(file_path, file_time)
+        .with_context(|| format!("Failed to set mtime for {}", file_path.display()))?;
+
+    Ok(())
+}
+
+/// Get file mtime as DateTime<Utc>
+/// This is used for comparison during sync
+#[allow(dead_code)] // Used by sync command (not yet implemented)
+pub fn get_file_mtime(file_path: &Path) -> Result<chrono::DateTime<chrono::Utc>> {
+    use chrono::{DateTime, Utc};
+    use std::time::SystemTime;
+
+    let metadata = fs::metadata(file_path)
+        .with_context(|| format!("Failed to get metadata for {}", file_path.display()))?;
+
+    let mtime: SystemTime = metadata
+        .modified()
+        .with_context(|| format!("Failed to get modified time for {}", file_path.display()))?;
+
+    // Convert SystemTime to DateTime<Utc>
+    let datetime: DateTime<Utc> = mtime.into();
+
+    Ok(datetime)
+}
+
+/// Find the true maximum numeric ID before a large gap
+///
+/// This function implements a gap-based heuristic to distinguish legitimate numeric IDs
+/// from hash IDs that happen to be all-numeric. It counts sequentially from 1 until it
+/// finds MAX_GAP (default 100) consecutive missing IDs, then treats everything before
+/// that gap as legitimate numeric IDs and everything after as hash IDs.
+///
+/// Returns: (max_numeric_id, ids_above_gap)
+/// - max_numeric_id: The highest numeric ID before the gap (or 0 if none found)
+/// - ids_above_gap: Numeric IDs that appear after the gap (likely hash IDs)
+fn find_max_numeric_id_before_gap(numeric_ids: &[u32], max_gap: u32) -> (u32, Vec<u32>) {
+    if numeric_ids.is_empty() {
+        return (0, Vec::new());
+    }
+
+    // Sort the numeric IDs
+    let mut sorted_ids = numeric_ids.to_vec();
+    sorted_ids.sort_unstable();
+
+    // Find the first gap of size >= MAX_GAP
+    let mut max_before_gap = sorted_ids[0];
+    let mut gap_start = 0;
+    let mut found_gap = false;
+
+    for i in 0..sorted_ids.len() - 1 {
+        let current = sorted_ids[i];
+        let next = sorted_ids[i + 1];
+        let gap_size = next - current;
+
+        if gap_size >= max_gap {
+            max_before_gap = current;
+            gap_start = i + 1;
+            found_gap = true;
+            break;
+        }
+    }
+
+    // If no gap found, use the highest ID
+    if !found_gap {
+        max_before_gap = *sorted_ids.last().unwrap();
+        return (max_before_gap, Vec::new());
+    }
+
+    // Collect IDs above the gap (these are likely hash IDs with numeric-only hashes)
+    let ids_above_gap = sorted_ids[gap_start..].to_vec();
+
+    (max_before_gap, ids_above_gap)
+}
+
+fn upsert_yaml_key_value(file_path: &Path, key: &str, new_value: &str) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+
+    if !file_path.exists() {
+        fs::write(file_path, "")
+            .with_context(|| format!("Failed to create config file: {}", file_path.display()))?;
+    }
+
+    let file = fs::File::open(file_path)
+        .with_context(|| format!("Failed to open config file: {}", file_path.display()))?;
+    let reader = BufReader::new(file);
+    let mut lines: Vec<String> = reader
+        .lines()
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("Failed to read config file: {}", file_path.display()))?;
+
+    let key_prefix = format!("{}:", key);
+    let rendered_value = serde_yaml::to_string(new_value)
+        .unwrap_or_else(|_| format!("{:?}\n", new_value))
+        .trim()
+        .trim_start_matches("---")
+        .trim()
+        .to_string();
+    let mut found = false;
+
+    for line in &mut lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&key_prefix) {
+            let indent = line.len() - line.trim_start().len();
+            *line = format!("{}{}: {}", " ".repeat(indent), key, rendered_value);
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        lines.push(format!("{}: {}", key, rendered_value));
+    }
+
+    let content = lines.join("\n") + "\n";
+    fs::write(file_path, content)
+        .with_context(|| format!("Failed to write config file: {}", file_path.display()))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod create_integrity_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_create_id_fails_without_overwriting_existing_issue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir.clone(),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+
+        let original = storage
+            .create_issue(
+                "Existing epic".to_string(),
+                "Keep this issue unchanged.".to_string(),
+                None,
+                None,
+                0,
+                IssueType::Epic,
+                None,
+                Vec::new(),
+                None,
+                Some("demo-2".to_string()),
+                Vec::new(),
+            )
+            .unwrap();
+        let original_markdown = fs::read_to_string(beads_dir.join("issues/demo-2.md")).unwrap();
+
+        let result = storage.create_issue(
+            "Accidental replacement".to_string(),
+            String::new(),
+            None,
+            None,
+            2,
+            IssueType::Task,
+            None,
+            Vec::new(),
+            None,
+            Some(original.id.clone()),
+            Vec::new(),
+        );
+
+        assert!(result.is_err(), "duplicate creation must fail loudly");
+        assert_eq!(
+            fs::read_to_string(beads_dir.join("issues/demo-2.md")).unwrap(),
+            original_markdown,
+            "a failed create must preserve the existing issue"
+        );
+    }
+}
+
+#[cfg(test)]
+mod list_order_tests {
+    use super::*;
+    use crate::types::IssueType;
+    use chrono::{DateTime, Duration};
+
+    fn issue_at(id: &str, created: DateTime<chrono::Utc>) -> Issue {
+        let mut issue = Issue::new(id.to_string(), "t".to_string(), 3, IssueType::Task);
+        issue.created_at = created;
+        issue
+    }
+
+    #[test]
+    fn numeric_suffix_parsing() {
+        assert_eq!(numeric_id_suffix("minibeads-42"), Some(42));
+        assert_eq!(numeric_id_suffix("minibeads-1"), Some(1));
+        assert_eq!(numeric_id_suffix("minibeads-a3f9"), None);
+        assert_eq!(numeric_id_suffix("foo-bar-7"), Some(7));
+    }
+
+    #[test]
+    fn numeric_cluster_first_then_hash() {
+        let base = chrono::Utc::now();
+        let mut issues = [
+            issue_at("minibeads-a3f9", base + Duration::seconds(1)),
+            issue_at("minibeads-10", base + Duration::seconds(2)),
+            issue_at("minibeads-2", base + Duration::seconds(3)),
+            issue_at("minibeads-b001", base),
+            issue_at("minibeads-1", base + Duration::seconds(4)),
+        ];
+        issues.sort_by(compare_for_list);
+        let order: Vec<&str> = issues.iter().map(|i| i.id.as_str()).collect();
+        // Numeric ascending first (1, 2, 10), then hash-based by creation date.
+        assert_eq!(
+            order,
+            vec![
+                "minibeads-1",
+                "minibeads-2",
+                "minibeads-10",
+                "minibeads-b001",
+                "minibeads-a3f9",
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod ready_tests {
+    use super::*;
+
+    fn storage_with_open_issues(count: usize) -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir,
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .expect("init storage");
+        for i in 0..count {
+            storage
+                .create_issue(
+                    format!("Issue {i}"),
+                    String::new(),
+                    None,
+                    None,
+                    2,
+                    IssueType::Task,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                )
+                .expect("create issue");
+        }
+        (tmp, storage)
+    }
+
+    #[test]
+    fn no_limit_returns_all_ready_issues() {
+        let (_tmp, storage) = storage_with_open_issues(15);
+        let ready = storage.get_ready(None, None, None, "hybrid").unwrap();
+        assert_eq!(ready.len(), 15);
+    }
+
+    #[test]
+    fn explicit_limit_truncates() {
+        let (_tmp, storage) = storage_with_open_issues(15);
+        // Limiting is now the caller's responsibility (applied after filtering).
+        let mut ready = storage.get_ready(None, None, None, "hybrid").unwrap();
+        ready.truncate(5);
+        assert_eq!(ready.len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod config_compat_tests {
+    use super::*;
+
+    /// Upstream bd leaves `issue-prefix` commented out in config.yaml (the
+    /// prefix lives in its database). Opening such a repo must succeed, and the
+    /// prefix must be inferred from the issue filenames rather than erroring.
+    #[test]
+    fn open_tolerates_commented_issue_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let issues_dir = beads_dir.join("issues");
+        fs::create_dir_all(&issues_dir).unwrap();
+
+        // Upstream-style config.yaml: issue-prefix only appears as a comment.
+        fs::write(
+            beads_dir.join("config.yaml"),
+            "# Beads Configuration File\n# issue-prefix: \"\"\nno-db: false\n",
+        )
+        .unwrap();
+
+        // Two issues on disk so the prefix can be inferred.
+        fs::write(issues_dir.join("acme-1.md"), "placeholder").unwrap();
+        fs::write(issues_dir.join("acme-2.md"), "placeholder").unwrap();
+
+        let storage = Storage::open(beads_dir).expect("open must tolerate commented prefix");
+        assert_eq!(storage.get_prefix().unwrap(), "acme");
+    }
+
+    /// Regression test: opening a store whose config.yaml is MISSING entirely
+    /// (e.g. upstream `bd` data seen for the first time, or a lost/deleted
+    /// config.yaml) must infer the prefix from issue files that already exist,
+    /// not from the parent directory's name. A directory-name guess is
+    /// unrelated to a project's real issue IDs and can be actively misleading
+    /// -- e.g. a checkout living under a path containing "tmp" would silently
+    /// bootstrap `issue-prefix: tmp` and every later `mb create` would then
+    /// use that wrong prefix, ignoring the `ds-*` issues sitting right there.
+    #[test]
+    fn open_infers_prefix_from_existing_issues_over_directory_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Simulate a checkout living under a path whose grandparent-of-.beads
+        // directory is named "tmp" -- exactly the directory-name heuristic's
+        // input (see `infer_prefix`) -- so it would mislead it into guessing
+        // "tmp" as the prefix.
+        let beads_dir = tmp.path().join("tmp").join("checkout").join(".beads");
+        let issues_dir = beads_dir.join("issues");
+        fs::create_dir_all(&issues_dir).unwrap();
+
+        // No config.yaml at all yet -- but real issues already exist.
+        fs::write(issues_dir.join("ds-1.md"), "placeholder").unwrap();
+        fs::write(issues_dir.join("ds-2.md"), "placeholder").unwrap();
+        fs::write(issues_dir.join("ds-3.md"), "placeholder").unwrap();
+
+        let storage = Storage::open(beads_dir.clone()).expect("open must succeed");
+        assert_eq!(
+            storage.get_prefix().unwrap(),
+            "ds",
+            "must infer the prefix from the existing ds-* issues, not the 'tmp' directory name"
+        );
+
+        // And the inferred prefix must have actually been written into
+        // config.yaml, not just returned transiently.
+        let config_yaml = fs::read_to_string(beads_dir.join("config.yaml")).unwrap();
+        assert!(
+            config_yaml.contains("ds"),
+            "config.yaml should record the inferred prefix: {config_yaml}"
+        );
+        assert!(
+            !config_yaml.contains("tmp"),
+            "config.yaml must not fall back to the misleading directory name: {config_yaml}"
+        );
+    }
+
+    /// Companion case: with NO existing issues to learn from, falling back to
+    /// the directory-name guess (then "bd") is still the reasonable default --
+    /// this fix must not regress that.
+    #[test]
+    fn open_falls_back_to_directory_name_when_no_issues_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        // `infer_prefix`'s directory-name guess reads the grandparent-of-.beads
+        // directory name (see the `open`/`init` bootstrap: it's the fallback
+        // consulted only when there are no existing issues to learn from).
+        let beads_dir = tmp
+            .path()
+            .join("acme-project")
+            .join("checkout")
+            .join(".beads");
+        fs::create_dir_all(&beads_dir).unwrap();
+
+        let storage = Storage::open(beads_dir).expect("open must succeed");
+        assert_eq!(storage.get_prefix().unwrap(), "acme-project");
+    }
+}
+
+#[cfg(test)]
+mod issue_layout_tests {
+    use super::*;
+    use crate::types::IssueType;
+
+    #[test]
+    fn sharded_paths_use_numeric_suffix_or_hash_prefix() {
+        assert_eq!(
+            sharded_relative_path("demo-1"),
+            PathBuf::from("n").join("0").join("1").join("demo-1.md")
+        );
+        assert_eq!(
+            sharded_relative_path("demo-12"),
+            PathBuf::from("n").join("1").join("2").join("demo-12.md")
+        );
+        assert_eq!(
+            sharded_relative_path("demo-123"),
+            PathBuf::from("n").join("2").join("3").join("demo-123.md")
+        );
+        assert_eq!(
+            sharded_relative_path("demo-a3f9c2"),
+            PathBuf::from("h")
+                .join("a")
+                .join("3")
+                .join("demo-a3f9c2.md")
+        );
+    }
+
+    #[test]
+    fn create_uses_configured_sharded_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir.clone(),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Sharded,
+        )
+        .unwrap();
+
+        let issue = storage
+            .create_issue(
+                "Task".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(issue.id, "demo-1");
+        assert!(beads_dir.join("issues/n/0/1/demo-1.md").exists());
+        assert!(!beads_dir.join("issues/demo-1.md").exists());
+        assert!(storage.get_issue("demo-1").unwrap().is_some());
+    }
+
+    #[test]
+    fn migrate_layout_moves_existing_files_and_updates_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir.clone(),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+
+        storage
+            .create_issue(
+                "One".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        storage
+            .create_issue(
+                "Two".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+
+        let changes = storage
+            .migrate_issue_storage_layout(IssueStorageLayout::Sharded, false, true)
+            .unwrap();
+
+        assert!(changes.iter().any(|c| c.contains("issue-storage-layout")));
+        assert!(beads_dir.join("issues/n/0/1/demo-1.md").exists());
+        assert!(beads_dir.join("issues/n/0/2/demo-2.md").exists());
+        assert!(!beads_dir.join("issues/demo-1.md").exists());
+        assert_eq!(
+            storage.issue_storage_layout().unwrap(),
+            IssueStorageLayout::Sharded
+        );
+
+        let next = storage
+            .create_issue(
+                "Three".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(next.id, "demo-3");
+        assert!(beads_dir.join("issues/n/0/3/demo-3.md").exists());
+    }
+}
+
+#[cfg(test)]
+mod claim_tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    /// Create an initialized storage in a temp dir with a single open issue.
+    fn storage_with_one_issue() -> (tempfile::TempDir, Storage, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir,
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .expect("init storage");
+        let issue = storage
+            .create_issue(
+                "A task".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .expect("create issue");
+        (tmp, storage, issue.id)
+    }
+
+    #[test]
+    fn claim_sets_assignee_status_and_window() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let until = Utc::now() + Duration::hours(48);
+        let empty = HashMap::new();
+
+        let issue = storage.claim_issue(&id, "host-a", until, &empty).unwrap();
+        assert_eq!(issue.assignee, "host-a");
+        assert_eq!(issue.status, Status::InProgress);
+        assert!(issue.claimed_at.is_some());
+        assert_eq!(issue.claimed_until, Some(until));
+    }
+
+    #[test]
+    fn claim_rejected_when_actively_claimed_by_other() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let until = Utc::now() + Duration::hours(48);
+        let empty = HashMap::new();
+
+        storage.claim_issue(&id, "host-a", until, &empty).unwrap();
+        let err = storage
+            .claim_issue(&id, "host-b", until, &empty)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("already claimed"),
+            "unexpected error: {err}"
+        );
+        // The original holder must be untouched.
+        let issue = storage.get_issue(&id).unwrap().unwrap();
+        assert_eq!(issue.assignee, "host-a");
+    }
+
+    #[test]
+    fn same_actor_can_refresh_its_own_claim() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let empty = HashMap::new();
+        let first = Utc::now() + Duration::hours(1);
+        storage.claim_issue(&id, "host-a", first, &empty).unwrap();
+
+        let extended = Utc::now() + Duration::hours(72);
+        let issue = storage
+            .claim_issue(&id, "host-a", extended, &empty)
+            .unwrap();
+        assert_eq!(issue.assignee, "host-a");
+        assert_eq!(issue.claimed_until, Some(extended));
+    }
+
+    #[test]
+    fn expired_claim_can_be_taken_by_another_worker() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let empty = HashMap::new();
+        // A claim that already expired in the past.
+        let past = Utc::now() - Duration::hours(1);
+        storage.claim_issue(&id, "host-a", past, &empty).unwrap();
+
+        let fresh = Utc::now() + Duration::hours(48);
+        let issue = storage
+            .claim_issue(&id, "host-b", fresh, &empty)
+            .expect("stale claim should be reclaimable");
+        assert_eq!(issue.assignee, "host-b");
+    }
+
+    #[test]
+    fn claiming_a_closed_issue_fails() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        storage.close_issue(&id, "done").unwrap();
+        let until = Utc::now() + Duration::hours(1);
+        let err = storage
+            .claim_issue(&id, "host-a", until, &HashMap::new())
+            .unwrap_err();
+        assert!(err.to_string().contains("closed"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn release_clears_claim_and_reopens() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let until = Utc::now() + Duration::hours(48);
+        storage
+            .claim_issue(&id, "host-a", until, &HashMap::new())
+            .unwrap();
+
+        let issue = storage.release_issue(&id, "host-a", false).unwrap();
+        assert!(issue.assignee.is_empty());
+        assert_eq!(issue.status, Status::Open);
+        assert!(issue.claimed_at.is_none());
+        assert!(issue.claimed_until.is_none());
+    }
+
+    #[test]
+    fn release_by_other_requires_force() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let until = Utc::now() + Duration::hours(48);
+        storage
+            .claim_issue(&id, "host-a", until, &HashMap::new())
+            .unwrap();
+
+        assert!(storage.release_issue(&id, "host-b", false).is_err());
+        let issue = storage.release_issue(&id, "host-b", true).unwrap();
+        assert!(issue.assignee.is_empty());
+    }
+
+    #[test]
+    fn claim_applies_sibling_updates_but_not_status_override() {
+        let (_tmp, storage, id) = storage_with_one_issue();
+        let until = Utc::now() + Duration::hours(48);
+        let mut updates = HashMap::new();
+        updates.insert("priority".to_string(), "0".to_string());
+        // A status override in the same call must be ignored by claim.
+        updates.insert("status".to_string(), "blocked".to_string());
+
+        let issue = storage.claim_issue(&id, "host-a", until, &updates).unwrap();
+        assert_eq!(issue.priority, 0);
+        assert_eq!(issue.status, Status::InProgress);
+    }
+}
+
+#[cfg(test)]
+mod github_metadata_tests {
+    use super::*;
+
+    fn storage() -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir,
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .expect("init storage");
+        (tmp, storage)
+    }
+
+    #[test]
+    fn create_with_github_external_ref_preserves_labels() {
+        let (_tmp, storage) = storage();
+        let issue = storage
+            .create_issue(
+                "linked".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                vec!["bug".to_string()],
+                Some("https://github.com/owner/repo/issues/123".to_string()),
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(issue.labels, vec!["bug".to_string()]);
+    }
+
+    #[test]
+    fn github_external_ref_can_be_detected_without_labels() {
+        let (_tmp, storage) = storage();
+        let issue = storage
+            .create_issue(
+                "local".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+
+        storage
+            .update_issue(
+                &issue.id,
+                HashMap::from([(
+                    "external_ref".to_string(),
+                    "https://github.com/owner/repo/issues/456".to_string(),
+                )]),
+            )
+            .unwrap();
+
+        let issues = storage.list_issues(None, None, None, None, None).unwrap();
+        let github_ids: Vec<_> = issues
+            .iter()
+            .filter(|issue| {
+                issue
+                    .external_ref
+                    .as_deref()
+                    .is_some_and(is_github_issue_ref)
+            })
+            .map(|issue| issue.id.as_str())
+            .collect();
+        assert_eq!(github_ids, vec![issue.id.as_str()]);
+    }
+
+    #[test]
+    fn comments_round_trip_in_created_order() {
+        let (_tmp, storage) = storage();
+        let issue = storage
+            .create_issue(
+                "commented".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+
+        let first = storage
+            .add_comment(&issue.id, "alice", "first comment")
+            .unwrap();
+        let second = storage
+            .add_comment(&issue.id, "bob", "second comment")
+            .unwrap();
+
+        let comments = storage.list_comments(&issue.id).unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].id, first.id);
+        assert_eq!(comments[0].body, "first comment");
+        assert_eq!(comments[1].id, second.id);
+        assert_eq!(comments[1].body, "second comment");
+    }
+
+    #[test]
+    fn delete_comment_removes_only_the_targeted_comment() {
+        let (_tmp, storage) = storage();
+        let issue = storage
+            .create_issue(
+                "commented".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+
+        let first = storage.add_comment(&issue.id, "alice", "first").unwrap();
+        let second = storage.add_comment(&issue.id, "bob", "second").unwrap();
+
+        let removed = storage.delete_comment(&issue.id, &first.id).unwrap();
+        assert_eq!(removed.id, first.id);
+
+        let comments = storage.list_comments(&issue.id).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].id, second.id);
+    }
+
+    #[test]
+    fn delete_missing_comment_errors_and_leaves_others() {
+        let (_tmp, storage) = storage();
+        let issue = storage
+            .create_issue(
+                "commented".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        let only = storage.add_comment(&issue.id, "alice", "keep me").unwrap();
+
+        let err = storage
+            .delete_comment(&issue.id, "does-not-exist")
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "unexpected: {err}");
+
+        // The real comment is untouched.
+        let comments = storage.list_comments(&issue.id).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].id, only.id);
+    }
+}
+
+#[cfg(test)]
+mod search_replace_tests {
+    use super::*;
+
+    /// Create an initialized storage with one issue whose description is `desc`.
+    fn storage_with_description(desc: &str) -> (tempfile::TempDir, Storage, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let beads_dir = tmp.path().join(".beads");
+        let storage = Storage::init(
+            beads_dir,
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .expect("init storage");
+        let issue = storage
+            .create_issue(
+                "A task".to_string(),
+                desc.to_string(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+            )
+            .expect("create issue");
+        (tmp, storage, issue.id)
+    }
+
+    #[test]
+    fn unique_match_is_replaced() {
+        let (_tmp, storage, id) = storage_with_description("hello world, hello there");
+        let issue = storage
+            .search_replace_issue(&id, EditField::Description, "world", "rust", false)
+            .unwrap();
+        assert_eq!(issue.description, "hello rust, hello there");
+    }
+
+    #[test]
+    fn missing_search_text_errors_and_leaves_file_untouched() {
+        let (_tmp, storage, id) = storage_with_description("unchanged body");
+        let err = storage
+            .search_replace_issue(&id, EditField::Description, "absent", "x", false)
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "unexpected: {err}");
+        let issue = storage.get_issue(&id).unwrap().unwrap();
+        assert_eq!(issue.description, "unchanged body");
+    }
+
+    #[test]
+    fn ambiguous_match_errors_without_replace_all() {
+        let (_tmp, storage, id) = storage_with_description("a a a");
+        let err = storage
+            .search_replace_issue(&id, EditField::Description, "a", "b", false)
+            .unwrap_err();
+        assert!(err.to_string().contains("3 times"), "unexpected: {err}");
+        // Nothing was written.
+        let issue = storage.get_issue(&id).unwrap().unwrap();
+        assert_eq!(issue.description, "a a a");
+    }
+
+    #[test]
+    fn replace_all_rewrites_every_occurrence() {
+        let (_tmp, storage, id) = storage_with_description("a a a");
+        let issue = storage
+            .search_replace_issue(&id, EditField::Description, "a", "b", true)
+            .unwrap();
+        assert_eq!(issue.description, "b b b");
+    }
+
+    #[test]
+    fn empty_search_is_rejected() {
+        let (_tmp, storage, id) = storage_with_description("body");
+        let err = storage
+            .search_replace_issue(&id, EditField::Description, "", "x", false)
+            .unwrap_err();
+        assert!(err.to_string().contains("empty"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn multiline_search_targets_selected_field() {
+        let (_tmp, storage, id) = storage_with_description("body");
+        storage
+            .update_issue(
+                &id,
+                HashMap::from([(
+                    "design".to_string(),
+                    "line one\nline two\nline three".to_string(),
+                )]),
+            )
+            .unwrap();
+        let issue = storage
+            .search_replace_issue(
+                &id,
+                EditField::Design,
+                "line two\nline three",
+                "line two only",
+                false,
+            )
+            .unwrap();
+        assert_eq!(issue.design, "line one\nline two only");
+        // The description field is untouched by a design-targeted edit.
+        assert_eq!(issue.description, "body");
+    }
+
+    #[test]
+    fn append_adds_a_paragraph_after_existing_content() {
+        let (_tmp, storage, id) = storage_with_description("First paragraph.");
+        let issue = storage
+            .append_to_issue(&id, EditField::Description, "Second paragraph.")
+            .unwrap();
+        assert_eq!(issue.description, "First paragraph.\n\nSecond paragraph.");
+    }
+
+    #[test]
+    fn append_normalizes_trailing_whitespace_before_the_blank_line() {
+        let (_tmp, storage, id) = storage_with_description("First paragraph.\n\n");
+        let issue = storage
+            .append_to_issue(&id, EditField::Description, "Second paragraph.")
+            .unwrap();
+        // Exactly one blank line separates the two, regardless of prior trailing
+        // newlines.
+        assert_eq!(issue.description, "First paragraph.\n\nSecond paragraph.");
+    }
+
+    #[test]
+    fn append_to_empty_field_has_no_leading_blank_line() {
+        let (_tmp, storage, id) = storage_with_description("");
+        let issue = storage
+            .append_to_issue(&id, EditField::Design, "Design note.")
+            .unwrap();
+        assert_eq!(issue.design, "Design note.");
+        // The default (description) field stays empty.
+        assert_eq!(issue.description, "");
+    }
+
+    #[test]
+    fn append_empty_text_is_rejected() {
+        let (_tmp, storage, id) = storage_with_description("body");
+        let err = storage
+            .append_to_issue(&id, EditField::Description, "")
+            .unwrap_err();
+        assert!(err.to_string().contains("empty"), "unexpected: {err}");
+        // Nothing was written.
+        let issue = storage.get_issue(&id).unwrap().unwrap();
+        assert_eq!(issue.description, "body");
+    }
+}
+
+fn remap_issue(issue: &mut Issue, mapping: &HashMap<String, String>) -> bool {
+    let mut changed = false;
+    if let Some(new_id) = mapping.get(&issue.id) {
+        if new_id != &issue.id {
+            issue.id.clone_from(new_id);
+            changed = true;
+        }
+    }
+    issue.depends_on = std::mem::take(&mut issue.depends_on)
+        .into_iter()
+        .map(|(id, kind)| {
+            if let Some(new_id) = mapping.get(&id) {
+                changed |= new_id != &id;
+                (new_id.clone(), kind)
+            } else {
+                (id, kind)
+            }
+        })
+        .collect();
+    for field in [
+        &mut issue.title,
+        &mut issue.description,
+        &mut issue.design,
+        &mut issue.acceptance_criteria,
+        &mut issue.notes,
+    ] {
+        let replaced = replace_issue_ids_in_text(field, mapping);
+        if replaced != *field {
+            *field = replaced;
+            changed = true;
+        }
+    }
+    changed
+}
+
+// Own only the closed IDs so callers can move Issue values into their results.
+fn closed_issue_ids(issues: &[Issue]) -> HashSet<String> {
+    issues
+        .iter()
+        .filter(|issue| issue.status == Status::Closed)
+        .map(|issue| issue.id.clone())
+        .collect()
+}
+
+fn has_unresolved_dependencies(issue: &Issue, closed_ids: &HashSet<String>) -> bool {
+    if closed_ids.is_empty() {
+        issue.has_blocking_dependencies()
+    } else {
+        // A missing target stays unresolved; only explicitly closed issues
+        // discharge a blocking dependency.
+        issue
+            .get_blocking_dependencies()
+            .any(|id| !closed_ids.contains(id.as_str()))
+    }
+}
+fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> Result<()> {
+    let now = chrono::Utc::now();
+    for (key, value) in updates {
+        match key.as_str() {
+            "title" => issue.title = value,
+            "description" => issue.description = value,
+            "design" => issue.design = value,
+            "notes" => issue.notes = value,
+            "acceptance_criteria" => issue.acceptance_criteria = value,
+            "status" => {
+                issue.status = value.parse()?;
+                issue.closed_at = if issue.status == Status::Closed {
+                    issue.closed_at.or(Some(now))
+                } else {
+                    None
+                };
+            }
+            "priority" => issue.priority = value.parse()?,
+            "issue_type" => issue.issue_type = value.parse()?,
+            "assignee" => issue.assignee = value,
+            "external_ref" => {
+                issue.external_ref = if value.is_empty() { None } else { Some(value) }
+            }
+            _ => {}
+        }
+    }
+    issue.updated_at = now;
+    Ok(())
+}
