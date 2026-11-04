@@ -2,7 +2,7 @@
 
 Use debug builds for local development and validation.
 
-- `make validate` runs the routine Rust tests, eight shell-test fixtures,
+- `make validate` runs the routine Rust tests, the shell-test fixtures (`tests/*.sh`),
   migration/regression suites, deterministic harness-initialization checks,
   formatting, and Clippy.
 - `cargo test --locked --test regressions` exercises CLI/storage integration

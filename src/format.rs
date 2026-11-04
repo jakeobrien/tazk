@@ -29,10 +29,6 @@ pub struct Frontmatter {
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_until: Option<String>,
 }
 
 /// The Markdown body sections of an issue file, in the order they are written.
@@ -100,8 +96,6 @@ pub fn frontmatter_yaml(issue: &Issue) -> Result<String> {
         created_at: issue.created_at.to_rfc3339(),
         updated_at: issue.updated_at.to_rfc3339(),
         closed_at: issue.closed_at.map(|t| t.to_rfc3339()),
-        claimed_at: issue.claimed_at.map(|t| t.to_rfc3339()),
-        claimed_until: issue.claimed_until.map(|t| t.to_rfc3339()),
     };
     serde_yaml::to_string(&fm).context("Failed to serialize frontmatter")
 }
@@ -338,11 +332,6 @@ pub fn markdown_to_issue(issue_id: &str, content: &str) -> Result<Issue> {
         created_at: parse_timestamp(&fm.created_at)?,
         updated_at: parse_timestamp(&fm.updated_at)?,
         closed_at: fm.closed_at.as_ref().and_then(|s| parse_timestamp(s).ok()),
-        claimed_at: fm.claimed_at.as_ref().and_then(|s| parse_timestamp(s).ok()),
-        claimed_until: fm
-            .claimed_until
-            .as_ref()
-            .and_then(|s| parse_timestamp(s).ok()),
     };
 
     // Convert dependencies
@@ -597,9 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn test_claim_fields_roundtrip() {
-        // A claimed issue must round-trip its assignee + claim window losslessly
-        // through markdown so the claim survives sync to/from JSONL.
+    fn test_assignee_and_status_roundtrip() {
         let mut issue = Issue::new(
             "test-9".to_string(),
             "Claimed".to_string(),
@@ -608,19 +595,29 @@ mod tests {
         );
         issue.assignee = "buildbox/backend".to_string();
         issue.status = crate::types::Status::InProgress;
-        let now = Utc::now();
-        issue.claimed_at = Some(now);
-        issue.claimed_until = Some(now + chrono::Duration::hours(48));
 
         let markdown = issue_to_markdown(&issue).unwrap();
         assert!(markdown.contains("assignee: buildbox/backend"));
-        assert!(markdown.contains("claimed_until:"));
 
         let parsed = markdown_to_issue("test-9", &markdown).unwrap();
         assert_eq!(parsed.assignee, "buildbox/backend");
         assert_eq!(parsed.status, crate::types::Status::InProgress);
-        assert_eq!(parsed.claimed_at, issue.claimed_at);
-        assert_eq!(parsed.claimed_until, issue.claimed_until);
+    }
+
+    #[test]
+    fn test_legacy_claim_fields_are_ignored_on_read() {
+        // Files written before claim windows were removed still carry
+        // claimed_at/claimed_until; they must parse and be dropped on rewrite.
+        let issue = Issue::new("test-8".to_string(), "Old".to_string(), 2, IssueType::Task);
+        let markdown = issue_to_markdown(&issue).unwrap();
+        let legacy = markdown.replacen(
+            "created_at:",
+            "claimed_at: 2024-01-01T00:00:00Z\nclaimed_until: 2024-01-03T00:00:00Z\ncreated_at:",
+            1,
+        );
+        let parsed = markdown_to_issue("test-8", &legacy).unwrap();
+        let rewritten = issue_to_markdown(&parsed).unwrap();
+        assert!(!rewritten.contains("claimed_"));
     }
 
     #[test]
@@ -648,20 +645,6 @@ mod tests {
             let bad = markdown.replacen("created_at:", &format!("{extra}\ncreated_at:"), 1);
             assert!(markdown_to_issue("test-6", &bad).is_err(), "{extra}");
         }
-    }
-
-    #[test]
-    fn test_unclaimed_issue_omits_claim_fields() {
-        let issue = Issue::new(
-            "test-8".to_string(),
-            "Plain".to_string(),
-            2,
-            IssueType::Task,
-        );
-        let markdown = issue_to_markdown(&issue).unwrap();
-        assert!(!markdown.contains("claimed_at"));
-        assert!(!markdown.contains("claimed_until"));
-        assert!(!markdown.contains("assignee"));
     }
 
     #[test]

@@ -119,13 +119,13 @@ assert_equals "true" "$([ -f .tazk/config.yaml ] && echo true || echo false)" "C
 
 # Test 2: Create an issue
 echo -e "\n${YELLOW}Test 2: Create an issue${NC}"
-OUTPUT=$("$TZ_BIN" create "Test issue 1" -p 1 -t task -d "Test description" 2>&1)
+OUTPUT=$("$TZ_BIN" create "Test issue 1" -r agent -p 1 -t task -d "Test description" 2>&1)
 assert_contains "$OUTPUT" "Created issue: test-1" "Should create test-1"
 assert_equals "true" "$([ -f .tazk/issues/test-1.md ] && echo true || echo false)" "Issue file should exist"
 
 # Test 3: Create another issue with dependency
 echo -e "\n${YELLOW}Test 3: Create issue with dependency${NC}"
-OUTPUT=$("$TZ_BIN" create "Test issue 2" -p 2 -t bug --deps test-1 2>&1)
+OUTPUT=$("$TZ_BIN" create "Test issue 2" -r agent -p 2 -t bug --deps test-1 2>&1)
 assert_contains "$OUTPUT" "Created issue: test-2" "Should create test-2"
 
 # Verify dependency in file
@@ -142,7 +142,7 @@ assert_contains "$OUTPUT" "test-2: Test issue 2" "Should list test-2"
 echo -e "\n${YELLOW}Test 5: Show issue details${NC}"
 OUTPUT=$("$TZ_BIN" update test-1 --notes "Test notes" 2>&1)
 assert_contains "$OUTPUT" "Updated issue: test-1" "Should add notes before show"
-OUTPUT=$("$TZ_BIN" comments add test-1 --body "Test comment" 2>&1)
+OUTPUT=$("$TZ_BIN" comments add test-1 --body "Test comment" --author tester 2>&1)
 assert_contains "$OUTPUT" "Added comment:" "Should add comment before show"
 OUTPUT=$("$TZ_BIN" show test-1 2>&1)
 assert_contains "$OUTPUT" "ID: test-1" "Should show issue ID"
@@ -180,7 +180,7 @@ assert_equals "ok" "$JSON_COMMENT_RESULT" "JSON show should include structured c
 # Test 5b: Delete a comment by ID
 echo -e "\n${YELLOW}Test 5b: Delete a comment${NC}"
 # Add a second comment so we can confirm delete is targeted, not wholesale.
-SECOND_ID=$("$TZ_BIN" comments add test-1 --body "Second comment" --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+SECOND_ID=$("$TZ_BIN" comments add test-1 --body "Second comment" --author tester --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 FIRST_ID=$("$TZ_BIN" comments list test-1 --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
 OUTPUT=$("$TZ_BIN" comments delete test-1 "$FIRST_ID" 2>&1)
 assert_contains "$OUTPUT" "Deleted comment: $FIRST_ID" "Should confirm deletion"
@@ -190,10 +190,11 @@ assert_equals "1 $SECOND_ID" "$REMAINING" "Only the targeted comment should be r
 assert_fails "Deleting an unknown comment ID should fail" "$TZ_BIN" comments delete test-1 no-such-comment
 assert_equals "1" "$("$TZ_BIN" comments list test-1 --json 2>&1 | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')" "Survivor remains after a failed delete"
 
-# Test 6: Update issue status
-echo -e "\n${YELLOW}Test 6: Update issue status${NC}"
-OUTPUT=$("$TZ_BIN" update test-1 --status in_progress 2>&1)
-assert_contains "$OUTPUT" "Updated issue: test-1" "Should confirm update"
+# Test 6: Claim issue (sets status)
+echo -e "\n${YELLOW}Test 6: Claim issue${NC}"
+OUTPUT=$("$TZ_BIN" claim test-1 --as tester 2>&1)
+assert_contains "$OUTPUT" "Claimed test-1" "Should confirm claim"
+assert_fails "update --status should no longer exist" "$TZ_BIN" update test-1 --status open
 
 # Verify status in file
 STATUS=$(grep "^status:" .tazk/issues/test-1.md | awk '{print $2}')
@@ -246,7 +247,7 @@ assert_contains "$OUTPUT" "test-1" "JSON should include test-1"
 
 # Test 13: Add dependency manually
 echo -e "\n${YELLOW}Test 13: Add dependency${NC}"
-"$TZ_BIN" create "Test issue 3" -p 1 -t task >/dev/null 2>&1
+"$TZ_BIN" create "Test issue 3" -r agent -p 1 -t task >/dev/null 2>&1
 OUTPUT=$("$TZ_BIN" dep add test-3 --target test-2 --type related_to 2>&1)
 assert_contains "$OUTPUT" "Added dependency: test-3 depends on test-2" "Should add dependency"
 

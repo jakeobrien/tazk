@@ -21,6 +21,27 @@ enum StorageAccess {
     ReadOnly,
 }
 
+pub mod triage;
+
+/// Every field of a new issue, for callers (such as `tz triage promote`) that
+/// build one in code rather than through [`Storage::create_issue`]'s argument
+/// list.
+pub struct NewIssue {
+    pub title: String,
+    pub description: String,
+    pub design: Option<String>,
+    pub acceptance: Option<String>,
+    pub priority: i32,
+    pub issue_type: IssueType,
+    pub assignee: Option<String>,
+    pub labels: Vec<String>,
+    pub external_ref: Option<String>,
+    pub id: Option<String>,
+    pub deps: Vec<(String, DependencyType)>,
+    pub role: Option<Role>,
+    pub effort: Option<u8>,
+}
+
 pub struct Storage {
     tazk_dir: PathBuf,
     issues_dir: PathBuf,
@@ -726,10 +747,54 @@ impl Storage {
         role: Option<Role>,
         effort: Option<u8>,
     ) -> Result<Issue> {
+        let fields = NewIssue {
+            title,
+            description,
+            design,
+            acceptance,
+            priority,
+            issue_type,
+            assignee,
+            labels,
+            external_ref,
+            id,
+            deps,
+            role,
+            effort,
+        };
+        let _lock = self.lock_for_write()?;
+
+        let issue = self.build_new_issue_no_lock(fields)?;
+
+        // Write to file
+        let issue_path = self.configured_issue_path(&issue.id)?;
+        self.write_new_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
+    /// Allocate an ID (unless one is given) and build the issue, without
+    /// writing it. The caller must hold the write lock, so the allocated ID
+    /// stays free until the caller writes the file.
+    fn build_new_issue_no_lock(&self, fields: NewIssue) -> Result<Issue> {
+        let NewIssue {
+            title,
+            description,
+            design,
+            acceptance,
+            priority,
+            issue_type,
+            assignee,
+            labels,
+            external_ref,
+            id,
+            deps,
+            role,
+            effort,
+        } = fields;
         if let Some(effort) = effort {
             validate_effort(effort)?;
         }
-        let _lock = self.lock_for_write()?;
 
         // Generate ID if not provided
         let issue_id = if let Some(id) = id {
@@ -749,12 +814,8 @@ impl Storage {
         };
 
         // Create issue
-        let mut issue = Issue::new(issue_id.clone(), title, priority, issue_type);
-        issue.description = if description.is_empty() {
-            String::new()
-        } else {
-            description
-        };
+        let mut issue = Issue::new(issue_id, title, priority, issue_type);
+        issue.description = description;
         issue.design = design.unwrap_or_default();
         issue.acceptance_criteria = acceptance.unwrap_or_default();
         issue.assignee = assignee.unwrap_or_default();
@@ -769,10 +830,6 @@ impl Storage {
             self.validate_dependency_exists(&dep_id);
             issue.depends_on.insert(dep_id, dep_type);
         }
-
-        // Write to file
-        let issue_path = self.configured_issue_path(&issue_id)?;
-        self.write_new_issue_to_path(&issue_path, &issue)?;
 
         Ok(issue)
     }
@@ -829,10 +886,7 @@ impl Storage {
         ensure_contained(&self.tazk_dir, &comments_dir)?;
         fs::create_dir_all(&comments_dir).context("Failed to create comments directory")?;
 
-        let mut sorted = comments.to_vec();
-        sorted.sort_by_key(|c| c.created_at);
-        let content =
-            serde_json::to_string_pretty(&sorted).context("Failed to serialize comments")?;
+        let content = serialize_comments(comments)?;
         let path = self.comment_path(issue_id)?;
         atomic_write(&path, content.as_bytes())
             .with_context(|| format!("Failed to write {}", path.display()))?;
@@ -848,26 +902,7 @@ impl Storage {
         }
 
         let mut comments = self.read_comments_no_lock(issue_id)?;
-        let now = chrono::Utc::now();
-        let hash = Sha256::digest(format!(
-            "{}\n{}\n{}\n{}",
-            issue_id,
-            author,
-            body,
-            now.to_rfc3339()
-        ));
-        let id = format!("{}-c{:x}", issue_id, hash)
-            .chars()
-            .take(issue_id.len() + 12)
-            .collect::<String>();
-        let comment = Comment {
-            id,
-            issue_id: issue_id.to_string(),
-            author: author.to_string(),
-            body: body.to_string(),
-            created_at: now,
-            updated_at: now,
-        };
+        let comment = new_comment(issue_id, author, body, chrono::Utc::now());
         comments.push(comment.clone());
         self.write_comments_no_lock(issue_id, &comments)?;
         Ok(comment)
@@ -1060,27 +1095,13 @@ impl Storage {
         let mut issue = markdown_to_issue(id, &content)?;
 
         let target = issue.text_field_mut(field);
-        let occurrences = target.matches(search).count();
-        if occurrences == 0 {
-            anyhow::bail!(
-                "Search text not found in {} field of {}. The --search text must match the current contents exactly (including whitespace and newlines).",
-                field,
-                id
-            );
-        }
-        if occurrences > 1 && !replace_all {
-            anyhow::bail!(
-                "Search text matches {} times in {} field of {}. Add surrounding context so it matches exactly once, or pass --replace-all to replace every occurrence.",
-                occurrences,
-                field,
-                id
-            );
-        }
-
-        // replacen with the full count is equivalent to replace-all; the
-        // single-match path has already been bounded to one occurrence above.
-        let limit = if replace_all { occurrences } else { 1 };
-        *target = target.replacen(search, replace, limit);
+        *target = search_replace_text(
+            target,
+            search,
+            replace,
+            replace_all,
+            &format!("{field} field of {id}"),
+        )?;
 
         issue.updated_at = chrono::Utc::now();
 
@@ -1110,12 +1131,7 @@ impl Storage {
         let mut issue = markdown_to_issue(id, &content)?;
 
         let target = issue.text_field_mut(field);
-        let existing = target.trim_end();
-        *target = if existing.is_empty() {
-            text.to_string()
-        } else {
-            format!("{existing}\n\n{text}")
-        };
+        *target = append_paragraph(target, text);
 
         issue.updated_at = chrono::Utc::now();
 
@@ -1124,27 +1140,18 @@ impl Storage {
         Ok(issue)
     }
 
-    /// Atomically claim an issue for `actor`.
+    /// Claim an issue for `actor`.
     ///
     /// This is the local half of tazk' git-as-coordination model: the claim
-    /// records `assignee`/`status=in_progress`/`claimed_at`/`claimed_until` in the
-    /// markdown file. The cross-machine "compare-and-swap" is the subsequent
+    /// records `assignee` and `status=in_progress` (and bumps `updated_at`) in
+    /// the markdown file. The cross-machine "compare-and-swap" is the subsequent
     /// `git push` (a losing push is rejected, the loser pulls and sees the issue
     /// is taken). Within a single working copy the [`Lock`] serializes writers.
     ///
-    /// Succeeds when the issue is unclaimed, when the existing claim has expired
-    /// (`claimed_until` in the past), or when `actor` already holds it (refresh /
-    /// extend). Fails with an "already claimed" error when another worker holds an
-    /// active claim. `extra_updates` carries any sibling field edits from
-    /// `tz update --claim` (the `status`/`assignee` keys are ignored: the claim
-    /// controls those).
-    pub fn claim_issue(
-        &self,
-        id: &str,
-        actor: &str,
-        claimed_until: chrono::DateTime<chrono::Utc>,
-        extra_updates: &HashMap<String, String>,
-    ) -> Result<Issue> {
+    /// Fails if the issue is closed, or if it is already `in_progress` (whoever
+    /// holds it, including `actor`) unless `force` is set. `force` overrides the
+    /// lock and reassigns the issue to `actor` (it never overrides closed).
+    pub fn claim_issue(&self, id: &str, actor: &str, force: bool) -> Result<Issue> {
         let _lock = self.lock_for_write()?;
 
         let Some(issue_path) = self.existing_issue_path(id)? else {
@@ -1157,51 +1164,23 @@ impl Storage {
         if issue.status == Status::Closed {
             anyhow::bail!("Cannot claim {}: issue is closed", id);
         }
-
-        // Compare-and-swap precondition: refuse if another worker holds an active
-        // claim. A claim by `actor` is allowed through (refresh/extend), as is a
-        // stale (expired) claim by anyone.
-        let now = chrono::Utc::now();
-        if issue.is_actively_claimed(now) && issue.assignee != actor {
-            let until = issue
-                .claimed_until
-                .map(|u| format!(" until {}", u.to_rfc3339()))
-                .unwrap_or_default();
+        // Compare-and-swap precondition: an in-progress issue is already taken.
+        if issue.status == Status::InProgress && !force {
+            let holder = if issue.assignee.is_empty() {
+                "an unknown worker"
+            } else {
+                issue.assignee.as_str()
+            };
             anyhow::bail!(
-                "Issue {} is already claimed by '{}'{}",
+                "Issue {} is already in progress (claimed by '{}'). Use --force to take it anyway.",
                 id,
-                issue.assignee,
-                until
+                holder
             );
-        }
-
-        // Apply any sibling field edits, but never let them override the claim's
-        // own assignee/status.
-        for (key, value) in extra_updates {
-            match key.as_str() {
-                "title" => issue.title = value.clone(),
-                "description" => issue.description = value.clone(),
-                "design" => issue.design = value.clone(),
-                "notes" => issue.notes = value.clone(),
-                "acceptance_criteria" => issue.acceptance_criteria = value.clone(),
-                "priority" => issue.priority = value.parse()?,
-                "issue_type" => issue.issue_type = value.parse()?,
-                "external_ref" => {
-                    issue.external_ref = if value.is_empty() {
-                        None
-                    } else {
-                        Some(value.clone())
-                    }
-                }
-                _ => {}
-            }
         }
 
         issue.assignee = actor.to_string();
         issue.status = Status::InProgress;
-        issue.claimed_at = Some(now);
-        issue.claimed_until = Some(claimed_until);
-        issue.updated_at = now;
+        issue.updated_at = chrono::Utc::now();
 
         self.write_issue_to_path(&issue_path, &issue)?;
 
@@ -1210,10 +1189,9 @@ impl Storage {
 
     /// Release a claim, returning the issue to the backlog.
     ///
-    /// Clears `assignee`/`claimed_at`/`claimed_until` and, if the issue was
-    /// `in_progress`, flips it back to `open` so `tz ready` surfaces it again.
+    /// Clears `assignee` and, if the issue was `in_progress`, flips it back to `open` so `tz ready` surfaces it again.
     /// Refuses to release a claim held by a different worker unless `force` is
-    /// set (a stale claim can also simply be reclaimed via [`claim_issue`]).
+    /// set.
     pub fn release_issue(&self, id: &str, actor: &str, force: bool) -> Result<Issue> {
         let _lock = self.lock_for_write()?;
 
@@ -1234,8 +1212,6 @@ impl Storage {
         }
 
         issue.assignee = String::new();
-        issue.claimed_at = None;
-        issue.claimed_until = None;
         if issue.status == Status::InProgress {
             issue.status = Status::Open;
         }
@@ -1266,8 +1242,11 @@ impl Storage {
         Ok(issue)
     }
 
-    /// Reopen an issue
-    pub fn reopen_issue(&self, id: &str) -> Result<Issue> {
+    /// Reopen an issue.
+    ///
+    /// An issue without a role cannot be reopened: the caller must supply one
+    /// (`role`). A supplied `role` always replaces the stored one.
+    pub fn reopen_issue(&self, id: &str, role: Option<Role>) -> Result<Issue> {
         let _lock = self.lock_for_write()?;
 
         let Some(issue_path) = self.existing_issue_path(id)? else {
@@ -1276,6 +1255,14 @@ impl Storage {
 
         let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
         let mut issue = markdown_to_issue(id, &content)?;
+
+        match role.or(issue.role) {
+            Some(role) => issue.role = Some(role),
+            None => anyhow::bail!(
+                "Cannot reopen {}: it has no role. Resubmit with --role human|agent",
+                id
+            ),
+        }
 
         issue.status = Status::Open;
         issue.closed_at = None;
@@ -1503,6 +1490,86 @@ impl Storage {
         }
 
         Ok(cycles)
+    }
+}
+
+/// A new comment on `issue_id`. The ID hashes the issue, author, body and
+/// time, so two comments differ unless all four match.
+fn new_comment(
+    issue_id: &str,
+    author: &str,
+    body: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Comment {
+    let hash = Sha256::digest(format!(
+        "{}\n{}\n{}\n{}",
+        issue_id,
+        author,
+        body,
+        now.to_rfc3339()
+    ));
+    let id = format!("{}-c{:x}", issue_id, hash)
+        .chars()
+        .take(issue_id.len() + 12)
+        .collect::<String>();
+    Comment {
+        id,
+        issue_id: issue_id.to_string(),
+        author: author.to_string(),
+        body: body.to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// The comment-file JSON for `comments`, sorted by creation time.
+fn serialize_comments(comments: &[Comment]) -> Result<String> {
+    let mut sorted = comments.to_vec();
+    sorted.sort_by_key(|c| c.created_at);
+    serde_json::to_string_pretty(&sorted).context("Failed to serialize comments")
+}
+
+/// Replace `search` with `replace` in `text`. `search` must match exactly once
+/// unless `replace_all` is set; a missing or (without `replace_all`) ambiguous
+/// match is an error naming `location` (e.g. "description field of tz-1").
+pub(crate) fn search_replace_text(
+    text: &str,
+    search: &str,
+    replace: &str,
+    replace_all: bool,
+    location: &str,
+) -> Result<String> {
+    if search.is_empty() {
+        anyhow::bail!("--search text must not be empty");
+    }
+    let occurrences = text.matches(search).count();
+    if occurrences == 0 {
+        anyhow::bail!(
+            "Search text not found in {}. The --search text must match the current contents exactly (including whitespace and newlines).",
+            location
+        );
+    }
+    if occurrences > 1 && !replace_all {
+        anyhow::bail!(
+            "Search text matches {} times in {}. Add surrounding context so it matches exactly once, or pass --replace-all to replace every occurrence.",
+            occurrences,
+            location
+        );
+    }
+    // replacen with the full count is equivalent to replace-all; the
+    // single-match path has already been bounded to one occurrence above.
+    let limit = if replace_all { occurrences } else { 1 };
+    Ok(text.replacen(search, replace, limit))
+}
+
+/// `text` with `addition` appended as its own paragraph (after a blank line),
+/// or just `addition` when `text` is blank.
+pub(crate) fn append_paragraph(text: &str, addition: &str) -> String {
+    let existing = text.trim_end();
+    if existing.is_empty() {
+        addition.to_string()
+    } else {
+        format!("{existing}\n\n{addition}")
     }
 }
 
@@ -3417,7 +3484,6 @@ mod issue_layout_tests {
 #[cfg(test)]
 mod claim_tests {
     use super::*;
-    use chrono::{Duration, Utc};
 
     /// Create an initialized storage in a temp dir with a single open issue.
     fn storage_with_one_issue() -> (tempfile::TempDir, Storage, String) {
@@ -3451,30 +3517,24 @@ mod claim_tests {
     }
 
     #[test]
-    fn claim_sets_assignee_status_and_window() {
+    fn claim_sets_assignee_and_status() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let until = Utc::now() + Duration::hours(48);
-        let empty = HashMap::new();
+        let before = storage.get_issue(&id).unwrap().unwrap().updated_at;
 
-        let issue = storage.claim_issue(&id, "host-a", until, &empty).unwrap();
+        let issue = storage.claim_issue(&id, "host-a", false).unwrap();
         assert_eq!(issue.assignee, "host-a");
         assert_eq!(issue.status, Status::InProgress);
-        assert!(issue.claimed_at.is_some());
-        assert_eq!(issue.claimed_until, Some(until));
+        assert!(issue.updated_at >= before);
     }
 
     #[test]
-    fn claim_rejected_when_actively_claimed_by_other() {
+    fn claim_rejected_when_in_progress() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let until = Utc::now() + Duration::hours(48);
-        let empty = HashMap::new();
+        storage.claim_issue(&id, "host-a", false).unwrap();
 
-        storage.claim_issue(&id, "host-a", until, &empty).unwrap();
-        let err = storage
-            .claim_issue(&id, "host-b", until, &empty)
-            .unwrap_err();
+        let err = storage.claim_issue(&id, "host-b", false).unwrap_err();
         assert!(
-            err.to_string().contains("already claimed"),
+            err.to_string().contains("already in progress"),
             "unexpected error: {err}"
         );
         // The original holder must be untouched.
@@ -3483,68 +3543,49 @@ mod claim_tests {
     }
 
     #[test]
-    fn same_actor_can_refresh_its_own_claim() {
+    fn same_actor_cannot_reclaim_without_force() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let empty = HashMap::new();
-        let first = Utc::now() + Duration::hours(1);
-        storage.claim_issue(&id, "host-a", first, &empty).unwrap();
-
-        let extended = Utc::now() + Duration::hours(72);
-        let issue = storage
-            .claim_issue(&id, "host-a", extended, &empty)
-            .unwrap();
-        assert_eq!(issue.assignee, "host-a");
-        assert_eq!(issue.claimed_until, Some(extended));
+        storage.claim_issue(&id, "host-a", false).unwrap();
+        assert!(storage.claim_issue(&id, "host-a", false).is_err());
     }
 
     #[test]
-    fn expired_claim_can_be_taken_by_another_worker() {
+    fn force_overrides_in_progress_claim() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let empty = HashMap::new();
-        // A claim that already expired in the past.
-        let past = Utc::now() - Duration::hours(1);
-        storage.claim_issue(&id, "host-a", past, &empty).unwrap();
+        storage.claim_issue(&id, "host-a", false).unwrap();
 
-        let fresh = Utc::now() + Duration::hours(48);
-        let issue = storage
-            .claim_issue(&id, "host-b", fresh, &empty)
-            .expect("stale claim should be reclaimable");
+        let issue = storage.claim_issue(&id, "host-b", true).unwrap();
         assert_eq!(issue.assignee, "host-b");
+        assert_eq!(issue.status, Status::InProgress);
     }
 
     #[test]
-    fn claiming_a_closed_issue_fails() {
+    fn claiming_a_closed_issue_fails_even_with_force() {
         let (_tmp, storage, id) = storage_with_one_issue();
         storage.close_issue(&id, "done").unwrap();
-        let until = Utc::now() + Duration::hours(1);
-        let err = storage
-            .claim_issue(&id, "host-a", until, &HashMap::new())
-            .unwrap_err();
-        assert!(err.to_string().contains("closed"), "unexpected: {err}");
+        for force in [false, true] {
+            let err = storage.claim_issue(&id, "host-a", force).unwrap_err();
+            assert!(err.to_string().contains("closed"), "unexpected: {err}");
+        }
     }
 
     #[test]
     fn release_clears_claim_and_reopens() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let until = Utc::now() + Duration::hours(48);
-        storage
-            .claim_issue(&id, "host-a", until, &HashMap::new())
-            .unwrap();
+        storage.claim_issue(&id, "host-a", false).unwrap();
 
         let issue = storage.release_issue(&id, "host-a", false).unwrap();
         assert!(issue.assignee.is_empty());
         assert_eq!(issue.status, Status::Open);
-        assert!(issue.claimed_at.is_none());
-        assert!(issue.claimed_until.is_none());
+
+        // Released issues can be claimed again.
+        storage.claim_issue(&id, "host-b", false).unwrap();
     }
 
     #[test]
     fn release_by_other_requires_force() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let until = Utc::now() + Duration::hours(48);
-        storage
-            .claim_issue(&id, "host-a", until, &HashMap::new())
-            .unwrap();
+        storage.claim_issue(&id, "host-a", false).unwrap();
 
         assert!(storage.release_issue(&id, "host-b", false).is_err());
         let issue = storage.release_issue(&id, "host-b", true).unwrap();
@@ -3552,17 +3593,79 @@ mod claim_tests {
     }
 
     #[test]
-    fn claim_applies_sibling_updates_but_not_status_override() {
+    fn update_issue_cannot_set_status() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        let until = Utc::now() + Duration::hours(48);
         let mut updates = HashMap::new();
-        updates.insert("priority".to_string(), "0".to_string());
-        // A status override in the same call must be ignored by claim.
         updates.insert("status".to_string(), "blocked".to_string());
+        assert!(storage.update_issue(&id, updates).is_err());
+        let issue = storage.get_issue(&id).unwrap().unwrap();
+        assert_eq!(issue.status, Status::Open);
+    }
+}
 
-        let issue = storage.claim_issue(&id, "host-a", until, &updates).unwrap();
-        assert_eq!(issue.priority, 0);
-        assert_eq!(issue.status, Status::InProgress);
+#[cfg(test)]
+mod reopen_tests {
+    use super::*;
+
+    fn storage() -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = Storage::init(
+            tmp.path().join(".tazk"),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+        (tmp, storage)
+    }
+
+    fn make_open_issue(storage: &Storage, role: Option<Role>) -> String {
+        storage
+            .create_issue(
+                "x".into(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                role,
+                None,
+            )
+            .unwrap()
+            .id
+    }
+
+    fn status(storage: &Storage, id: &str) -> Status {
+        storage.get_issue(id).unwrap().unwrap().status
+    }
+
+    #[test]
+    fn reopen_requires_a_role() {
+        let (_tmp, storage) = storage();
+        let id = make_open_issue(&storage, None);
+        storage.close_issue(&id, "done").unwrap();
+
+        let err = storage.reopen_issue(&id, None).unwrap_err();
+        assert!(err.to_string().contains("--role"), "{err}");
+        assert_eq!(status(&storage, &id), Status::Closed);
+
+        let issue = storage.reopen_issue(&id, Some(Role::Human)).unwrap();
+        assert_eq!(issue.status, Status::Open);
+        assert_eq!(issue.role, Some(Role::Human));
+    }
+
+    #[test]
+    fn reopen_keeps_existing_role_without_flag() {
+        let (_tmp, storage) = storage();
+        let id = make_open_issue(&storage, Some(Role::Agent));
+        storage.close_issue(&id, "done").unwrap();
+        let issue = storage.reopen_issue(&id, None).unwrap();
+        assert_eq!(issue.role, Some(Role::Agent));
     }
 }
 
@@ -3988,14 +4091,9 @@ fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> R
             "design" => issue.design = value,
             "notes" => issue.notes = value,
             "acceptance_criteria" => issue.acceptance_criteria = value,
-            "status" => {
-                issue.status = value.parse()?;
-                issue.closed_at = if issue.status == Status::Closed {
-                    issue.closed_at.or(Some(now))
-                } else {
-                    None
-                };
-            }
+            // Status changes go through dedicated commands (claim, close,
+            // reopen) so each transition can be validated.
+            "status" => anyhow::bail!("status cannot be set through update"),
             "priority" => issue.priority = value.parse()?,
             "issue_type" => issue.issue_type = value.parse()?,
             "assignee" => issue.assignee = value,

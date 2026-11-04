@@ -67,8 +67,6 @@ pub(crate) enum IssueField {
     Role,
     Effort,
     ExternalRef,
-    ClaimedAt,
-    ClaimedUntil,
     /// The dependency on the named issue.
     Dependency(String),
     Section(Section),
@@ -95,8 +93,6 @@ impl IssueField {
             IssueField::Role => target.role = source.role,
             IssueField::Effort => target.effort = source.effort,
             IssueField::ExternalRef => target.external_ref.clone_from(&source.external_ref),
-            IssueField::ClaimedAt => target.claimed_at = source.claimed_at,
-            IssueField::ClaimedUntil => target.claimed_until = source.claimed_until,
             IssueField::Dependency(id) => match source.depends_on.get(id) {
                 Some(dep_type) => {
                     target.depends_on.insert(id.clone(), *dep_type);
@@ -123,8 +119,6 @@ impl fmt::Display for IssueField {
             IssueField::Role => formatter.write_str("role"),
             IssueField::Effort => formatter.write_str("effort"),
             IssueField::ExternalRef => formatter.write_str("external_ref"),
-            IssueField::ClaimedAt => formatter.write_str("claimed_at"),
-            IssueField::ClaimedUntil => formatter.write_str("claimed_until"),
             IssueField::Dependency(id) => write!(formatter, "dependency {id}"),
             IssueField::Section(section) => write!(formatter, "section \"{}\"", section.heading()),
         }
@@ -470,8 +464,6 @@ pub(crate) fn merge_issue_versions(
     merge_field!(role, IssueField::Role);
     merge_field!(effort, IssueField::Effort);
     merge_field!(external_ref, IssueField::ExternalRef);
-    merge_field!(claimed_at, IssueField::ClaimedAt);
-    merge_field!(claimed_until, IssueField::ClaimedUntil);
 
     let status = merge_scalar(
         base.map(|issue| &issue.status),

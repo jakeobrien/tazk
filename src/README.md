@@ -4,6 +4,9 @@ The binary composes safe-Rust modules around Markdown issue storage:
 
 - `storage.rs`, `transaction.rs`, and `lock.rs` own checked local reads/writes,
   coarse locking, atomic replacement, and rollback.
+- `storage/triage.rs` stores triage items: plain Markdown reports in
+  `.tazk/triage/`, kept apart from issues, and promotes or attaches them to
+  issues in a single transaction.
 - `sync.rs` reconciles Markdown and JSONL using timestamps.
 - `prose_merge.rs` implements bounded deterministic Markdown/prose merging. It
   does not use an LLM and never silently resolves typed conflicts.

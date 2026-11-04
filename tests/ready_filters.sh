@@ -91,10 +91,10 @@ cd "$TEST_DIR"
 "$TZ_BIN" init --prefix test >/dev/null 2>&1
 
 # Fixture issues covering the various filter dimensions.
-"$TZ_BIN" create "Fix login bug" -t bug -p 1 -l backend -l urgent >/dev/null
-"$TZ_BIN" create "Add dark mode" -t feature -p 2 -l frontend >/dev/null
-"$TZ_BIN" create "Write docs" -t task -p 3 -l docs >/dev/null
-"$TZ_BIN" create "Refactor auth" -t task -p 1 -l backend >/dev/null
+"$TZ_BIN" create "Fix login bug" -r agent -t bug -p 1 -l backend -l urgent >/dev/null
+"$TZ_BIN" create "Add dark mode" -r agent -t feature -p 2 -l frontend >/dev/null
+"$TZ_BIN" create "Write docs" -r agent -t task -p 3 -l docs >/dev/null
+"$TZ_BIN" create "Refactor auth" -r agent -t task -p 1 -l backend >/dev/null
 
 # test-4 becomes a child of test-1; test-3 becomes blocked by test-1.
 "$TZ_BIN" dep add test-4 --target test-1 -t child_of >/dev/null

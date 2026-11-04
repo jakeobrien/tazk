@@ -24,10 +24,9 @@ use std::env;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
-use storage::{IssueStorageLayout, Storage};
+use storage::{triage, IssueStorageLayout, NewIssue, Storage};
 use types::{
-    ClaimDuration, Comment, DependencyType, EditField, Issue, IssueType, Role, Status, MAX_EFFORT,
-    MIN_EFFORT,
+    Comment, DependencyType, EditField, Issue, IssueType, Role, Status, MAX_EFFORT, MIN_EFFORT,
 };
 
 const PRIMARY_STORAGE_DIR: &str = ".tazk";
@@ -200,9 +199,9 @@ enum Commands {
         #[arg(short = 'a', long)]
         assignee: Option<String>,
 
-        /// Role the issue is for: human, agent
-        #[arg(short = 'r', long)]
-        role: Option<Role>,
+        /// Role the issue is for: human, agent (required)
+        #[arg(short = 'r', long, required = true)]
+        role: Role,
 
         /// Effort estimate from 1 to 5 (5 is the most effort)
         #[arg(long, value_parser = clap::value_parser!(u8).range(MIN_EFFORT as i64..=MAX_EFFORT as i64))]
@@ -243,9 +242,23 @@ enum Commands {
         file: Option<PathBuf>,
     },
 
+    /// Triage inbox: plain-text reports kept apart from issues
+    ///
+    /// A triage item is a plain Markdown file in .tazk/triage/ holding nothing
+    /// but text: no title, status, priority, role, assignee, labels,
+    /// dependencies or comments. Reporters (code review, validation, testing,
+    /// ad hoc feedback) add items without planning them. A triager later
+    /// promotes items to issues, attaches them to existing issues as comments,
+    /// or removes them. Items are named by creation time, e.g.
+    /// 20251104T001800-k3f9.md; commands accept the name with or without .md.
+    Triage {
+        #[command(subcommand)]
+        command: TriageCommands,
+    },
+
     /// List issues
     List {
-        /// Filter by status: triage, open, in_progress, closed, blocked, deferred
+        /// Filter by status: open, in_progress, closed, blocked, deferred
         #[arg(short = 's', long)]
         status: Option<String>,
 
@@ -307,10 +320,6 @@ enum Commands {
         /// Issue IDs to update
         issue_ids: Vec<String>,
 
-        /// New status: triage, open, in_progress, closed, blocked, deferred
-        #[arg(short = 's', long)]
-        status: Option<Status>,
-
         /// New priority
         #[arg(short, long)]
         priority: Option<i32>,
@@ -365,7 +374,7 @@ enum Commands {
             long,
             allow_hyphen_values = true,
             requires = "replace",
-            conflicts_with_all = ["description", "title", "design", "acceptance", "notes", "claim"]
+            conflicts_with_all = ["description", "title", "design", "acceptance", "notes"]
         )]
         search: Option<String>,
 
@@ -392,7 +401,7 @@ enum Commands {
         #[arg(
             long,
             allow_hyphen_values = true,
-            conflicts_with_all = ["search", "replace", "replace_all", "description", "title", "design", "acceptance", "notes", "claim"]
+            conflicts_with_all = ["search", "replace", "replace_all", "description", "title", "design", "acceptance", "notes"]
         )]
         append: Option<String>,
 
@@ -423,56 +432,33 @@ enum Commands {
         /// Replace labels with a comma-separated set.
         #[arg(long = "set-labels")]
         set_labels: Option<String>,
-
-        /// Atomically claim the issue: sets you as assignee and status to
-        /// in_progress, recording claimed_at/claimed_until. Fails if another
-        /// worker holds an active claim.
-        #[arg(long)]
-        claim: bool,
-
-        /// Team suffix for the claim identity (assignee becomes `host/team`).
-        /// Only meaningful with --claim.
-        #[arg(long, requires = "claim")]
-        team: Option<String>,
-
-        /// How long to hold the claim, e.g. `48h`, `2d`, `90m` (default 48h).
-        /// Only meaningful with --claim.
-        #[arg(long = "for", requires = "claim")]
-        claim_for: Option<ClaimDuration>,
-
-        /// Override the claim identity instead of using the detected hostname.
-        /// Only meaningful with --claim.
-        #[arg(long = "as", requires = "claim")]
-        claim_as: Option<String>,
     },
 
     /// Claim or release an issue for cross-machine coordination
     ///
-    /// Shorthand for `tz update --claim`. Sets you as assignee, flips status to
-    /// in_progress, and records claimed_at/claimed_until. The claim is enforced
-    /// across machines by committing and pushing the change: a losing push is
+    /// Sets the claim identity (`--as`) as assignee, flips status to
+    /// in_progress, and bumps updated_at. An issue that is already in_progress
+    /// cannot be claimed unless --force is given. The claim is enforced across
+    /// machines by committing and pushing the change: a losing push is
     /// rejected, so the loser pulls and sees the issue is already taken.
     Claim {
         /// Issue IDs to claim (or release with --release)
         issue_ids: Vec<String>,
 
+        /// Claim identity (assignee value), e.g. a worker or agent name
+        #[arg(long = "as", required = true)]
+        claim_as: String,
+
         /// Release the claim instead of taking it (returns the issue to the backlog)
         #[arg(long)]
         release: bool,
 
-        /// Team suffix for the claim identity (assignee becomes `host/team`)
+        /// Team suffix for the claim identity (assignee becomes `<as>/team`)
         #[arg(long)]
         team: Option<String>,
 
-        /// How long to hold the claim, e.g. `48h`, `2d`, `90m` (default 48h)
-        #[arg(long = "for")]
-        claim_for: Option<ClaimDuration>,
-
-        /// Override the claim identity instead of using the detected hostname
-        #[arg(long = "as")]
-        claim_as: Option<String>,
-
-        /// With --release, release even a claim held by another worker
+        /// Override the lock: with a claim, take an issue that is already
+        /// in_progress; with --release, release a claim held by another worker
         #[arg(long)]
         force: bool,
     },
@@ -495,6 +481,12 @@ enum Commands {
         /// Reason for reopening
         #[arg(short, long, allow_hyphen_values = true)]
         reason: Option<String>,
+
+        /// Role the issue is for: human, agent. Required when an issue has no
+        /// role; replaces the stored role otherwise. (No short form: -r is
+        /// already --reason.)
+        #[arg(long)]
+        role: Option<Role>,
     },
 
     /// Rename an issue ID
@@ -572,7 +564,7 @@ enum Commands {
         #[arg(long = "tz-output-default")]
         tz_output_default: bool,
 
-        /// Filter by status: triage, open, in_progress, closed, blocked, deferred
+        /// Filter by status: open, in_progress, closed, blocked, deferred
         #[arg(long)]
         status: Option<Status>,
 
@@ -732,6 +724,9 @@ impl Commands {
                 ConfigCommands::Get { .. } | ConfigCommands::List => true,
                 ConfigCommands::Set { .. } | ConfigCommands::Unset { .. } => false,
             },
+            Self::Triage { command } => {
+                matches!(command, TriageCommands::List | TriageCommands::Show { .. })
+            }
             Self::Comments { command } => match command {
                 CommentCommands::List { .. } => true,
                 CommentCommands::Add { .. } | CommentCommands::Delete { .. } => false,
@@ -887,6 +882,184 @@ enum ConfigCommands {
 }
 
 #[derive(Subcommand)]
+enum TriageCommands {
+    /// Report a triage item
+    ///
+    /// The item's text is TEXT followed, after a blank line, by anything piped
+    /// on stdin. At least one must be non-empty. Pipe longer material, such as
+    /// external references, logs or review output:
+    ///
+    ///   gh pr view 12 --json url -q .url | tz triage add "Flaky login test"
+    ///
+    /// Piping also keeps the shell from expanding backticks and `$(...)` in
+    /// prose (see `tz create --help`). stdin is read only when it is not a
+    /// terminal; if it is a pipe that never closes, the command waits for it,
+    /// so redirect stdin from /dev/null in such environments.
+    Add {
+        /// Report text
+        #[arg(allow_hyphen_values = true)]
+        text: Option<String>,
+    },
+
+    /// List triage item file names, sorted by name (creation time, to the second)
+    List,
+
+    /// Print a triage item's text
+    Show {
+        /// Item file name (.md optional)
+        name: String,
+    },
+
+    /// Edit a triage item's text
+    ///
+    /// Same rules as `tz update --search/--replace/--append`, applied to the
+    /// whole item. Give either --search with --replace, or --append.
+    #[command(group(
+        clap::ArgGroup::new("edit")
+            .required(true)
+            .multiple(false)
+            .args(["search", "append"])
+    ))]
+    Update {
+        /// Item file name (.md optional)
+        name: String,
+
+        /// Find this exact text and swap it for --replace. By default it must
+        /// match exactly once. Requires --replace.
+        #[arg(long, allow_hyphen_values = true, requires = "replace")]
+        search: Option<String>,
+
+        /// Replacement text for --search.
+        #[arg(long, allow_hyphen_values = true, requires = "search")]
+        replace: Option<String>,
+
+        /// With --search, replace every occurrence instead of requiring the
+        /// search text to match exactly once.
+        #[arg(long, requires = "search")]
+        replace_all: bool,
+
+        /// Append this text as a new paragraph.
+        #[arg(
+            long,
+            allow_hyphen_values = true,
+            conflicts_with_all = ["search", "replace", "replace_all"]
+        )]
+        append: Option<String>,
+    },
+
+    /// Delete triage items
+    ///
+    /// All named items must exist; otherwise none is deleted.
+    Rm {
+        /// Item file names (.md optional)
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+
+    /// Create one issue from one or more triage items, then delete them
+    ///
+    /// --title and --role are required; priority and type default as in
+    /// `tz create` (2, task). Without a description flag, the issue's
+    /// description is the items' text, in the order given, separated by `---`
+    /// lines. The issue's notes record the item names, so the originals can be
+    /// found in git history. The issue is created and the items deleted
+    /// together: if anything fails, nothing changes.
+    Promote {
+        /// Item file names (.md optional)
+        #[arg(required = true)]
+        names: Vec<String>,
+
+        /// Issue title
+        #[arg(long, required = true, allow_hyphen_values = true)]
+        title: String,
+
+        /// Role the issue is for: human, agent (required)
+        #[arg(short = 'r', long, required = true)]
+        role: Role,
+
+        /// Priority (0-4, 0=highest)
+        #[arg(short, long, default_value = "2")]
+        priority: i32,
+
+        /// Issue type: bug, feature, task, epic, chore
+        #[arg(
+            short = 't',
+            long = "issue-type",
+            visible_alias = "type",
+            default_value = "task"
+        )]
+        issue_type: IssueType,
+
+        /// Description (default: the items' text)
+        #[arg(short, long, allow_hyphen_values = true)]
+        description: Option<String>,
+
+        /// Read the description from a FILE, or from stdin when given `-`.
+        #[arg(
+            long = "description-file",
+            value_name = "PATH",
+            conflicts_with = "description"
+        )]
+        description_file: Option<String>,
+
+        /// Design notes
+        #[arg(long, allow_hyphen_values = true)]
+        design: Option<String>,
+
+        /// Acceptance criteria
+        #[arg(long, allow_hyphen_values = true)]
+        acceptance: Option<String>,
+
+        /// Assignee
+        #[arg(short = 'a', long)]
+        assignee: Option<String>,
+
+        /// Effort estimate from 1 to 5 (5 is the most effort)
+        #[arg(long, value_parser = clap::value_parser!(u8).range(MIN_EFFORT as i64..=MAX_EFFORT as i64))]
+        effort: Option<u8>,
+
+        /// Labels (can be specified multiple times)
+        #[arg(short, long)]
+        label: Vec<String>,
+
+        /// Comma-separated labels
+        #[arg(long = "labels")]
+        labels: Vec<String>,
+
+        /// External reference
+        #[arg(long)]
+        external_ref: Option<String>,
+
+        /// Dependencies (comma-separated). Same formats as `tz create --deps`.
+        #[arg(long)]
+        deps: Option<String>,
+
+        /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9')
+        #[arg(long)]
+        parent: Option<String>,
+    },
+
+    /// Add triage items to an existing issue as comments, then delete them
+    ///
+    /// Each item becomes one comment, in the order given. The comments are
+    /// added and the items deleted together: if anything fails, nothing
+    /// changes.
+    Attach {
+        /// Item file names (.md optional)
+        #[arg(required = true)]
+        names: Vec<String>,
+
+        /// Issue to comment on
+        #[arg(long, required = true)]
+        to: String,
+
+        /// Comment author
+        #[arg(long, required = true)]
+        author: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CommentCommands {
     /// Add a comment to an issue
     Add {
@@ -896,9 +1069,9 @@ enum CommentCommands {
         #[arg(short, long, allow_hyphen_values = true)]
         body: String,
 
-        /// Comment author (default: the machine's short hostname)
-        #[arg(long)]
-        author: Option<String>,
+        /// Comment author
+        #[arg(long, required = true)]
+        author: String,
     },
 
     /// List comments for an issue
@@ -1007,19 +1180,6 @@ fn print_issue_metadata(issue: &Issue, color: bool) {
             "{} {}",
             style_label("Labels:", color),
             issue.labels.join(", ")
-        );
-    }
-    if let Some(until) = issue.claimed_until {
-        let state = if issue.is_actively_claimed(chrono::Utc::now()) {
-            "active"
-        } else {
-            "STALE"
-        };
-        println!(
-            "{} {} ({})",
-            style_label("Claimed until:", color),
-            until.to_rfc3339(),
-            state
         );
     }
 }
@@ -1289,6 +1449,212 @@ fn resolve_body(inline: Option<String>, from_file: Option<String>) -> Result<Opt
             Ok(Some(text))
         }
     }
+}
+
+/// Run a `tz triage` subcommand.
+fn run_triage_command(storage: &Storage, command: TriageCommands, json: bool) -> Result<()> {
+    match command {
+        TriageCommands::Add { text } => {
+            let piped = read_piped_stdin()?;
+            let body = triage::compose_body(&[text.as_deref().unwrap_or(""), &piped]);
+            if body.is_empty() {
+                anyhow::bail!(
+                    "A triage item needs some text: give it as an argument or pipe it on stdin"
+                );
+            }
+            let item = storage.add_triage_item(&body)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&item)?);
+            } else {
+                println!("Created triage item: {}", item.name);
+                report_stored_body("text", &item.body);
+            }
+        }
+        TriageCommands::List => {
+            let items = storage.list_triage_items()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&items)?);
+            } else {
+                for item in items {
+                    println!("{}", item.name);
+                }
+            }
+        }
+        TriageCommands::Show { name } => {
+            let item = storage.get_triage_item(&name)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&item)?);
+            } else {
+                print!("{}", item.body);
+                if !item.body.ends_with('\n') {
+                    println!();
+                }
+            }
+        }
+        TriageCommands::Update {
+            name,
+            search,
+            replace,
+            replace_all,
+            append,
+        } => {
+            // clap guarantees exactly one mode: --search (with --replace) or
+            // --append.
+            let item = match (search, append) {
+                (Some(search), _) => storage.search_replace_triage_item(
+                    &name,
+                    &search,
+                    &replace.unwrap_or_default(),
+                    replace_all,
+                )?,
+                (None, Some(append)) => storage.append_to_triage_item(&name, &append)?,
+                (None, None) => anyhow::bail!("Give --search/--replace or --append"),
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&item)?);
+            } else {
+                println!("Updated triage item: {}", item.name);
+                report_stored_body("text", &item.body);
+            }
+        }
+        TriageCommands::Rm { names } => {
+            let removed = storage.remove_triage_items(&names)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&removed)?);
+            } else {
+                for name in removed {
+                    println!("Removed triage item: {name}");
+                }
+            }
+        }
+        TriageCommands::Promote {
+            names,
+            title,
+            role,
+            priority,
+            issue_type,
+            description,
+            description_file,
+            design,
+            acceptance,
+            assignee,
+            effort,
+            label,
+            labels,
+            external_ref,
+            deps,
+            parent,
+        } => {
+            let description = resolve_body(description, description_file)?.unwrap_or_default();
+            let mut all_labels = label;
+            all_labels.extend(split_label_args(labels));
+            let issue = storage.promote_triage_items(
+                &names,
+                NewIssue {
+                    title,
+                    description,
+                    design,
+                    acceptance,
+                    priority,
+                    issue_type,
+                    assignee,
+                    labels: all_labels,
+                    external_ref,
+                    id: None,
+                    deps: parse_deps(deps, parent),
+                    role: Some(role),
+                    effort,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&issue)?);
+            } else {
+                println!("Created issue: {}", issue.id);
+                report_stored_body("description", &issue.description);
+                println!("  {}", issue.notes);
+            }
+        }
+        TriageCommands::Attach { names, to, author } => {
+            let attached = storage.attach_triage_items(&names, &to, &author)?;
+            if json {
+                let value: Vec<_> = attached
+                    .iter()
+                    .map(|(name, comment)| serde_json::json!({ "name": name, "comment": comment }))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            } else {
+                for (name, comment) in attached {
+                    println!("Attached {name} to {to} as comment {}", comment.id);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Everything on stdin when it is piped or redirected from a file; empty when
+/// it is a terminal. Blocks until the writer closes the pipe.
+fn read_piped_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Ok(String::new());
+    }
+    let mut buf = String::new();
+    stdin
+        .read_to_string(&mut buf)
+        .context("Failed to read stdin (it must be UTF-8 text)")?;
+    Ok(buf)
+}
+
+/// Parse `--deps` / `--parent` into dependency edges.
+///
+/// Supports two formats:
+/// 1. Simple: "tz-1,tz-2" (defaults to 'blocked_by' type)
+/// 2. Advanced: "blocked_by:tz-1,related_to:tz-2,discovered_from:tz-3"
+///
+/// A parent is added as a `child_of` dependency.
+fn parse_deps(deps: Option<String>, parent: Option<String>) -> Vec<(String, DependencyType)> {
+    let mut parsed_deps: Vec<(String, DependencyType)> = if let Some(deps_str) = deps {
+        deps_str
+            .split(',')
+            .filter_map(|s| {
+                let s = s.trim();
+                if s.is_empty() {
+                    return None;
+                }
+
+                // Check if it contains a colon (advanced format)
+                if let Some(colon_idx) = s.find(':') {
+                    let (type_str, id) = s.split_at(colon_idx);
+                    let id = id[1..].trim(); // Skip the colon
+
+                    // Parse the dependency type
+                    match type_str.parse::<DependencyType>() {
+                        Ok(dep_type) => Some((id.to_string(), dep_type)),
+                        Err(_) => {
+                            eprintln!(
+                                "Warning: Invalid dependency type '{}', skipping '{}'",
+                                type_str, s
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    // Simple format: just the ID, default to BlockedBy
+                    Some((s.to_string(), DependencyType::BlockedBy))
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Add parent as a child_of dependency if specified
+    if let Some(parent_id) = parent {
+        parsed_deps.push((parent_id, DependencyType::ChildOf));
+    }
+    parsed_deps
 }
 
 /// Report what was actually STORED, not merely that the write succeeded.
@@ -1579,49 +1945,7 @@ fn run() -> Result<()> {
                 }
             };
 
-            // Parse dependencies
-            // Supports two formats:
-            // 1. Simple: "tz-1,tz-2" (defaults to 'blocked_by' type)
-            // 2. Advanced: "blocked_by:tz-1,related_to:tz-2,discovered_from:tz-3"
-            let mut parsed_deps = if let Some(deps_str) = deps {
-                deps_str
-                    .split(',')
-                    .filter_map(|s| {
-                        let s = s.trim();
-                        if s.is_empty() {
-                            return None;
-                        }
-
-                        // Check if it contains a colon (advanced format)
-                        if let Some(colon_idx) = s.find(':') {
-                            let (type_str, id) = s.split_at(colon_idx);
-                            let id = id[1..].trim(); // Skip the colon
-
-                            // Parse the dependency type
-                            match type_str.parse::<DependencyType>() {
-                                Ok(dep_type) => Some((id.to_string(), dep_type)),
-                                Err(_) => {
-                                    eprintln!(
-                                        "Warning: Invalid dependency type '{}', skipping '{}'",
-                                        type_str, s
-                                    );
-                                    None
-                                }
-                            }
-                        } else {
-                            // Simple format: just the ID, default to BlockedBy
-                            Some((s.to_string(), DependencyType::BlockedBy))
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            // Add parent as a child_of dependency if specified
-            if let Some(parent_id) = parent {
-                parsed_deps.push((parent_id, DependencyType::ChildOf));
-            }
+            let parsed_deps = parse_deps(deps, parent);
 
             let mut all_labels = label;
             all_labels.extend(split_label_args(labels));
@@ -1642,7 +1966,7 @@ fn run() -> Result<()> {
                 external_ref,
                 id,
                 parsed_deps,
-                role,
+                Some(role),
                 effort,
             )?;
 
@@ -1654,6 +1978,16 @@ fn run() -> Result<()> {
                 report_stored_body("description", &description);
             }
             Ok(())
+        }
+
+        Commands::Triage { command } => {
+            let storage = get_storage(tz_dir, readonly)?;
+
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
+            }
+
+            run_triage_command(&storage, command, json)
         }
 
         Commands::List {
@@ -1815,7 +2149,6 @@ fn run() -> Result<()> {
 
         Commands::Update {
             issue_ids,
-            status,
             priority,
             assignee,
             unassign,
@@ -1838,10 +2171,6 @@ fn run() -> Result<()> {
             add_label,
             remove_label,
             set_labels,
-            claim,
-            team,
-            claim_for,
-            claim_as,
         } => {
             let storage = get_storage(tz_dir, readonly)?;
 
@@ -1852,7 +2181,7 @@ fn run() -> Result<()> {
 
             // Targeted search/replace edit. clap guarantees --search comes with
             // --replace and is mutually exclusive with the wholesale field
-            // setters and --claim, so this is a self-contained mode.
+            // setters, so this is a self-contained mode.
             if let Some(search) = search {
                 let replace = replace.unwrap_or_default();
                 let mut updated_issues = Vec::new();
@@ -1877,8 +2206,8 @@ fn run() -> Result<()> {
             }
 
             // Targeted append edit. clap guarantees --append is mutually
-            // exclusive with --search/--replace, the wholesale field setters, and
-            // --claim, so this is a self-contained mode like search/replace.
+            // exclusive with --search/--replace and the wholesale field setters, so
+            // this is a self-contained mode like search/replace.
             if let Some(append) = append {
                 let mut updated_issues = Vec::new();
                 for issue_id in &issue_ids {
@@ -1898,9 +2227,6 @@ fn run() -> Result<()> {
             let mut updates = HashMap::new();
             // Retained so the success output can report what was STORED.
             let mut stored_description: Option<String> = None;
-            if let Some(s) = status {
-                updates.insert("status".to_string(), s.to_string());
-            }
             if let Some(p) = priority {
                 updates.insert("priority".to_string(), p.to_string());
             }
@@ -1947,13 +2273,7 @@ fn run() -> Result<()> {
             // Update all specified issues
             let mut updated_issues = Vec::new();
             for issue_id in &issue_ids {
-                let mut issue = if claim {
-                    let actor = resolve_actor(team.as_deref(), claim_as.as_deref());
-                    let until = claim_deadline(claim_for);
-                    storage.claim_issue(issue_id, &actor, until, &updates)?
-                } else {
-                    storage.update_issue(issue_id, updates.clone())?
-                };
+                let mut issue = storage.update_issue(issue_id, updates.clone())?;
 
                 if let Some(labels) = &set_labels {
                     issue = storage.set_labels(issue_id, split_label_csv(labels))?;
@@ -1971,14 +2291,10 @@ fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&updated_issues)?);
             } else {
                 for issue in &updated_issues {
-                    if claim {
-                        print_claim_result(issue);
-                    } else {
-                        println!("Updated issue: {}", issue.id);
-                        // Report what was STORED, not merely that it succeeded.
-                        if let Some(body) = stored_description.as_deref() {
-                            report_stored_body("description", body);
-                        }
+                    println!("Updated issue: {}", issue.id);
+                    // Report what was STORED, not merely that it succeeded.
+                    if let Some(body) = stored_description.as_deref() {
+                        report_stored_body("description", body);
                     }
                 }
             }
@@ -1987,10 +2303,9 @@ fn run() -> Result<()> {
 
         Commands::Claim {
             issue_ids,
+            claim_as,
             release,
             team,
-            claim_for,
-            claim_as,
             force,
         } => {
             let storage = get_storage(tz_dir, readonly)?;
@@ -2006,16 +2321,17 @@ fn run() -> Result<()> {
                 );
             }
 
-            let actor = resolve_actor(team.as_deref(), claim_as.as_deref());
-            let no_updates = HashMap::new();
+            let actor = match team.as_deref() {
+                Some(t) if !t.is_empty() => format!("{claim_as}/{t}"),
+                _ => claim_as,
+            };
 
             let mut result_issues = Vec::new();
             for issue_id in &issue_ids {
                 let issue = if release {
                     storage.release_issue(issue_id, &actor, force)?
                 } else {
-                    let until = claim_deadline(claim_for);
-                    storage.claim_issue(issue_id, &actor, until, &no_updates)?
+                    storage.claim_issue(issue_id, &actor, force)?
                 };
                 result_issues.push(issue);
             }
@@ -2062,6 +2378,7 @@ fn run() -> Result<()> {
         Commands::Reopen {
             issue_ids,
             reason: _,
+            role,
         } => {
             let storage = get_storage(tz_dir, readonly)?;
 
@@ -2070,10 +2387,29 @@ fn run() -> Result<()> {
                 let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
+            // Check every issue before changing any, so a missing role doesn't
+            // leave a multi-issue reopen half done.
+            if role.is_none() {
+                let mut missing = Vec::new();
+                for issue_id in &issue_ids {
+                    if let Some(issue) = storage.get_issue(issue_id)? {
+                        if issue.role.is_none() {
+                            missing.push(issue.id);
+                        }
+                    }
+                }
+                if !missing.is_empty() {
+                    anyhow::bail!(
+                        "Cannot reopen {}: no role set. Resubmit with --role human|agent",
+                        missing.join(", ")
+                    );
+                }
+            }
+
             let mut reopened = Vec::new();
 
             for issue_id in issue_ids {
-                let issue = storage.reopen_issue(&issue_id)?;
+                let issue = storage.reopen_issue(&issue_id, role)?;
                 reopened.push(issue);
             }
 
@@ -2436,10 +2772,6 @@ fn run() -> Result<()> {
                     body,
                     author,
                 } => {
-                    let author = author
-                        .as_deref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| resolve_actor(None, None));
                     let comment = storage.add_comment(&issue_id, &author, &body)?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&comment)?);
@@ -3084,73 +3416,9 @@ fn log_command(tazk_dir: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Detect this machine's short hostname for use as the default claim identity.
-///
-/// Tries the `HOSTNAME`/`COMPUTERNAME` environment variables first, then the
-/// `hostname` command, falling back to `"unknown-host"`. The result is reduced
-/// to the short name (everything before the first `.`) and any `/` is replaced
-/// so it cannot collide with the `host/team` separator.
-fn detect_host() -> String {
-    fn sanitize(raw: &str) -> Option<String> {
-        let short = raw.trim().split('.').next().unwrap_or("").trim();
-        if short.is_empty() {
-            None
-        } else {
-            Some(short.replace('/', "_"))
-        }
-    }
-
-    if let Some(h) = env::var("HOSTNAME").ok().and_then(|v| sanitize(&v)) {
-        return h;
-    }
-    if let Some(h) = env::var("COMPUTERNAME").ok().and_then(|v| sanitize(&v)) {
-        return h;
-    }
-    if let Ok(output) = std::process::Command::new("hostname").output() {
-        if output.status.success() {
-            if let Some(h) = sanitize(&String::from_utf8_lossy(&output.stdout)) {
-                return h;
-            }
-        }
-    }
-    "unknown-host".to_string()
-}
-
-/// Resolve the claim identity (`assignee` value) for a claim.
-///
-/// The base identity is the detected hostname, or the `--as` override when given.
-/// A non-empty `--team` is appended as `base/team`. Team is expected to be empty
-/// most of the time; it only exists to distinguish multiple teams sharing one
-/// host.
-fn resolve_actor(team: Option<&str>, as_override: Option<&str>) -> String {
-    let base = match as_override {
-        Some(a) => a.to_string(),
-        None => detect_host(),
-    };
-    match team {
-        Some(t) if !t.is_empty() => format!("{base}/{t}"),
-        _ => base,
-    }
-}
-
-/// Compute the instant a claim should expire from an optional duration flag,
-/// defaulting to [`types::DEFAULT_CLAIM_HOURS`] hours.
-fn claim_deadline(claim_for: Option<ClaimDuration>) -> chrono::DateTime<chrono::Utc> {
-    let ClaimDuration(duration) = claim_for.unwrap_or_else(ClaimDuration::default_duration);
-    chrono::Utc::now() + duration
-}
-
 /// Print a human-readable summary of a successful claim.
 fn print_claim_result(issue: &types::Issue) {
-    match issue.claimed_until {
-        Some(until) => println!(
-            "Claimed {} as '{}' until {}",
-            issue.id,
-            issue.assignee,
-            until.to_rfc3339()
-        ),
-        None => println!("Claimed {} as '{}'", issue.id, issue.assignee),
-    }
+    println!("Claimed {} as '{}'", issue.id, issue.assignee);
 }
 
 fn print_quickstart() {
@@ -3168,10 +3436,24 @@ GETTING STARTED
             Issues will be named: api-1, api-2, ...
 
 CREATING ISSUES
-  tz create "Fix login bug"
-  tz create "Add auth" -p 0 -t feature
-  tz create "Write tests" -d "Unit tests for auth" --assignee alice
-  tz create "Triage logs" --role agent --effort 2   Role: human|agent, effort: 1-5
+  tz create "Fix login bug" -r agent   --role (human|agent) is required
+  tz create "Add auth" -r human -p 0 -t feature
+  tz create "Write tests" -r agent -d "Unit tests for auth" --assignee alice
+  tz create "Triage logs" -r agent --effort 2   Effort: 1-5
+
+REPORTING AND TRIAGING
+  Triage items are plain-text reports in .tazk/triage/, not issues: no title,
+  status, priority, role or assignee. Report freely; plan later.
+  tz triage add "Login fails on Safari"   Report something found in review/testing
+  git log -1 --format=%H | tz triage add "Regression after this commit"
+            Piped stdin is appended (external refs, logs, review output)
+  tz triage list                          Item file names, e.g. 20251104T001800-k3f9.md
+  tz triage show 20251104T001800-k3f9     Print an item (.md optional)
+  tz triage update NAME --search old --replace new   (or --append TEXT)
+  tz triage promote NAME... --title "Fix Safari login" -r agent -p 1
+            Triager: one issue from one or more items (items are deleted)
+  tz triage attach NAME... --to myapp-3 --author NAME   Add items as comments on an issue
+  tz triage rm NAME...                    Discard items
 
 VIEWING ISSUES
   tz list       List all issues
@@ -3197,25 +3479,22 @@ READY WORK
             Perfect for agents to claim next work!
 
 CLAIMING WORK (cross-machine coordination)
-  tz claim myapp-1       Claim an issue for yourself
-            Sets assignee to your hostname, status to in_progress, and records
-            claimed_at/claimed_until (default: 48h). Fails if another worker
-            already holds an active claim.
-  tz claim myapp-1 --for 4h   Claim for a custom window (e.g. 4h, 2d, 90m)
-  tz claim myapp-1 --team backend   Identity becomes 'host/backend'
-  tz claim myapp-1 --release  Release the claim (returns it to the backlog)
-  tz update myapp-1 --claim   Equivalent long form of 'tz claim'
+  tz claim myapp-1 --as alice   Claim an issue as 'alice' (--as is required)
+            Sets assignee to the --as value, status to in_progress, and bumps
+            updated_at. Fails if the issue is already in_progress or closed.
+  tz claim myapp-1 --as alice --team backend   Identity becomes 'alice/backend'
+  tz claim myapp-1 --as alice --force   Take an issue that is already in_progress
+  tz claim myapp-1 --as alice --release   Release the claim (back to 'open')
+  tz claim myapp-1 --as bob --release --force   Release another worker's claim
 
             HOW THE LOCK WORKS: a claim is just a small commit. Claim the issue,
             commit, and push to the shared branch. If two machines race, the
             losing 'git push' is rejected; that worker pulls, sees the issue is
-            claimed, and moves on. A claim past its claimed_until is stale and
-            may be reclaimed by anyone. Typical agent flow when starting work on
+            in_progress, and moves on. Typical agent flow when starting work on
             an already-committed backlog issue:
-              tz claim myapp-1 && git commit -am "claim myapp-1" && git push
+              tz claim myapp-1 --as alice && git commit -am "claim myapp-1" && git push
 
 UPDATING ISSUES
-  tz update myapp-1 --status in_progress
   tz update myapp-1 --priority 0
   tz update myapp-1 --assignee bob
 
@@ -3255,7 +3534,7 @@ DATABASE LOCATION
     3. .tazk/ in current directory or ancestors
 
 Ready to start!
-Run tz create "My first issue" to create your first issue.
+Run tz create "My first issue" -r agent to create your first issue.
 "#
     );
 }

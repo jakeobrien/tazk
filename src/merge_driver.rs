@@ -359,6 +359,8 @@ mod tests {
             "README.md",
             "docs/issues/a.md",
             ".tazk/comments/nested/a.json",
+            // Triage items are plain Markdown, merged as lines.
+            ".tazk/triage/20251104T001800-k3f9.md",
         ] {
             assert_eq!(
                 classify_path(Path::new(path)),

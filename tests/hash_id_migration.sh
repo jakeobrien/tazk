@@ -135,9 +135,9 @@ assert_equals "false" "$CONFIG_VALUE" "tz-hash-ids should default to false"
 
 # Test 2: Create issues with numeric IDs
 echo -e "\n${YELLOW}Test 2: Create issues with numeric IDs${NC}"
-"$TZ_BIN" create "First issue" -d "This is the first test issue" >/dev/null 2>&1
-"$TZ_BIN" create "Second issue" -d "This depends on the first" --deps test-1 >/dev/null 2>&1
-"$TZ_BIN" create "Third issue" -d "This also depends on the first" --deps test-1 >/dev/null 2>&1
+"$TZ_BIN" create "First issue" -r agent -d "This is the first test issue" >/dev/null 2>&1
+"$TZ_BIN" create "Second issue" -r agent -d "This depends on the first" --deps test-1 >/dev/null 2>&1
+"$TZ_BIN" create "Third issue" -r agent -d "This also depends on the first" --deps test-1 >/dev/null 2>&1
 
 # Verify numeric IDs were created
 assert_file_exists ".tazk/issues/test-1.md" "test-1.md should exist"
@@ -205,7 +205,7 @@ assert_contains "$OUTPUT" "$ISSUE_1_ID" "Should depend on migrated issue 1"
 
 # Test 7: Create new issue with hash ID
 echo -e "\n${YELLOW}Test 7: Create new issue with hash ID${NC}"
-OUTPUT=$("$TZ_BIN" create "Fourth issue" -d "Created after migration" 2>&1)
+OUTPUT=$("$TZ_BIN" create "Fourth issue" -r agent -d "Created after migration" 2>&1)
 assert_contains "$OUTPUT" "Created issue: test-" "Should create new issue"
 
 # Extract the new issue ID

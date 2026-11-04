@@ -123,14 +123,12 @@ fn field_value(issue: &Issue, field: &IssueField) -> String {
         IssueField::Role => format!("{:?}", issue.role),
         IssueField::Effort => format!("{:?}", issue.effort),
         IssueField::ExternalRef => format!("{:?}", issue.external_ref),
-        IssueField::ClaimedAt => format!("{:?}", issue.claimed_at),
-        IssueField::ClaimedUntil => format!("{:?}", issue.claimed_until),
         IssueField::Dependency(id) => format!("{:?}", issue.depends_on.get(id)),
         IssueField::Section(section) => section.content(issue).to_owned(),
     }
 }
 
-const FRONTMATTER_FIELDS: [IssueField; 10] = [
+const FRONTMATTER_FIELDS: [IssueField; 8] = [
     IssueField::Title,
     IssueField::Status,
     IssueField::Priority,
@@ -139,8 +137,6 @@ const FRONTMATTER_FIELDS: [IssueField; 10] = [
     IssueField::Role,
     IssueField::Effort,
     IssueField::ExternalRef,
-    IssueField::ClaimedAt,
-    IssueField::ClaimedUntil,
 ];
 
 // ---------------------------------------------------------------------------
@@ -685,7 +681,6 @@ enum EditKind {
     IssueType,
     Assignee,
     ExternalRef,
-    Claim,
     Labels,
     Dependencies,
     Description,
@@ -694,14 +689,13 @@ enum EditKind {
     Notes,
 }
 
-const EDIT_KINDS: [EditKind; 13] = [
+const EDIT_KINDS: [EditKind; 12] = [
     EditKind::Title,
     EditKind::Status,
     EditKind::Priority,
     EditKind::IssueType,
     EditKind::Assignee,
     EditKind::ExternalRef,
-    EditKind::Claim,
     EditKind::Labels,
     EditKind::Dependencies,
     EditKind::Description,
@@ -780,11 +774,6 @@ fn apply_edit(rng: &mut StdRng, issue: &mut Issue, kind: EditKind, tag: &str, mi
         EditKind::Assignee => issue.assignee = (*pick(rng, &ASSIGNEES)).into(),
         EditKind::ExternalRef => {
             issue.external_ref = pick(rng, &EXTERNAL_REFS).map(str::to_owned);
-        }
-        EditKind::Claim => {
-            let claimed = rng.gen_bool(0.7);
-            issue.claimed_at = claimed.then(|| at(minute));
-            issue.claimed_until = claimed.then(|| at(minute + rng.gen_range(30..90)));
         }
         EditKind::Labels => {
             let label = (*pick(rng, &LABELS)).to_owned();
@@ -1052,10 +1041,6 @@ fn property_disjoint_edits_always_merge_with_both_edits() {
                     EditKind::Assignee => assert_eq!(merged.assignee, side.assignee, "seed {seed}"),
                     EditKind::ExternalRef => {
                         assert_eq!(merged.external_ref, side.external_ref, "seed {seed}")
-                    }
-                    EditKind::Claim => {
-                        assert_eq!(merged.claimed_at, side.claimed_at, "seed {seed}");
-                        assert_eq!(merged.claimed_until, side.claimed_until, "seed {seed}");
                     }
                     EditKind::Labels => assert_eq!(merged.labels, side.labels, "seed {seed}"),
                     EditKind::Dependencies => {

@@ -8,11 +8,11 @@ overview, see the [README](README.md).
 ### Core Commands
 
 - `tz init [--prefix PREFIX]` - Initialize a database
-- `tz create TITLE [OPTIONS]` - Create new issue
-  - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `-r/--role human|agent`, `--effort 1-5`, `-l LABEL`
+- `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required.
+  - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `--effort 1-5`, `-l LABEL`
 - `tz list [FILTERS]` - List issues with optional filters (including `--assignee USER` and `-r/--role ROLE`)
 - `tz show ISSUE_ID` - Show detailed issue information
-- `tz update ISSUE_ID [OPTIONS]` - Update issue fields
+- `tz update ISSUE_ID [OPTIONS]` - Update issue fields (not status)
   - `-r/--role ROLE`, `--effort N` set the role or effort; `--clear-role` and
     `--clear-effort` remove them.
   - `--search TEXT --replace TEXT [--field FIELD] [--replace-all]` - targeted,
@@ -25,11 +25,63 @@ overview, see the [README](README.md).
     (default `description`), inserting a blank line before it when the field is
     non-empty so it becomes its own paragraph. Simpler than a search/replace when
     you only want to add to the end.
+- `tz claim ISSUE_ID... --as NAME [--team TEAM] [--release] [--force]` - Claim or release issues
 - `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue
-- `tz reopen ISSUE_ID...` - Reopen closed issues
-- `tz comments add ISSUE_ID --body TEXT [--author NAME]` - Add a local issue comment (author defaults to the machine's short hostname)
+- `tz reopen ISSUE_ID... [--role human|agent]` - Reopen closed issues. An issue with no role is refused until you resubmit with `--role`
+- `tz comments add ISSUE_ID --body TEXT --author NAME` - Add a local issue comment
 - `tz comments list ISSUE_ID` - List local issue comments
 - `tz comments delete ISSUE_ID COMMENT_ID...` - Delete local issue comment(s) by ID
+
+### Triage
+
+Triage items are an inbox for things found during code review, validation,
+testing or ad hoc feedback. They are not issues. Each one is a plain Markdown
+file in `.tazk/triage/` holding only text: no frontmatter, ID, title, status,
+priority, role, assignee, labels, dependencies or comments. Being in that
+folder is what makes it a triage item, so the reporter doesn't have to plan
+anything. A triager later sweeps the folder and promotes, attaches or removes
+each item.
+
+Items are named `<UTC timestamp>-<4 random characters>.md`, e.g.
+`20251104T001800-k3f9.md`. Names sort by creation time (to the second) and are
+unique without coordination, so items reported on different branches never
+collide. Any other `*.md` file dropped into the folder by hand is also an item.
+Commands that take an item accept the name with or without `.md`, or a path to
+the file in `.tazk/triage/`.
+
+- `tz triage add [TEXT]` - Create an item. Its text is `TEXT` followed, after
+  a blank line, by anything piped on stdin. At least one must be non-empty.
+  Pipe external references, logs or review output:
+  `gh pr view 12 --json url -q .url | tz triage add "Flaky login test"`.
+  Piping also keeps the shell from expanding backticks and `$(...)` in prose.
+  stdin is read only when it is not a terminal; if it is a pipe that never
+  closes, the command waits, so redirect stdin from `/dev/null` in such
+  environments.
+- `tz triage list` - Print item file names, one per line, sorted by name.
+  With `--json`, an array of `{name, body}`.
+- `tz triage show NAME` - Print an item's text.
+- `tz triage update NAME (--search TEXT --replace TEXT [--replace-all] | --append TEXT)` -
+  Edit an item's text with the same rules as `tz update --search/--replace`
+  and `--append` (there is no `--field`). An edit that would leave the item
+  empty is refused; use `tz triage rm`.
+- `tz triage rm NAME...` - Delete items. All must exist, otherwise none is
+  deleted.
+- `tz triage promote NAME... --title TITLE -r human|agent [OPTIONS]` - Create
+  one issue from one or more items and delete the items. Accepts the same
+  options as `tz create` except `--id` and `--file` (`-p`, `-t`, `-d` /
+  `--description-file`, `--design`, `--acceptance`, `-a`, `--effort`,
+  `-l`/`--labels`, `--external-ref`, `--deps`, `--parent`). Without a
+  description flag the description is the items' text, in the order given,
+  separated by `---` lines. The issue's Notes record the item names
+  (`Promoted from triage: ...`), so the originals can be found in git history.
+- `tz triage attach NAME... --to ISSUE_ID --author NAME` - Add each item as a
+  comment on an existing issue (one comment per item, in order) and delete the
+  items. `--author` is required.
+
+`promote`, `attach` and `rm` are transactions: the issue or comments are
+written and the items deleted together, or nothing changes. Triage items are
+not read by `list`, `ready`, `stats`, `export` or `sync`, and the merge driver
+leaves them to git's ordinary line merge.
 
 ### Dependencies
 
@@ -77,8 +129,8 @@ ATTRS
 
 Merge rules:
 
-- **Scalar fields** (title, status, priority, type, assignee, role, effort, external ref,
-  claim window) take the side that changed; two different changes conflict.
+- **Scalar fields** (title, status, priority, type, assignee, role, effort, external ref)
+  take the side that changed; two different changes conflict.
 - **Labels** merge as a set (additions and removals from both sides).
   **Dependencies** merge per target issue; changing a dependency's type on one
   side while removing it on the other conflicts.
@@ -152,12 +204,12 @@ are emitted using the same names.
 | Property | Required | Values | Notes |
 |----------|----------|--------|-------|
 | `id` | yes | `PREFIX-N`, or a hash/sharded form depending on how the database was initialised | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). Commands accept numeric shorthand (`14` expands to `PREFIX-14`). Set explicitly with `tz create --id`. |
-| `title` | yes | Any text | Settable with `create` and `update --title`. |
+| `title` | yes | Any text | Settable with `create`, `triage promote --title` and `update --title`. |
 | `status` | yes | See [Status](#status) | Default `open`. |
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |
 | `issue_type` | yes | See [Issue type](#issue-type) | Default `task`. Set with `-t/--issue-type`. |
 | `assignee` | no | Any text | Omitted when empty. Clear with `update --unassign`. |
-| `role` | no | `human`, `agent` | Who the issue is for. Omitted when unset. Set with `tz create/update -r/--role`; clear with `update --clear-role`. Filter with `-r/--role` on `tz list`, `tz ready` and `tz export`. |
+| `role` | no | `human`, `agent` | Who the issue is for. Omitted when unset. Required by `tz create` and `tz triage promote` (`-r/--role`); change with `tz update -r/--role`; clear with `update --clear-role`. Filter with `-r/--role` on `tz list`, `tz ready` and `tz export`. |
 | `effort` | no | Integer `1`–`5`; `5` is the most effort | Omitted when unset. Set with `tz create/update --effort`; clear with `update --clear-effort`. Values outside 1–5 are rejected, including in hand-edited files. |
 | `external_ref` | no | Any text (e.g. a URL or ticket key in another tracker) | Omitted when unset. |
 | `labels` | no | List of free-form strings | Stored sorted and de-duplicated; empty entries are dropped. Commas separate labels in `--labels`, `--set-labels`. |
@@ -165,8 +217,6 @@ are emitted using the same names.
 | `created_at` | yes | RFC 3339 UTC timestamp | Set on creation. |
 | `updated_at` | yes | RFC 3339 UTC timestamp | Refreshed on every change. |
 | `closed_at` | no | RFC 3339 UTC timestamp | Set by `tz close`, cleared by `tz reopen`. Only present on closed issues. |
-| `claimed_at` | no | RFC 3339 UTC timestamp | When the current claim was taken. Omitted if unclaimed. |
-| `claimed_until` | no | RFC 3339 UTC timestamp | When the claim goes stale. Omitted if unclaimed. |
 
 ### Body sections
 
@@ -187,9 +237,8 @@ empty.
 
 | Value | Meaning |
 |-------|---------|
-| `triage` | Newly reported, not yet reviewed. Not listed by `tz ready`. |
 | `open` | Not started. Open issues with no unresolved blockers are reported by `tz ready`. |
-| `in_progress` | Being worked on. Set by `tz update --claim` / `tz claim`. |
+| `in_progress` | Being worked on. Set by `tz claim`. |
 | `closed` | Complete. Sets `closed_at`. |
 | `blocked` | Marked as blocked by hand. Not listed by `tz ready`. |
 | `deferred` | Postponed. Not listed by `tz ready`. |
@@ -229,10 +278,17 @@ The legacy spelling `discovered-from` is still accepted when reading, but files 
 
 ### Claims
 
-`tz update --claim` (or `tz claim`) sets `assignee` to the claim identity
-(hostname, optionally `host/team`; override with `--as`), sets `status` to
-`in_progress`, and records `claimed_at` and `claimed_until`. `--for` sets the
-duration using `90m`, `48h`, `2d`, or a bare number of hours (default `48h`). A
-claim is active until `claimed_until` passes; after that it is stale and another
-worker may reclaim the issue. An assignee with no `claimed_until` is treated as
-held indefinitely.
+`tz claim ISSUE_ID... --as NAME` sets `assignee` to `NAME` (or `NAME/TEAM` with
+`--team`), sets `status` to `in_progress`, and bumps `updated_at`. `--as` is
+required. There is no expiry: a claim lasts until it is released.
+
+The lock is the status. Claiming an issue that is already `in_progress` fails,
+even for the same `--as` identity; `--force` overrides the lock and reassigns
+the issue. Claiming a `closed` issue always fails, even with `--force`.
+
+`tz claim ISSUE_ID... --as NAME --release` clears `assignee` and moves an
+`in_progress` issue back to `open`. Releasing a claim held by a different
+identity requires `--force`.
+
+Status cannot be set with `tz update`; it changes only through dedicated
+commands (`claim`, `close`, `reopen`).

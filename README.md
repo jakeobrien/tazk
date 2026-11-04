@@ -39,7 +39,14 @@ The binary is named `tz`.
 tz init
 
 # Create your first issue
-tz create "Fix login bug" -p 1 -t bug
+tz create "Fix login bug" -p 1 -t bug -r agent
+
+# Report something found during review/testing (a triage item, not an issue)
+tz triage add "Login fails on Safari. Steps to reproduce..."
+
+# Triager: turn triage items into an issue
+tz triage list
+tz triage promote 20251104T001800-k3f9 --title "Fix Safari login" -r agent -p 1 -t bug
 
 # List all issues
 tz list
@@ -47,8 +54,8 @@ tz list
 # Show issue details
 tz show tz-1
 
-# Update issue status
-tz update tz-1 --status in_progress
+# Claim an issue (sets assignee and status to in_progress)
+tz claim tz-1 --as alice
 
 # Add dependencies (tz-1 is blocked_by tz-2)
 tz dep add tz-1 --target tz-2
@@ -64,7 +71,8 @@ Run `tz quickstart` for a comprehensive guide.
 
 ## Storage Format
 
-tazk stores all data in `.tazk/issues/` as markdown files.
+tazk stores issues in `.tazk/issues/` as markdown files, and triage items
+(unplanned reports) in `.tazk/triage/` as plain markdown.
 
 ```
 .tazk/
@@ -73,7 +81,9 @@ tazk stores all data in `.tazk/issues/` as markdown files.
 ├── issues/
 │   ├── myproject-1.md   # Issue files with YAML frontmatter
 │   └── myproject-2.md
-└── comments/            # Optional per-issue comment JSON files
+├── comments/            # Optional per-issue comment JSON files
+└── triage/              # Triage items: plain markdown, no frontmatter
+    └── 20251104T001800-k3f9.md
 ```
 
 ### Issue Format
@@ -132,6 +142,7 @@ make fmt
 src/
 ├── main.rs      # CLI entry point and command handlers
 ├── storage.rs   # File-based storage operations
+├── storage/triage.rs  # Triage items (.tazk/triage/)
 ├── format.rs    # Markdown serialization/deserialization
 ├── types.rs     # Core data structures (Issue, Status, etc.)
 ├── lock.rs      # Coarse-grained file locking

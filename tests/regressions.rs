@@ -453,7 +453,9 @@ fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
     let stats = storage.get_stats().unwrap();
     assert_eq!(stats.ready_issues, ready.len());
     assert_eq!(stats.blocked_issues, blocked.len());
-    storage.reopen_issue("r-1").unwrap();
+    storage
+        .reopen_issue("r-1", Some(tazk::types::Role::Agent))
+        .unwrap();
     let ready = storage.get_ready(None, None, None, "priority").unwrap();
     assert!(!ready.iter().any(|issue| issue.id == "r-2"));
     assert_eq!(storage.get_stats().unwrap().blocked_issues, 2);
@@ -724,11 +726,16 @@ fn readonly_rejects_modifications_before_opening_storage() {
     let before = fs::read(&path).unwrap();
     for args in [
         vec!["update", "r-1", "--title", "changed"],
-        vec!["create", "new"],
+        vec!["create", "new", "-r", "agent"],
+        vec!["triage", "add", "found"],
+        vec!["triage", "rm", "x"],
+        vec!["triage", "update", "x", "--append", "more"],
+        vec!["triage", "promote", "x", "--title", "t", "-r", "agent"],
+        vec!["triage", "attach", "x", "--to", "r-1", "--author", "a"],
         vec!["close", "r-1"],
         vec!["rename", "r-1", "r-2"],
         vec!["config", "set", "issue-prefix", "changed"],
-        vec!["comments", "add", "r-1", "--body", "new"],
+        vec!["comments", "add", "r-1", "--body", "new", "--author", "a"],
         vec!["label", "add", "r-1", "new"],
         vec!["dep", "add", "r-1", "--target", "r-2"],
         vec!["sync"],
@@ -762,6 +769,8 @@ fn command_history_keeps_multiline_arguments_on_one_line() {
         .args([
             "create",
             "Multiline description",
+            "--role",
+            "agent",
             "--description",
             "first line\nsecond \"line\"\r\nthird line",
         ])

@@ -136,10 +136,10 @@ assert_contains "$OUTPUT" "Initialized tazk database with prefix: exp" "Initiali
 
 # Test 2: Create test issues with various types and states
 echo -e "\n${YELLOW}Test 2: Create test issues${NC}"
-"$TZ_BIN" create "Bug Fix A" -p 0 -t bug -d "Fix critical authentication bug" >/dev/null 2>&1
-"$TZ_BIN" create "Feature B" -p 1 -t feature -d "Add export functionality" >/dev/null 2>&1
-"$TZ_BIN" create "Task C" -p 2 -t task --deps exp-1 >/dev/null 2>&1
-"$TZ_BIN" update exp-2 --status in_progress >/dev/null 2>&1
+"$TZ_BIN" create "Bug Fix A" -r agent -p 0 -t bug -d "Fix critical authentication bug" >/dev/null 2>&1
+"$TZ_BIN" create "Feature B" -r agent -p 1 -t feature -d "Add export functionality" >/dev/null 2>&1
+"$TZ_BIN" create "Task C" -r agent -p 2 -t task --deps exp-1 >/dev/null 2>&1
+"$TZ_BIN" claim exp-2 --as tester >/dev/null 2>&1
 "$TZ_BIN" close exp-1 --reason "Fixed" >/dev/null 2>&1
 
 # Verify issues were created

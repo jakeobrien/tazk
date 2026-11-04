@@ -77,7 +77,6 @@ pub enum TazkAction {
     /// Update an issue
     Update {
         issue_id: String,
-        status: Option<Status>,
         priority: Option<i32>,
     },
 
@@ -137,15 +136,8 @@ impl std::fmt::Display for TazkAction {
                 write!(f, "{}", parts.join(" "))
             }
             TazkAction::Show { issue_id } => write!(f, "show {}", issue_id),
-            TazkAction::Update {
-                issue_id,
-                status,
-                priority,
-            } => {
+            TazkAction::Update { issue_id, priority } => {
                 let mut parts = vec![format!("update {}", issue_id)];
-                if let Some(s) = status {
-                    parts.push(format!("status:{}", s.as_str()));
-                }
                 if let Some(p) = priority {
                     parts.push(format!("priority:{}", p));
                 }
@@ -336,27 +328,13 @@ impl ActionGenerator {
     fn generate_update(&mut self) -> TazkAction {
         let issue_id = self.pick_random_issue();
 
-        let status = if self.rng.gen_bool(0.5) {
-            Some(match self.rng.gen_range(0..3) {
-                0 => Status::Open,
-                1 => Status::InProgress,
-                _ => Status::Blocked,
-            })
-        } else {
-            None
-        };
-
         let priority = if self.rng.gen_bool(0.5) {
             Some(self.rng.gen_range(0..5))
         } else {
             None
         };
 
-        TazkAction::Update {
-            issue_id,
-            status,
-            priority,
-        }
+        TazkAction::Update { issue_id, priority }
     }
 
     fn generate_close(&mut self) -> TazkAction {
@@ -490,6 +468,8 @@ impl ActionExecutor {
                 let mut cmd = self.build_command();
                 cmd.arg("create")
                     .arg(title)
+                    .arg("-r")
+                    .arg("agent")
                     .arg("-p")
                     .arg(priority.to_string())
                     .arg("-t")
@@ -577,17 +557,10 @@ impl ActionExecutor {
                 cmd.output().context("Failed to execute show command")?
             }
 
-            TazkAction::Update {
-                issue_id,
-                status,
-                priority,
-            } => {
+            TazkAction::Update { issue_id, priority } => {
                 let mut cmd = self.build_command();
                 cmd.arg("update").arg(issue_id);
 
-                if let Some(s) = status {
-                    cmd.arg("--status").arg(s.as_str());
-                }
                 if let Some(p) = priority {
                     cmd.arg("--priority").arg(p.to_string());
                 }
@@ -817,15 +790,8 @@ impl ReferenceInterpreter {
                 Ok(())
             }
 
-            TazkAction::Update {
-                issue_id,
-                status,
-                priority,
-            } => {
+            TazkAction::Update { issue_id, priority } => {
                 if let Some(issue) = self.issues.get_mut(issue_id) {
-                    if let Some(s) = status {
-                        issue.status = *s;
-                    }
                     if let Some(p) = priority {
                         issue.priority = *p;
                     }

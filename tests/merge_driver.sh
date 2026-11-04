@@ -95,12 +95,12 @@ COMMENTS=.tazk/comments/test-1.json
 
 git init -q -b main
 TZ init --prefix test >/dev/null
-TZ create "Shared title" -p 2 -t task -d "First paragraph.
+TZ create "Shared title" -r agent -p 2 -t task -d "First paragraph.
 
 Second paragraph.
 
 Third paragraph." >/dev/null
-TZ comments add test-1 -b "Base comment" >/dev/null
+TZ comments add test-1 -b "Base comment" --author tester >/dev/null
 git add -A
 git commit -qm base
 
@@ -123,14 +123,14 @@ git checkout -qb feature
 TZ update test-1 --title "Feature title" >/dev/null
 TZ update test-1 --search "Third paragraph." --replace "Third paragraph, edited on feature." >/dev/null
 TZ label add test-1 feature-label >/dev/null
-TZ comments add test-1 -b "Comment from feature" >/dev/null
+TZ comments add test-1 -b "Comment from feature" --author tester >/dev/null
 git commit -qam "feature edits"
 git checkout -q main
 sleep 1
 TZ update test-1 -p 0 >/dev/null
 TZ update test-1 --search "First paragraph." --replace "First paragraph, edited on main." >/dev/null
 TZ label add test-1 main-label >/dev/null
-TZ comments add test-1 -b "Comment from main" >/dev/null
+TZ comments add test-1 -b "Comment from main" --author tester >/dev/null
 git commit -qam "main edits"
 MERGE_OUTPUT=$(git merge --no-edit feature 2>&1)
 assert_equals "" "$(git diff --name-only --diff-filter=U)" "No files should be left conflicted"
@@ -159,7 +159,7 @@ git checkout -qb deleter
 TZ comments delete test-1 "$(comment_id "Base comment")" >/dev/null
 git commit -qam "delete a comment"
 git checkout -q main
-TZ comments add test-1 -b "Comment after the split" >/dev/null
+TZ comments add test-1 -b "Comment after the split" --author tester >/dev/null
 git commit -qam "another comment on main"
 MERGE_OUTPUT=$(git merge --no-edit deleter 2>&1)
 assert_equals "" "$(echo "$MERGE_OUTPUT" | grep -F "tz merge-driver:" || true)" "A clean set merge should print no conflicts or notices"
