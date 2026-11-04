@@ -232,14 +232,6 @@ enum Commands {
         /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9')
         #[arg(long)]
         parent: Option<String>,
-
-        /// Force creation even if prefix doesn't match database prefix
-        #[arg(long)]
-        force: bool,
-
-        /// Create multiple issues from markdown file
-        #[arg(short = 'f', long)]
-        file: Option<PathBuf>,
     },
 
     /// Triage inbox: plain-text reports kept apart from issues
@@ -498,21 +490,27 @@ enum Commands {
     },
 
     /// Close one or more issues
+    ///
+    /// With --reason, the text is appended to the issue's Notes as
+    /// "Closed <timestamp>: <reason>".
     Close {
         /// Issue IDs to close
         issue_ids: Vec<String>,
 
-        /// Reason for closing
-        #[arg(short, long, default_value = "Completed", allow_hyphen_values = true)]
-        reason: String,
+        /// Reason for closing, appended to Notes with a timestamp
+        #[arg(short, long, allow_hyphen_values = true)]
+        reason: Option<String>,
     },
 
     /// Reopen closed issues
+    ///
+    /// With --reason, the text is appended to the issue's Notes as
+    /// "Reopened <timestamp>: <reason>".
     Reopen {
         /// Issue IDs to reopen
         issue_ids: Vec<String>,
 
-        /// Reason for reopening
+        /// Reason for reopening, appended to Notes with a timestamp
         #[arg(short, long, allow_hyphen_values = true)]
         reason: Option<String>,
 
@@ -1952,21 +1950,12 @@ fn run() -> Result<()> {
             id,
             deps,
             parent,
-            force: _force,
-            file,
         } => {
             let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
             if !tz_no_cmd_logging {
                 let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
-            }
-
-            // Handle bulk creation from file
-            if let Some(_file_path) = file {
-                anyhow::bail!(
-                    "--file flag not yet implemented. Bulk creation from markdown files coming soon."
-                );
             }
 
             // Determine title from either positional argument or --title flag
@@ -2427,7 +2416,7 @@ fn run() -> Result<()> {
             // Close all specified issues
             let mut closed_issues = Vec::new();
             for issue_id in &issue_ids {
-                let issue = storage.close_issue(issue_id, &reason)?;
+                let issue = storage.close_issue(issue_id, reason.as_deref())?;
                 closed_issues.push(issue);
             }
 
@@ -2443,7 +2432,7 @@ fn run() -> Result<()> {
 
         Commands::Reopen {
             issue_ids,
-            reason: _,
+            reason,
             role,
         } => {
             let storage = get_storage(tz_dir, readonly)?;
@@ -2475,7 +2464,7 @@ fn run() -> Result<()> {
             let mut reopened = Vec::new();
 
             for issue_id in issue_ids {
-                let issue = storage.reopen_issue(&issue_id, role)?;
+                let issue = storage.reopen_issue(&issue_id, role, reason.as_deref())?;
                 reopened.push(issue);
             }
 

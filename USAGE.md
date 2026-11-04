@@ -28,8 +28,8 @@ overview, see the [README](README.md).
 - `tz claim ISSUE_ID... --as NAME [--team TEAM] [--release] [--force]` - Claim or release issues
 - `tz block ISSUE_ID... [--release] [--reason TEXT]` - Mark issues `blocked`, or back to `open` with `--release`. A reason is appended to Notes as `Blocked <UTC timestamp>: <reason>` (`Unblocked ...` on release)
 - `tz defer ISSUE_ID... [--release] [--reason TEXT]` - Same as `tz block`, for `deferred` (`Deferred ...` / `Undeferred ...` notes)
-- `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue
-- `tz reopen ISSUE_ID... [--role human|agent]` - Reopen closed issues. An issue with no role is refused until you resubmit with `--role`
+- `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue. A reason is appended to Notes as `Closed <UTC timestamp>: <reason>`
+- `tz reopen ISSUE_ID... [--role human|agent] [--reason REASON]` - Reopen closed issues. A reason is appended to Notes as `Reopened <UTC timestamp>: <reason>`. An issue with no role is refused until you resubmit with `--role`
 - `tz comments add ISSUE_ID --body TEXT --author NAME` - Add a local issue comment
 - `tz comments list ISSUE_ID` - List local issue comments
 - `tz comments delete ISSUE_ID COMMENT_ID...` - Delete local issue comment(s) by ID
@@ -70,7 +70,7 @@ the file in `.tazk/triage/`.
   deleted.
 - `tz triage promote NAME... --title TITLE -r human|agent [OPTIONS]` - Create
   one issue from one or more items and delete the items. Accepts the same
-  options as `tz create` except `--id` and `--file` (`-p`, `-t`, `-d` /
+  options as `tz create` except `--id` (`-p`, `-t`, `-d` /
   `--description-file`, `--design`, `--acceptance`, `-a`, `--effort`,
   `-l`/`--labels`, `--external-ref`, `--deps`, `--parent`). Without a
   description flag the description is the items' text, in the order given,

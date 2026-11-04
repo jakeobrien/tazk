@@ -286,7 +286,7 @@ fn repacking_closed_issues_can_swap_their_ids_with_open_issues() {
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         let (_temp, storage) = fixture(layout);
         import_fixture_issues(&storage, &["r-1", "r-2"]);
-        storage.close_issue("r-1", "done").unwrap();
+        storage.close_issue("r-1", Some("done")).unwrap();
         storage.repack_numeric_ids(false, Some(2)).unwrap();
         let open = storage.get_issue("r-1").unwrap().unwrap();
         let closed = storage.get_issue("r-2").unwrap().unwrap();
@@ -441,7 +441,7 @@ fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
         .add_dependency("r-4", "r-1", DependencyType::RelatedTo)
         .unwrap();
     assert_eq!(storage.get_stats().unwrap().blocked_issues, 2);
-    storage.close_issue("r-1", "done").unwrap();
+    storage.close_issue("r-1", Some("done")).unwrap();
     let ready = storage.get_ready(None, None, None, "priority").unwrap();
     assert!(ready.iter().any(|issue| issue.id == "r-2"));
     assert!(ready.iter().any(|issue| issue.id == "r-4"));
@@ -454,7 +454,7 @@ fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
     assert_eq!(stats.ready_issues, ready.len());
     assert_eq!(stats.blocked_issues, blocked.len());
     storage
-        .reopen_issue("r-1", Some(tazk::types::Role::Agent))
+        .reopen_issue("r-1", Some(tazk::types::Role::Agent), None)
         .unwrap();
     let ready = storage.get_ready(None, None, None, "priority").unwrap();
     assert!(!ready.iter().any(|issue| issue.id == "r-2"));
@@ -494,7 +494,7 @@ fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
         )
         .unwrap()
         .is_empty());
-    storage.close_issue("r-1", "done").unwrap();
+    storage.close_issue("r-1", Some("done")).unwrap();
     let ready = storage
         .get_ready(
             Some("worker"),

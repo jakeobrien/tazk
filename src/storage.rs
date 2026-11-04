@@ -1272,8 +1272,7 @@ impl Storage {
         let now = chrono::Utc::now();
         if let Some(reason) = reason.map(str::trim).filter(|r| !r.is_empty()) {
             let verb = if release { release_verb } else { verb };
-            let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            issue.notes = append_paragraph(&issue.notes, &format!("{verb} {stamp}: {reason}"));
+            append_framed_note(&mut issue, verb, now, reason);
         }
         issue.updated_at = now;
 
@@ -1282,8 +1281,9 @@ impl Storage {
         Ok(issue)
     }
 
-    /// Close an issue
-    pub fn close_issue(&self, id: &str, _reason: &str) -> Result<Issue> {
+    /// Close an issue. A non-empty `reason` is appended to the notes as
+    /// `Closed <timestamp>: <reason>`.
+    pub fn close_issue(&self, id: &str, reason: Option<&str>) -> Result<Issue> {
         let _lock = self.lock_for_write()?;
 
         let Some(issue_path) = self.existing_issue_path(id)? else {
@@ -1293,9 +1293,13 @@ impl Storage {
         let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
         let mut issue = markdown_to_issue(id, &content)?;
 
+        let now = chrono::Utc::now();
         issue.status = Status::Closed;
-        issue.closed_at = Some(chrono::Utc::now());
-        issue.updated_at = chrono::Utc::now();
+        issue.closed_at = Some(now);
+        issue.updated_at = now;
+        if let Some(reason) = reason {
+            append_framed_note(&mut issue, "Closed", now, reason);
+        }
 
         self.write_issue_to_path(&issue_path, &issue)?;
 
@@ -1305,8 +1309,14 @@ impl Storage {
     /// Reopen an issue.
     ///
     /// An issue without a role cannot be reopened: the caller must supply one
-    /// (`role`). A supplied `role` always replaces the stored one.
-    pub fn reopen_issue(&self, id: &str, role: Option<Role>) -> Result<Issue> {
+    /// (`role`). A supplied `role` always replaces the stored one. A non-empty
+    /// `reason` is appended to the notes as `Reopened <timestamp>: <reason>`.
+    pub fn reopen_issue(
+        &self,
+        id: &str,
+        role: Option<Role>,
+        reason: Option<&str>,
+    ) -> Result<Issue> {
         let _lock = self.lock_for_write()?;
 
         let Some(issue_path) = self.existing_issue_path(id)? else {
@@ -1324,9 +1334,13 @@ impl Storage {
             ),
         }
 
+        let now = chrono::Utc::now();
         issue.status = Status::Open;
         issue.closed_at = None;
-        issue.updated_at = chrono::Utc::now();
+        issue.updated_at = now;
+        if let Some(reason) = reason {
+            append_framed_note(&mut issue, "Reopened", now, reason);
+        }
 
         self.write_issue_to_path(&issue_path, &issue)?;
 
@@ -1624,6 +1638,22 @@ pub(crate) fn search_replace_text(
 
 /// `text` with `addition` appended as its own paragraph (after a blank line),
 /// or just `addition` when `text` is blank.
+/// Append `<verb> <UTC timestamp>: <reason>` to the issue's notes as its own
+/// paragraph. Blank reasons are ignored.
+fn append_framed_note(
+    issue: &mut Issue,
+    verb: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    reason: &str,
+) {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return;
+    }
+    let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    issue.notes = append_paragraph(&issue.notes, &format!("{verb} {stamp}: {reason}"));
+}
+
 pub(crate) fn append_paragraph(text: &str, addition: &str) -> String {
     let existing = text.trim_end();
     if existing.is_empty() {
@@ -3622,7 +3652,7 @@ mod claim_tests {
     #[test]
     fn claiming_a_closed_issue_fails_even_with_force() {
         let (_tmp, storage, id) = storage_with_one_issue();
-        storage.close_issue(&id, "done").unwrap();
+        storage.close_issue(&id, Some("done")).unwrap();
         for force in [false, true] {
             let err = storage.claim_issue(&id, "host-a", force).unwrap_err();
             assert!(err.to_string().contains("closed"), "unexpected: {err}");
@@ -3708,13 +3738,13 @@ mod reopen_tests {
     fn reopen_requires_a_role() {
         let (_tmp, storage) = storage();
         let id = make_open_issue(&storage, None);
-        storage.close_issue(&id, "done").unwrap();
+        storage.close_issue(&id, Some("done")).unwrap();
 
-        let err = storage.reopen_issue(&id, None).unwrap_err();
+        let err = storage.reopen_issue(&id, None, None).unwrap_err();
         assert!(err.to_string().contains("--role"), "{err}");
         assert_eq!(status(&storage, &id), Status::Closed);
 
-        let issue = storage.reopen_issue(&id, Some(Role::Human)).unwrap();
+        let issue = storage.reopen_issue(&id, Some(Role::Human), None).unwrap();
         assert_eq!(issue.status, Status::Open);
         assert_eq!(issue.role, Some(Role::Human));
     }
@@ -3723,8 +3753,8 @@ mod reopen_tests {
     fn reopen_keeps_existing_role_without_flag() {
         let (_tmp, storage) = storage();
         let id = make_open_issue(&storage, Some(Role::Agent));
-        storage.close_issue(&id, "done").unwrap();
-        let issue = storage.reopen_issue(&id, None).unwrap();
+        storage.close_issue(&id, Some("done")).unwrap();
+        let issue = storage.reopen_issue(&id, None, None).unwrap();
         assert_eq!(issue.role, Some(Role::Agent));
     }
 }
@@ -4251,7 +4281,53 @@ mod hold_tests {
             .set_hold(&id, Status::Deferred, false, None)
             .unwrap();
         assert!(storage.set_hold(&id, Status::Blocked, true, None).is_err());
-        storage.close_issue(&id, "done").unwrap();
+        storage.close_issue(&id, Some("done")).unwrap();
         assert!(storage.set_hold(&id, Status::Blocked, false, None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod close_reason_tests {
+    use super::*;
+
+    #[test]
+    fn close_and_reopen_reasons_append_to_notes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = Storage::init(
+            tmp.path().join(".tazk"),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+        let id = storage
+            .create_issue(
+                "x".into(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                Some(Role::Agent),
+                None,
+            )
+            .unwrap()
+            .id;
+
+        let issue = storage.close_issue(&id, None).unwrap();
+        assert!(issue.notes.is_empty());
+        let issue = storage.reopen_issue(&id, None, Some("  ")).unwrap();
+        assert!(issue.notes.is_empty());
+
+        storage.close_issue(&id, Some("fixed in #42")).unwrap();
+        let issue = storage.reopen_issue(&id, None, Some("regressed")).unwrap();
+        assert!(issue.notes.starts_with("Closed 20"), "{}", issue.notes);
+        assert!(issue.notes.contains("Z: fixed in #42\n\nReopened 20"));
+        assert!(issue.notes.ends_with("Z: regressed"));
     }
 }
