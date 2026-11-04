@@ -1222,6 +1222,66 @@ impl Storage {
         Ok(issue)
     }
 
+    /// Put an issue on hold (`hold` = `Blocked` or `Deferred`), or take it off
+    /// hold when `release` is set (back to `open`).
+    ///
+    /// A closed issue cannot be put on hold. Releasing requires the issue to
+    /// currently have the `hold` status. A non-empty `reason` is appended to the
+    /// issue's notes as its own paragraph, framed with a UTC timestamp, e.g.
+    /// `Blocked 2025-01-02T03:04:05Z: waiting on API keys` (on release the
+    /// frame is `Unblocked` / `Undeferred`).
+    pub fn set_hold(
+        &self,
+        id: &str,
+        hold: Status,
+        release: bool,
+        reason: Option<&str>,
+    ) -> Result<Issue> {
+        let (verb, release_verb) = match hold {
+            Status::Blocked => ("Blocked", "Unblocked"),
+            Status::Deferred => ("Deferred", "Undeferred"),
+            other => anyhow::bail!("Invalid hold status: {other}"),
+        };
+
+        let _lock = self.lock_for_write()?;
+
+        let Some(issue_path) = self.existing_issue_path(id)? else {
+            anyhow::bail!("Issue not found: {}", id);
+        };
+
+        let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
+        let mut issue = markdown_to_issue(id, &content)?;
+
+        if release {
+            if issue.status != hold {
+                anyhow::bail!(
+                    "Cannot release {}: issue is {}, not {}",
+                    id,
+                    issue.status,
+                    hold
+                );
+            }
+            issue.status = Status::Open;
+        } else {
+            if issue.status == Status::Closed {
+                anyhow::bail!("Cannot mark {} as {}: issue is closed", id, hold);
+            }
+            issue.status = hold;
+        }
+
+        let now = chrono::Utc::now();
+        if let Some(reason) = reason.map(str::trim).filter(|r| !r.is_empty()) {
+            let verb = if release { release_verb } else { verb };
+            let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            issue.notes = append_paragraph(&issue.notes, &format!("{verb} {stamp}: {reason}"));
+        }
+        issue.updated_at = now;
+
+        self.write_issue_to_path(&issue_path, &issue)?;
+
+        Ok(issue)
+    }
+
     /// Close an issue
     pub fn close_issue(&self, id: &str, _reason: &str) -> Result<Issue> {
         let _lock = self.lock_for_write()?;
@@ -4119,4 +4179,79 @@ fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> R
     }
     issue.updated_at = now;
     Ok(())
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    fn storage_with_issue() -> (tempfile::TempDir, Storage, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = Storage::init(
+            tmp.path().join(".tazk"),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+        let id = storage
+            .create_issue(
+                "x".into(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                None,
+                None,
+            )
+            .unwrap()
+            .id;
+        (tmp, storage, id)
+    }
+
+    #[test]
+    fn block_and_release_with_reason() {
+        let (_tmp, storage, id) = storage_with_issue();
+        let issue = storage
+            .set_hold(&id, Status::Blocked, false, Some("need keys"))
+            .unwrap();
+        assert_eq!(issue.status, Status::Blocked);
+        assert!(issue.notes.starts_with("Blocked 20"), "{}", issue.notes);
+        assert!(issue.notes.ends_with("Z: need keys"), "{}", issue.notes);
+
+        let issue = storage
+            .set_hold(&id, Status::Blocked, true, Some("got keys"))
+            .unwrap();
+        assert_eq!(issue.status, Status::Open);
+        assert_eq!(issue.notes.matches("\n\n").count(), 1);
+        assert!(issue.notes.contains("Unblocked 20"));
+    }
+
+    #[test]
+    fn defer_without_reason_leaves_notes() {
+        let (_tmp, storage, id) = storage_with_issue();
+        let issue = storage
+            .set_hold(&id, Status::Deferred, false, None)
+            .unwrap();
+        assert_eq!(issue.status, Status::Deferred);
+        assert!(issue.notes.is_empty());
+    }
+
+    #[test]
+    fn release_requires_matching_status_and_closed_refused() {
+        let (_tmp, storage, id) = storage_with_issue();
+        assert!(storage.set_hold(&id, Status::Blocked, true, None).is_err());
+        storage
+            .set_hold(&id, Status::Deferred, false, None)
+            .unwrap();
+        assert!(storage.set_hold(&id, Status::Blocked, true, None).is_err());
+        storage.close_issue(&id, "done").unwrap();
+        assert!(storage.set_hold(&id, Status::Blocked, false, None).is_err());
+    }
 }

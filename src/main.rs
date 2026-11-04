@@ -463,6 +463,40 @@ enum Commands {
         force: bool,
     },
 
+    /// Block one or more issues, or unblock them with --release
+    ///
+    /// Sets status to blocked (or back to open with --release). With --reason,
+    /// the text is appended to the issue's Notes as "Blocked <timestamp>: <reason>".
+    Block {
+        /// Issue IDs to block (or unblock with --release)
+        issue_ids: Vec<String>,
+
+        /// Unblock the issue (status returns to open)
+        #[arg(long)]
+        release: bool,
+
+        /// Reason, appended to Notes with a timestamp
+        #[arg(long, allow_hyphen_values = true)]
+        reason: Option<String>,
+    },
+
+    /// Defer one or more issues, or undefer them with --release
+    ///
+    /// Sets status to deferred (or back to open with --release). With --reason,
+    /// the text is appended to the issue's Notes as "Deferred <timestamp>: <reason>".
+    Defer {
+        /// Issue IDs to defer (or undefer with --release)
+        issue_ids: Vec<String>,
+
+        /// Undefer the issue (status returns to open)
+        #[arg(long)]
+        release: bool,
+
+        /// Reason, appended to Notes with a timestamp
+        #[arg(long, allow_hyphen_values = true)]
+        reason: Option<String>,
+    },
+
     /// Close one or more issues
     Close {
         /// Issue IDs to close
@@ -735,6 +769,8 @@ impl Commands {
             | Self::Create { .. }
             | Self::Update { .. }
             | Self::Claim { .. }
+            | Self::Block { .. }
+            | Self::Defer { .. }
             | Self::Close { .. }
             | Self::Reopen { .. }
             | Self::Rename { .. }
@@ -2350,6 +2386,36 @@ fn run() -> Result<()> {
             Ok(())
         }
 
+        Commands::Block {
+            issue_ids,
+            release,
+            reason,
+        } => run_hold(
+            tz_dir,
+            readonly,
+            tz_no_cmd_logging,
+            json,
+            types::Status::Blocked,
+            &issue_ids,
+            release,
+            reason.as_deref(),
+        ),
+
+        Commands::Defer {
+            issue_ids,
+            release,
+            reason,
+        } => run_hold(
+            tz_dir,
+            readonly,
+            tz_no_cmd_logging,
+            json,
+            types::Status::Deferred,
+            &issue_ids,
+            release,
+            reason.as_deref(),
+        ),
+
         Commands::Close { issue_ids, reason } => {
             let storage = get_storage(tz_dir, readonly)?;
 
@@ -3413,6 +3479,49 @@ fn log_command(tazk_dir: &Path, args: &[String]) -> Result<()> {
     writeln!(file, "<<BD_INVOKE>> {} {}", timestamp, command_line)
         .context("Failed to write to command history log")?;
 
+    Ok(())
+}
+
+/// Shared body of `tz block` and `tz defer`.
+#[allow(clippy::too_many_arguments)]
+fn run_hold(
+    tz_dir: &Option<PathBuf>,
+    readonly: bool,
+    tz_no_cmd_logging: bool,
+    json: bool,
+    hold: types::Status,
+    issue_ids: &[String],
+    release: bool,
+    reason: Option<&str>,
+) -> Result<()> {
+    let storage = get_storage(tz_dir, readonly)?;
+
+    if !tz_no_cmd_logging {
+        let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
+    }
+
+    let (name, done) = match (hold, release) {
+        (types::Status::Blocked, false) => ("block", "Blocked"),
+        (types::Status::Blocked, true) => ("unblock", "Unblocked"),
+        (_, false) => ("defer", "Deferred"),
+        (_, true) => ("undefer", "Undeferred"),
+    };
+    if issue_ids.is_empty() {
+        anyhow::bail!("No issue IDs given to {name}");
+    }
+
+    let mut results = Vec::new();
+    for issue_id in issue_ids {
+        results.push(storage.set_hold(issue_id, hold, release, reason)?);
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+    } else {
+        for issue in &results {
+            println!("{done} {}", issue.id);
+        }
+    }
     Ok(())
 }
 

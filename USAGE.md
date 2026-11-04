@@ -26,6 +26,8 @@ overview, see the [README](README.md).
     non-empty so it becomes its own paragraph. Simpler than a search/replace when
     you only want to add to the end.
 - `tz claim ISSUE_ID... --as NAME [--team TEAM] [--release] [--force]` - Claim or release issues
+- `tz block ISSUE_ID... [--release] [--reason TEXT]` - Mark issues `blocked`, or back to `open` with `--release`. A reason is appended to Notes as `Blocked <UTC timestamp>: <reason>` (`Unblocked ...` on release)
+- `tz defer ISSUE_ID... [--release] [--reason TEXT]` - Same as `tz block`, for `deferred` (`Deferred ...` / `Undeferred ...` notes)
 - `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue
 - `tz reopen ISSUE_ID... [--role human|agent]` - Reopen closed issues. An issue with no role is refused until you resubmit with `--role`
 - `tz comments add ISSUE_ID --body TEXT --author NAME` - Add a local issue comment
@@ -240,8 +242,8 @@ empty.
 | `open` | Not started. Open issues with no unresolved blockers are reported by `tz ready`. |
 | `in_progress` | Being worked on. Set by `tz claim`. |
 | `closed` | Complete. Sets `closed_at`. |
-| `blocked` | Marked as blocked by hand. Not listed by `tz ready`. |
-| `deferred` | Postponed. Not listed by `tz ready`. |
+| `blocked` | Marked as blocked by hand (`tz block`). Not listed by `tz ready`. |
+| `deferred` | Postponed (`tz defer`). Not listed by `tz ready`. |
 
 Status values are lowercase with underscores. Only `open` issues appear in `tz ready`. Note that `tz blocked` reports
 issues that have unresolved `blocked_by` dependencies; it does not depend on the
