@@ -1,0 +1,28 @@
+---
+source: src/tui/ui/triage.rs
+expression: text
+---
+ Issues (1) │ Triage (4)
+ /zzz                                                                                        0 of 4
+
+
+
+
+
+
+
+
+
+
+                                      No matching triage items
+
+
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  Esc clear search  m mode  q quit  y copy  o edit

@@ -9,7 +9,8 @@ use super::model::grid::{GridState, Viewport};
 use super::model::picker::PickerState;
 use super::model::relations::{relationships, Relationships};
 use super::model::search::visible_triage;
-use super::ui::layout::{grid_capacity, LayoutMode};
+use super::model::triage_grid::TriageGridState;
+use super::ui::layout::{grid_capacity, triage_capacity, LayoutMode};
 use super::ui::markdown::MarkdownCache;
 use super::{GroupByArg, ModeArg, TuiArgs};
 use std::time::{Duration, Instant};
@@ -181,6 +182,8 @@ pub struct App {
     pub selection: PerMode<Option<String>>,
     /// Issues grid: columns, selection and scroll offsets (spec §5).
     pub grid: GridState,
+    /// Triage grid: visible items, selection and scroll (spec §10).
+    pub triage_grid: TriageGridState,
     /// Detail view: scroll, relationship highlight and link stack (spec §9).
     pub detail: DetailState,
     /// Rendered-markdown cache for the detail body (rendering only).
@@ -240,6 +243,7 @@ impl App {
             status_since: None,
             selection: PerMode::default(),
             grid: GridState::default(),
+            triage_grid: TriageGridState::default(),
             detail: DetailState::default(),
             markdown: MarkdownCache::new(),
             contexts: vec![Context::Grid],
@@ -258,6 +262,12 @@ impl App {
         Viewport::new(columns, rows)
     }
 
+    /// How much of the triage grid fits on screen, from the last known size.
+    pub fn triage_viewport(&self) -> Viewport {
+        let (columns, rows) = triage_capacity(self.size);
+        Viewport::new(columns, rows)
+    }
+
     /// Recompute the grid columns from the snapshot, filters, issues-mode
     /// search and grouping, and reconcile the selection and scroll offsets
     /// (spec §5.6).
@@ -271,11 +281,27 @@ impl App {
             viewport,
         );
         self.selection.issues = self.grid.selected_id().map(str::to_string);
+        // The triage grid is cheap to keep current in both modes, so each
+        // mode keeps its selection while the other is shown.
+        let viewport = self.triage_viewport();
+        self.triage_grid
+            .rebuild(&self.snapshot, &self.search.triage, viewport);
+        self.selection.triage = self.triage_grid.selected_name().map(str::to_string);
     }
 
-    /// Apply a navigation action to the issues grid (issues mode only).
+    /// Apply a navigation action to the current mode's grid.
     fn navigate(&mut self, action: &Action) {
-        if self.mode != ModeArg::Issues {
+        if self.mode == ModeArg::Triage {
+            let vp = self.triage_viewport();
+            match action {
+                Action::Move(dir) => self.triage_grid.move_dir(*dir, vp),
+                Action::ColumnPageUp => self.triage_grid.page_up(vp),
+                Action::ColumnPageDown => self.triage_grid.page_down(vp),
+                Action::ColumnTop => self.triage_grid.top(vp),
+                Action::ColumnBottom => self.triage_grid.bottom(vp),
+                _ => {}
+            }
+            self.selection.triage = self.triage_grid.selected_name().map(str::to_string);
             return;
         }
         let vp = self.viewport();
@@ -1111,14 +1137,28 @@ mod tests {
     }
 
     #[test]
-    fn grid_keys_do_nothing_in_triage_mode() {
+    fn grid_keys_in_triage_mode_move_the_triage_selection_only() {
         let mut a = grid_app(vec![
             fixtures::issue("a", "A").priority(0),
             fixtures::issue("b", "B").priority(1),
         ]);
+        a.snapshot = fixtures::snapshot_with(
+            vec![fixtures::issue("a", "A"), fixtures::issue("b", "B")],
+            vec![
+                fixtures::triage_item("x.md", "one"),
+                fixtures::triage_item("y.md", "two"),
+            ],
+        );
+        a.refresh_grid();
+        send(&mut a, key(KeyCode::Char('m')));
+        assert_eq!(a.selection.triage.as_deref(), Some("x.md"));
+        send(&mut a, key(KeyCode::Right));
+        assert_eq!(selected(&a), Some("a"));
+        assert_eq!(a.selection.triage.as_deref(), Some("y.md"));
         send(&mut a, key(KeyCode::Char('m')));
         send(&mut a, key(KeyCode::Down));
-        assert_eq!(selected(&a), Some("a"));
+        assert_eq!(selected(&a), Some("b"));
+        assert_eq!(a.selection.triage.as_deref(), Some("y.md"));
     }
 
     // ---- Grouping cycle, filter reset and live search (spec §5.1, §6, §7)
@@ -1836,5 +1876,32 @@ mod tests {
         update(&mut a, Action::Reloaded(Box::new(snap)));
         assert!(a.picker.is_none());
         assert_eq!(a.overlay, Overlay::None);
+    }
+    #[test]
+    fn triage_search_narrows_the_triage_grid_and_keeps_its_own_selection() {
+        let mut a = grid_app(vec![fixtures::issue("a", "A")]);
+        a.snapshot = fixtures::snapshot_with(
+            vec![fixtures::issue("a", "A")],
+            vec![
+                fixtures::triage_item("1.md", "apple"),
+                fixtures::triage_item("2.md", "banana"),
+                fixtures::triage_item("3.md", "cherry pie"),
+            ],
+        );
+        a.refresh_grid();
+        send(&mut a, key(KeyCode::Char('m')));
+        send(&mut a, key(KeyCode::Char('l')));
+        assert_eq!(a.selection.triage.as_deref(), Some("2.md"));
+        send(&mut a, key(KeyCode::Char('/')));
+        type_str(&mut a, "pie");
+        assert_eq!(a.triage_grid.names(), ["3.md"]);
+        assert_eq!(a.selection.triage.as_deref(), Some("3.md"));
+        assert_eq!(a.counts(), (1, 3));
+        type_str(&mut a, "x");
+        assert_eq!(a.selection.triage, None);
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.selection.triage.as_deref(), Some("1.md"));
+        // The issues grid is unaffected.
+        assert_eq!(selected(&a), Some("a"));
     }
 }

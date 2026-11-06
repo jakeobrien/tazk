@@ -1,0 +1,28 @@
+---
+source: src/tui/ui/triage.rs
+expression: out
+---
+┏ notes.md ━━━━━━━━━━━━━━━━━━━━┓
+┃ # Hand dropped Some notes    ┃
+┃                              ┃
+┃                              ┃
+┃                              ┃
+┃                              ┃
+┗━━━━━━━━━━━━━━━━━━ notes.md ━━┛
+--- styles ---
+0:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┏"
+0:1..11 fg=Rgb(150, 150, 150) bg=Reset mods=BOLD | REVERSED " notes.md "
+0:11..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "━━━━━━━━━━━━━━━━━━━━┓"
+1:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+1:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+2:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+2:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+3:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+3:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+4:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+4:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+5:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+5:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┃"
+6:0..19 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "┗━━━━━━━━━━━━━━━━━━"
+6:19..29 fg=Rgb(110, 110, 110) bg=Reset mods=NONE " notes.md "
+6:29..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "━━┛"

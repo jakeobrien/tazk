@@ -87,6 +87,15 @@ pub fn split_main(main: Rect) -> (Rect, Rect) {
 /// Height of a column's title bar.
 pub const COLUMN_TITLE_HEIGHT: u16 = 1;
 
+/// How many whole cells per row and rows of cells fit in the triage grid for a
+/// terminal of `size`; at least 1 each. Unlike the issues grid it has no
+/// column title bars.
+pub fn triage_capacity(size: (u16, u16)) -> (usize, usize) {
+    let (columns, _) = grid_capacity(size);
+    let main = areas(Rect::new(0, 0, size.0, size.1)).main;
+    (columns, (main.height / MIN_CELL_HEIGHT).max(1) as usize)
+}
+
 /// How many whole columns and cells fit in the grid for a terminal of
 /// `size` `(columns, rows)`; at least 1 each. The grid gets the left half of
 /// the main area in split view (spec §8).

@@ -181,6 +181,13 @@ pub fn empty_message_style() -> Style {
     Style::new().fg(DIM)
 }
 
+// --- Triage grid ---------------------------------------------------------------
+
+/// Border of a triage cell: neutral (items have no type).
+pub fn triage_edge_style() -> Style {
+    Style::new().fg(GRAY)
+}
+
 // --- Panes ---------------------------------------------------------------------
 
 /// Border of the detail pane: accented when it has focus (or is full-screen),

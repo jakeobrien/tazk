@@ -126,6 +126,51 @@ pub fn wrap_title(title: &str, width: usize, max_lines: usize) -> Vec<String> {
     lines
 }
 
+/// The 32×7 border: rounded, or thick when `selected`, all in `edge`.
+pub(super) fn draw_border(buf: &mut Buffer, selected: bool, edge: Style) {
+    let set = if selected {
+        border::THICK
+    } else {
+        border::ROUNDED
+    };
+    let right = CELL_WIDTH - 1;
+    let bottom = CELL_HEIGHT - 1;
+    for x in 1..right {
+        buf[(x, 0)].set_symbol(set.horizontal_top).set_style(edge);
+        buf[(x, bottom)]
+            .set_symbol(set.horizontal_bottom)
+            .set_style(edge);
+    }
+    for y in 1..bottom {
+        buf[(0, y)].set_symbol(set.vertical_left).set_style(edge);
+        buf[(right, y)]
+            .set_symbol(set.vertical_right)
+            .set_style(edge);
+    }
+    buf[(0, 0)].set_symbol(set.top_left).set_style(edge);
+    buf[(right, 0)].set_symbol(set.top_right).set_style(edge);
+    buf[(0, bottom)].set_symbol(set.bottom_left).set_style(edge);
+    buf[(right, bottom)]
+        .set_symbol(set.bottom_right)
+        .set_style(edge);
+}
+
+/// Copy a finished cell buffer to `area` of `buf`, clipped to `area` and the
+/// target buffer.
+pub(super) fn blit(cell: &Buffer, area: Rect, buf: &mut Buffer) {
+    let w = area.width.min(CELL_WIDTH);
+    let h = area.height.min(CELL_HEIGHT);
+    let target = buf.area;
+    for y in 0..h {
+        for x in 0..w {
+            let (tx, ty) = (area.x + x, area.y + y);
+            if tx < target.right() && ty < target.bottom() {
+                buf[(tx, ty)] = cell[(x, y)].clone();
+            }
+        }
+    }
+}
+
 // --- Widget ------------------------------------------------------------------
 
 /// One issue as a 32×7 cell. Build with [`IssueCell::new`].
@@ -179,33 +224,9 @@ impl<'a> IssueCell<'a> {
     fn draw(&self, buf: &mut Buffer) {
         let issue = self.issue;
         let edge = self.style(theme::type_style(issue.issue_type));
-        let set = if self.selected {
-            border::THICK
-        } else {
-            border::ROUNDED
-        };
         let right = CELL_WIDTH - 1;
         let bottom = CELL_HEIGHT - 1;
-
-        // Border.
-        for x in 1..right {
-            buf[(x, 0)].set_symbol(set.horizontal_top).set_style(edge);
-            buf[(x, bottom)]
-                .set_symbol(set.horizontal_bottom)
-                .set_style(edge);
-        }
-        for y in 1..bottom {
-            buf[(0, y)].set_symbol(set.vertical_left).set_style(edge);
-            buf[(right, y)]
-                .set_symbol(set.vertical_right)
-                .set_style(edge);
-        }
-        buf[(0, 0)].set_symbol(set.top_left).set_style(edge);
-        buf[(right, 0)].set_symbol(set.top_right).set_style(edge);
-        buf[(0, bottom)].set_symbol(set.bottom_left).set_style(edge);
-        buf[(right, bottom)]
-            .set_symbol(set.bottom_right)
-            .set_style(edge);
+        draw_border(buf, self.selected, edge);
 
         // Top border: " id " on the left, " ⊘ " on the right. The ID is cut so
         // that at least one rule character stays between the two.
@@ -270,17 +291,7 @@ impl Widget for IssueCell<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut cell = Buffer::empty(Rect::new(0, 0, CELL_WIDTH, CELL_HEIGHT));
         self.draw(&mut cell);
-        let w = area.width.min(CELL_WIDTH);
-        let h = area.height.min(CELL_HEIGHT);
-        let target = buf.area;
-        for y in 0..h {
-            for x in 0..w {
-                let (tx, ty) = (area.x + x, area.y + y);
-                if tx < target.right() && ty < target.bottom() {
-                    buf[(tx, ty)] = cell[(x, y)].clone();
-                }
-            }
-        }
+        blit(&cell, area, buf);
     }
 }
 

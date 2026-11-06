@@ -1,0 +1,26 @@
+---
+source: src/tui/ui/triage.rs
+expression: out
+---
+╭ 2025-11-04 00:18 ────────────╮
+│ Login page crashes when the  │
+│ session cookie is dropped o… │
+│                              │
+│                              │
+│                              │
+╰─── 20251104T001800-k3f9.md ──╯
+--- styles ---
+0:0..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "╭ 2025-11-04 00:18 ────────────╮"
+1:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+1:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+2:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+2:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+3:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+3:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+4:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+4:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+5:0..1 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+5:31..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "│"
+6:0..4 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "╰───"
+6:4..29 fg=Rgb(110, 110, 110) bg=Reset mods=NONE " 20251104T001800-k3f9.md "
+6:29..32 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "──╯"

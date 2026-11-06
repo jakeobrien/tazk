@@ -11,3 +11,4 @@ pub mod relations;
 pub mod search;
 pub mod sort;
 pub mod triage;
+pub mod triage_grid;

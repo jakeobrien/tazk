@@ -1,0 +1,15 @@
+---
+source: src/tui/ui/triage.rs
+expression: text
+---
+ Issues (1) │ Triage (4)
+                                                               4 of 4
+┏ 2025-11-05 12:00 ━━━━━━━━━━━━┓╭ notes.md ────────────────────╮
+┃ Third standard item          ┃│ # Hand dropped Some notes    │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┗━━━ 20251105T120000-zz99.md ━━┛╰────────────────── notes.md ──╯
+
+ ? help  Enter open  / search  m mode  q quit  y copy  o edit

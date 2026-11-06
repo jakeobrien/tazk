@@ -1,6 +1,6 @@
 ---
 title: 'TUI: triage grid (wrapped layout, cells, navigation, search)'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -15,7 +15,8 @@ dependencies:
   tazk-29: blocked_by
   tazk-4: child_of
 created_at: 2026-11-06T03:28:37.373494961+00:00
-updated_at: 2026-11-06T03:28:37.481460711+00:00
+updated_at: 2026-11-06T21:48:18.031884511+00:00
+closed_at: 2026-11-06T21:48:18.031884511+00:00
 ---
 
 # Description

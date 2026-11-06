@@ -1,0 +1,28 @@
+---
+source: src/tui/ui/triage.rs
+expression: "render_app(&mut app, 100, 24)"
+---
+ Issues (1) │ Triage (4)
+                                                                                             4 of 4
+╭ 2025-11-04 00:18 ────────────╮┏ 2025-11-04 09:30 ━━━━━━━━━━━━┓╭ 2025-11-05 12:00 ────────────╮
+│ Login page crashes when the  │┃ Typo in the README           ┃│ Third standard item          │
+│ session cookie is dropped o… │┃                              ┃│                              │
+│                              │┃                              ┃│                              │
+│                              │┃                              ┃│                              │
+│                              │┃                              ┃│                              │
+╰─── 20251104T001800-k3f9.md ──╯┗━━━ 20251104T093000-a1b2.md ━━┛╰─── 20251105T120000-zz99.md ──╯
+╭ notes.md ────────────────────╮
+│ # Hand dropped Some notes    │
+│                              │
+│                              │
+│                              │
+│                              │
+╰────────────────── notes.md ──╯
+
+
+
+
+
+
+
+ ? help  Enter open  / search  m mode  q quit  y copy  o edit

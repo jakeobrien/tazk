@@ -43,17 +43,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if app.mode == ModeArg::Issues {
             grid::draw_grid(frame, left, app);
             grid_area = Some(left);
+        } else {
+            triage::draw_triage_grid(frame, left, app);
         }
         let focused = app.focus == Focus::Detail;
         detail::draw_detail_pane(frame, detail_area, app, focused);
     } else if app.mode == ModeArg::Issues {
         grid::draw_grid(frame, areas.main, app);
         grid_area = Some(areas.main);
+    } else {
+        triage::draw_triage_grid(frame, areas.main, app);
     }
     if let (Some(area), Some(picker)) = (grid_area, &app.picker) {
         picker::draw_picker(frame, area, picker);
     }
-    // The triage grid is drawn by a later issue.
 }
 
 /// Only a centered message; nothing else is drawn.
