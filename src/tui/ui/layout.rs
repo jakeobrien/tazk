@@ -71,3 +71,21 @@ impl LayoutMode {
         }
     }
 }
+
+/// Height of a column's title bar.
+pub const COLUMN_TITLE_HEIGHT: u16 = 1;
+
+/// How many whole columns and cells fit in the grid for a terminal of
+/// `size` `(columns, rows)`; at least 1 each. The grid gets the left half of
+/// the main area in split view (spec §8).
+pub fn grid_capacity(size: (u16, u16)) -> (usize, usize) {
+    let main = areas(Rect::new(0, 0, size.0, size.1)).main;
+    let width = if is_split(size.0) {
+        main.width / 2
+    } else {
+        main.width
+    };
+    let columns = (width / MIN_COLUMN_WIDTH).max(1) as usize;
+    let rows = (main.height.saturating_sub(COLUMN_TITLE_HEIGHT) / MIN_CELL_HEIGHT).max(1) as usize;
+    (columns, rows)
+}

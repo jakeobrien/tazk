@@ -51,6 +51,29 @@ impl Column {
             cells,
         }
     }
+
+    /// Number of selectable rows: the header (if any) is row 0, then the cells.
+    pub fn row_count(&self) -> usize {
+        self.cells.len() + usize::from(self.header.is_some())
+    }
+
+    /// The issue ID at `row` (the epic's ID for the header row).
+    pub fn id_at(&self, row: usize) -> Option<&str> {
+        match (&self.header, row) {
+            (Some(h), 0) => Some(h.epic_id.as_str()),
+            (Some(_), r) => self.cells.get(r - 1).map(String::as_str),
+            (None, r) => self.cells.get(r).map(String::as_str),
+        }
+    }
+
+    /// The row holding issue `id`, header included.
+    pub fn row_of(&self, id: &str) -> Option<usize> {
+        if self.header.as_ref().is_some_and(|h| h.epic_id == id) {
+            return Some(0);
+        }
+        let offset = usize::from(self.header.is_some());
+        self.cells.iter().position(|c| c == id).map(|i| i + offset)
+    }
 }
 
 /// Build the columns for `grouping` from the `visible` issues (those passing

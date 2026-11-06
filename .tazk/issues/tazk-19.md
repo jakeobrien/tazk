@@ -1,6 +1,6 @@
 ---
 title: 'TUI: issues grid selection, navigation and scroll-follow (state)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-16: blocked_by
   tazk-2: child_of
 created_at: 2026-11-06T03:28:37.359141920+00:00
-updated_at: 2026-11-06T03:28:37.421958295+00:00
+updated_at: 2026-11-06T17:45:58.631354238+00:00
+closed_at: 2026-11-06T17:45:58.631354238+00:00
 ---
 
 # Description

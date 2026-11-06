@@ -4,8 +4,9 @@
 use super::data::Snapshot;
 use super::keymap::Context;
 use super::model::filter::{visible_issues, Filters};
+use super::model::grid::{GridState, Viewport};
 use super::model::search::visible_triage;
-use super::ui::layout::LayoutMode;
+use super::ui::layout::{grid_capacity, LayoutMode};
 use super::{GroupByArg, ModeArg, TuiArgs};
 use std::time::{Duration, Instant};
 
@@ -168,9 +169,11 @@ pub struct App {
     pub status: Option<String>,
     /// When `status` was set, for expiry ([`App::expire_status`]).
     pub status_since: Option<Instant>,
-    /// Selected item per mode: issue ID / triage filename. Placeholder until
-    /// the navigation issue gives it real behavior.
+    /// Selected item per mode: issue ID / triage filename. In issues mode this
+    /// mirrors `grid` (the source of truth), kept in sync by [`App::refresh_grid`].
     pub selection: PerMode<Option<String>>,
+    /// Issues grid: columns, selection and scroll offsets (spec §5).
+    pub grid: GridState,
     /// Input contexts, innermost last. Never empty (starts as `[Grid]`).
     /// Derived; see [`App::sync_contexts`].
     pub contexts: Vec<Context>,
@@ -201,7 +204,7 @@ impl App {
 
     /// Build an app from a snapshot with default view state. No filesystem access.
     pub fn from_snapshot(mode: ModeArg, snapshot: Snapshot) -> Self {
-        Self {
+        let mut app = Self {
             snapshot,
             mode,
             grouping: GroupByArg::Epic,
@@ -214,11 +217,52 @@ impl App {
             status: None,
             status_since: None,
             selection: PerMode::default(),
+            grid: GridState::default(),
             contexts: vec![Context::Grid],
             should_quit: false,
             size: (0, 0),
             reload_requested: false,
+        };
+        app.refresh_grid();
+        app
+    }
+
+    /// How much of the grid fits on screen, from the last known size.
+    pub fn viewport(&self) -> Viewport {
+        let (columns, rows) = grid_capacity(self.size);
+        Viewport::new(columns, rows)
+    }
+
+    /// Recompute the grid columns from the snapshot, filters, issues-mode
+    /// search and grouping, and reconcile the selection and scroll offsets
+    /// (spec §5.6).
+    pub fn refresh_grid(&mut self) {
+        let viewport = self.viewport();
+        self.grid.rebuild(
+            &self.snapshot,
+            &self.filters,
+            &self.search.issues,
+            self.grouping,
+            viewport,
+        );
+        self.selection.issues = self.grid.selected_id().map(str::to_string);
+    }
+
+    /// Apply a navigation action to the issues grid (issues mode only).
+    fn navigate(&mut self, action: &Action) {
+        if self.mode != ModeArg::Issues {
+            return;
         }
+        let vp = self.viewport();
+        match action {
+            Action::Move(dir) => self.grid.move_dir(*dir, vp),
+            Action::ColumnPageUp => self.grid.page_up(vp),
+            Action::ColumnPageDown => self.grid.page_down(vp),
+            Action::ColumnTop => self.grid.top(vp),
+            Action::ColumnBottom => self.grid.bottom(vp),
+            _ => {}
+        }
+        self.selection.issues = self.grid.selected_id().map(str::to_string);
     }
 
     /// The active layout, derived from the terminal width (spec §8).
@@ -319,6 +363,21 @@ impl App {
 
 /// Apply an action to the state.
 pub fn update(app: &mut App, action: Action) {
+    // Pure navigation moves the selection only; everything else may change
+    // what the grid shows (filters, search, grouping, snapshot, size).
+    let navigation = matches!(
+        action,
+        Action::Move(_)
+            | Action::ColumnPageUp
+            | Action::ColumnPageDown
+            | Action::ColumnTop
+            | Action::ColumnBottom
+    );
+    if navigation {
+        app.navigate(&action);
+        app.sync_contexts();
+        return;
+    }
     match action {
         // Events
         Action::Resize(w, h) => {
@@ -329,8 +388,8 @@ pub fn update(app: &mut App, action: Action) {
         Action::FocusGained | Action::Tick | Action::Reload => app.reload_requested = true,
         Action::Reloaded(snapshot) => {
             app.snapshot = *snapshot;
-            // EXTENSION POINT (navigation issue): keep the selection by ID,
-            // keep or clear the link stack (spec §3.4).
+            // The grid keeps the selection by ID (refresh_grid, below).
+            // EXTENSION POINT (detail issue): keep or clear the link stack (spec §3.4).
         }
 
         // Global
@@ -371,8 +430,9 @@ pub fn update(app: &mut App, action: Action) {
         Action::CycleGrouping => app.grouping = app.grouping.next(),
 
         // EXTENSION POINTS, each handled by its own issue:
-        // - navigation: Move, Column*, OpenDetail, Detail*, NextLink, PrevLink,
+        // - navigation: OpenDetail, Detail*, NextLink, PrevLink,
         //   FollowLink, DetailBack, layout switching, CopyId, OpenEditor
+        //   (grid movement: Move, Column* are handled by `App::navigate`)
         // - filters / grouping: CycleGrouping, OpenPicker, ResetFilters, Picker*
         Action::CopyId
         | Action::OpenEditor
@@ -403,6 +463,7 @@ pub fn update(app: &mut App, action: Action) {
         | Action::PickerApply
         | Action::PickerCancel => {}
     }
+    app.refresh_grid();
     app.sync_contexts();
 }
 
@@ -613,6 +674,149 @@ mod tests {
         assert_eq!(a.grouping, GroupByArg::Role);
         assert_eq!(a.search.issues, "x");
         assert_eq!(a.search.triage, "");
+    }
+
+    fn selected(a: &App) -> Option<&str> {
+        a.selection.issues.as_deref()
+    }
+
+    fn grid_app(issues: Vec<fixtures::IssueBuilder>) -> App {
+        let mut a = App::from_snapshot(ModeArg::Issues, fixtures::snapshot_of(issues));
+        update(&mut a, Action::Resize(100, 40));
+        a
+    }
+
+    #[test]
+    fn keys_move_the_selection_through_the_grid() {
+        use crate::types::Role::{Agent, Human};
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0).role(Agent),
+            fixtures::issue("b", "B").priority(1).role(Agent),
+            fixtures::issue("c", "C").priority(2).role(Human),
+        ]);
+        send(&mut a, key(KeyCode::Char('g'))); // status
+        send(&mut a, key(KeyCode::Char('g'))); // role: agent [a, b], human [c]
+        assert_eq!(selected(&a), Some("a"));
+        send(&mut a, key(KeyCode::Right));
+        assert_eq!(selected(&a), Some("c"));
+        send(&mut a, key(KeyCode::Char('h')));
+        assert_eq!(selected(&a), Some("a"));
+        send(&mut a, key(KeyCode::Char('j')));
+        assert_eq!(selected(&a), Some("b"));
+        send(&mut a, key(KeyCode::Char('l')));
+        assert_eq!(selected(&a), Some("c"));
+        send(&mut a, key(KeyCode::Char('h')));
+        send(&mut a, key(KeyCode::Home));
+        assert_eq!(selected(&a), Some("a"));
+        send(&mut a, key(KeyCode::End));
+        assert_eq!(selected(&a), Some("b"));
+        send(&mut a, key(KeyCode::PageUp));
+        assert_eq!(selected(&a), Some("a"));
+        send(&mut a, key(KeyCode::PageDown));
+        assert_eq!(selected(&a), Some("b"));
+        send(&mut a, key(KeyCode::Char('k')));
+        assert_eq!(selected(&a), Some("a"));
+    }
+
+    #[test]
+    fn search_narrowing_to_zero_then_widening_reselects_first_cell() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "alpha").priority(0),
+            fixtures::issue("b", "beta").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::Down));
+        assert_eq!(selected(&a), Some("b"));
+        send(&mut a, key(KeyCode::Char('/')));
+        type_str(&mut a, "zzz");
+        assert_eq!(selected(&a), None);
+        assert!(a.grid.columns().is_empty());
+        send(&mut a, key(KeyCode::Backspace));
+        send(&mut a, key(KeyCode::Backspace));
+        send(&mut a, key(KeyCode::Backspace));
+        assert_eq!(selected(&a), Some("a"));
+    }
+
+    #[test]
+    fn typing_in_search_keeps_selection_while_it_matches() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "alpha").priority(0),
+            fixtures::issue("b", "beta").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::Down));
+        send(&mut a, key(KeyCode::Char('/')));
+        type_str(&mut a, "beta");
+        assert_eq!(selected(&a), Some("b"));
+    }
+
+    #[test]
+    fn cycling_grouping_recomputes_columns_and_keeps_the_item() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").role(crate::types::Role::Agent),
+            fixtures::issue("b", "B").role(crate::types::Role::Human),
+        ]);
+        assert_eq!(a.grid.columns().len(), 1);
+        send(&mut a, key(KeyCode::Char('j')));
+        assert_eq!(selected(&a), Some("b"));
+        send(&mut a, key(KeyCode::Char('g'))); // status
+        send(&mut a, key(KeyCode::Char('g'))); // role
+        assert_eq!(a.grid.columns().len(), 2);
+        assert_eq!(selected(&a), Some("b"));
+        assert_eq!(a.grid.selected_column(), Some(1));
+    }
+
+    #[test]
+    fn reload_keeps_selection_by_id_and_handles_removal() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B").priority(1),
+            fixtures::issue("c", "C").priority(2),
+        ]);
+        send(&mut a, key(KeyCode::End));
+        assert_eq!(selected(&a), Some("c"));
+        let snap = fixtures::snapshot_of(vec![
+            fixtures::issue("n", "New").priority(-1),
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B").priority(1),
+            fixtures::issue("c", "C").priority(2),
+        ]);
+        update(&mut a, Action::Reloaded(Box::new(snap)));
+        assert_eq!(selected(&a), Some("c"));
+        let snap = fixtures::snapshot_of(vec![
+            fixtures::issue("n", "New").priority(-1),
+            fixtures::issue("a", "A").priority(0),
+        ]);
+        update(&mut a, Action::Reloaded(Box::new(snap)));
+        assert_eq!(selected(&a), Some("a"));
+    }
+
+    #[test]
+    fn page_size_follows_the_terminal_size() {
+        let issues: Vec<_> = (0..20)
+            .map(|i| fixtures::issue(&format!("i{i:02}"), "x").priority(i))
+            .collect();
+        let mut a = grid_app(issues);
+        // 40 rows: 37 main - 1 title = 36 / 7 = 5 cells per screen.
+        send(&mut a, key(KeyCode::PageDown));
+        assert_eq!(selected(&a), Some("i05"));
+        update(&mut a, Action::Resize(100, 24)); // (21 - 1) / 7 = 2
+        send(&mut a, key(KeyCode::PageDown));
+        assert_eq!(selected(&a), Some("i07"));
+        // The selection is still visible after the shrink.
+        let off = a
+            .grid
+            .row_offset(&crate::tui::model::columns::ColumnKey::NoEpic);
+        assert!((off..off + 2).contains(&7));
+    }
+
+    #[test]
+    fn grid_keys_do_nothing_in_triage_mode() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::Char('m')));
+        send(&mut a, key(KeyCode::Down));
+        assert_eq!(selected(&a), Some("a"));
     }
 
     #[test]
