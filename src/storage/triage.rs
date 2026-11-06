@@ -15,7 +15,8 @@
 //! other `*.md` file dropped into the folder by hand is also an item.
 
 use super::{
-    append_paragraph, new_comment, search_replace_text, serialize_comments, NewIssue, Storage,
+    append_paragraph, new_comment, search_replace_text, serialize_comments, skipped_file, Loaded,
+    NewIssue, Storage,
 };
 use crate::format::issue_to_markdown;
 use crate::paths::{ensure_contained, IssueId};
@@ -226,6 +227,27 @@ impl Storage {
             .into_iter()
             .map(|name| Ok(self.read_triage_item_no_lock(&name)?.0))
             .collect()
+    }
+
+    /// Every triage item that can be read, sorted by name; unreadable files
+    /// (e.g. non-UTF-8) are reported in `skipped` instead of failing.
+    pub fn list_triage_items_tolerant(&self) -> Result<Loaded<TriageItem>> {
+        let _lock = self.lock_for_read()?;
+        let dir = self.triage_dir();
+        let mut items = Vec::new();
+        let mut skipped = Vec::new();
+        for name in self.triage_names_no_lock()? {
+            let path = dir.join(&name);
+            match fs::read_to_string(&path) {
+                Ok(body) => items.push(TriageItem { name, body }),
+                Err(err) => {
+                    let err = anyhow::Error::from(err)
+                        .context(format!("Failed to read triage item {}", path.display()));
+                    skipped.push(skipped_file(path, &err));
+                }
+            }
+        }
+        Ok(Loaded { items, skipped })
     }
 
     /// One triage item.
@@ -487,6 +509,22 @@ mod tests {
         let (_tmp, storage) = storage();
         assert!(storage.add_triage_item(" \n ").is_err());
         assert!(triage_files(&storage).is_empty());
+    }
+
+    #[test]
+    fn tolerant_triage_skips_unreadable_files() {
+        let (_tmp, storage) = storage();
+        let dir = storage.get_tazk_dir().join(TRIAGE_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("b.md"), "bee\n").unwrap();
+        fs::write(dir.join("a.md"), "ay\n").unwrap();
+        fs::write(dir.join("bad.md"), [0xff, 0xfe, 0x00]).unwrap();
+        let loaded = storage.list_triage_items_tolerant().unwrap();
+        let names: Vec<_> = loaded.items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["a.md", "b.md"]);
+        assert_eq!(loaded.skipped.len(), 1);
+        assert_eq!(loaded.skipped[0].path, dir.join("bad.md"));
+        assert!(!loaded.skipped[0].error.contains('\n'));
     }
 
     #[test]

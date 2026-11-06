@@ -23,6 +23,29 @@ enum StorageAccess {
 
 pub mod triage;
 
+/// Items loaded by a tolerant loader, plus the files that could not be loaded.
+#[derive(Debug, Clone)]
+pub struct Loaded<T> {
+    pub items: Vec<T>,
+    pub skipped: Vec<SkippedFile>,
+}
+
+/// A file that failed to read or parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFile {
+    pub path: PathBuf,
+    /// Full error chain on one line.
+    pub error: String,
+}
+
+pub(crate) fn skipped_file(path: PathBuf, err: &anyhow::Error) -> SkippedFile {
+    let error = format!("{err:#}")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    SkippedFile { path, error }
+}
+
 /// Every field of a new issue, for callers (such as `tz triage promote`) that
 /// build one in code rather than through [`Storage::create_issue`]'s argument
 /// list.
@@ -926,6 +949,37 @@ impl Storage {
         }
 
         Ok(issues)
+    }
+
+    /// Load every issue (any status, any layout), skipping files that fail to
+    /// read or parse. `dependents` is populated over the parsed set. Files are
+    /// read under the lock, which is released before parsing.
+    pub fn list_all_issues_tolerant(&self) -> Result<Loaded<Issue>> {
+        let raw: Vec<(String, PathBuf, std::io::Result<String>)> = {
+            let _lock = self.lock_for_read()?;
+            self.issue_file_paths()?
+                .into_iter()
+                .map(|(id, path)| {
+                    let content = fs::read_to_string(&path);
+                    (id, path, content)
+                })
+                .collect()
+        };
+
+        let mut items = Vec::new();
+        let mut skipped = Vec::new();
+        for (id, path, content) in raw {
+            let parsed = content
+                .map_err(anyhow::Error::from)
+                .and_then(|c| markdown_to_issue(&id, &c));
+            match parsed {
+                Ok(issue) => items.push(issue),
+                Err(err) => skipped.push(skipped_file(path, &err)),
+            }
+        }
+        items.sort_by(compare_for_list);
+        Self::populate_dependents(&mut items);
+        Ok(Loaded { items, skipped })
     }
 
     /// Populate dependents for a single issue given all issues
@@ -4228,7 +4282,9 @@ fn closed_issue_ids(issues: &[Issue]) -> HashSet<String> {
         .collect()
 }
 
-fn has_unresolved_dependencies(issue: &Issue, closed_ids: &HashSet<String>) -> bool {
+/// The "open blockers" rule used by `tz ready`: true if any `blocked_by`
+/// target of `issue` is not in `closed_ids` (a missing target is unresolved).
+pub fn has_unresolved_dependencies(issue: &Issue, closed_ids: &HashSet<String>) -> bool {
     if closed_ids.is_empty() {
         issue.has_blocking_dependencies()
     } else {
@@ -4396,5 +4452,122 @@ mod close_reason_tests {
         assert!(issue.notes.starts_with("Closed 20"), "{}", issue.notes);
         assert!(issue.notes.contains("Z: fixed in #42\n\nReopened 20"));
         assert!(issue.notes.ends_with("Z: regressed"));
+    }
+}
+
+#[cfg(test)]
+mod tolerant_loader_tests {
+    use super::*;
+    use crate::types::{DependencyType, IssueType};
+
+    fn setup() -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = Storage::init(
+            tmp.path().join(".tazk"),
+            Some("demo".to_string()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+        (tmp, storage)
+    }
+
+    fn write_issue(storage: &Storage, issue: &Issue) {
+        let path = storage
+            .get_tazk_dir()
+            .join(format!("issues/{}.md", issue.id));
+        fs::write(path, issue_to_markdown(issue).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn skips_bad_files_and_reports_them() {
+        let (_tmp, storage) = setup();
+        let dir = storage.get_tazk_dir().join("issues");
+        write_issue(
+            &storage,
+            &Issue::new("demo-1".into(), "ok".into(), 2, IssueType::Task),
+        );
+
+        fs::write(dir.join("demo-2.md"), "---\ntitle: [unclosed\n---\n").unwrap();
+        let good = issue_to_markdown(&Issue::new("demo-3".into(), "c".into(), 2, IssueType::Task))
+            .unwrap();
+        fs::write(
+            dir.join("demo-3.md"),
+            format!("{good}\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n"),
+        )
+        .unwrap();
+        let bad_effort =
+            issue_to_markdown(&Issue::new("demo-4".into(), "e".into(), 2, IssueType::Task))
+                .unwrap()
+                .replacen("issue_type: task", "issue_type: task\neffort: 99", 1);
+        fs::write(dir.join("demo-4.md"), bad_effort).unwrap();
+
+        let loaded = storage.list_all_issues_tolerant().unwrap();
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.items[0].id, "demo-1");
+        assert_eq!(loaded.skipped.len(), 3);
+        let mut skipped = loaded.skipped.clone();
+        skipped.sort_by(|a, b| a.path.cmp(&b.path));
+        for (s, n) in skipped.iter().zip(["demo-2", "demo-3", "demo-4"]) {
+            assert_eq!(s.path, dir.join(format!("{n}.md")));
+            assert!(
+                !s.error.is_empty() && !s.error.contains('\n'),
+                "{}",
+                s.error
+            );
+        }
+        assert!(
+            skipped[1].error.contains("merge conflict"),
+            "{}",
+            skipped[1].error
+        );
+        assert!(
+            skipped[2].error.to_lowercase().contains("effort"),
+            "{}",
+            skipped[2].error
+        );
+    }
+
+    #[test]
+    fn dependents_cover_all_parsed_issues_including_closed() {
+        let (_tmp, storage) = setup();
+        let parent = Issue::new("demo-1".into(), "p".into(), 2, IssueType::Epic);
+        let mut child = Issue::new("demo-2".into(), "c".into(), 2, IssueType::Task);
+        child
+            .depends_on
+            .insert("demo-1".into(), DependencyType::ChildOf);
+        let mut blocked = Issue::new("demo-3".into(), "b".into(), 2, IssueType::Task);
+        blocked
+            .depends_on
+            .insert("demo-2".into(), DependencyType::BlockedBy);
+        blocked.status = Status::Closed;
+        for i in [&parent, &child, &blocked] {
+            write_issue(&storage, i);
+        }
+
+        let loaded = storage.list_all_issues_tolerant().unwrap();
+        assert!(loaded.skipped.is_empty());
+        assert_eq!(loaded.items.len(), 3);
+        let get = |id: &str| loaded.items.iter().find(|i| i.id == id).unwrap();
+        assert_eq!(get("demo-1").dependents.len(), 1);
+        assert_eq!(get("demo-1").dependents[0].id, "demo-2");
+        assert_eq!(get("demo-2").dependents[0].id, "demo-3");
+        assert_eq!(get("demo-3").status, Status::Closed);
+
+        let closed: HashSet<String> = ["demo-2".to_string()].into();
+        assert!(has_unresolved_dependencies(get("demo-3"), &HashSet::new()));
+        assert!(!has_unresolved_dependencies(get("demo-3"), &closed));
+    }
+
+    #[test]
+    fn works_on_readonly_storage_and_leaves_no_lock_behind() {
+        let (_tmp, storage) = setup();
+        write_issue(
+            &storage,
+            &Issue::new("demo-1".into(), "ok".into(), 2, IssueType::Task),
+        );
+        let ro = Storage::open_readonly(storage.get_tazk_dir()).unwrap();
+        assert_eq!(ro.list_all_issues_tolerant().unwrap().items.len(), 1);
+        assert!(!storage.get_tazk_dir().join("tazk.lock").exists());
     }
 }

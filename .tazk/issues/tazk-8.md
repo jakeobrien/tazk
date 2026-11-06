@@ -1,6 +1,6 @@
 ---
 title: 'Storage: tolerant issue + triage loader returning (items, skipped)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -10,7 +10,8 @@ labels:
 dependencies:
   tazk-1: child_of
 created_at: 2026-11-06T03:28:37.342912003+00:00
-updated_at: 2026-11-06T03:28:37.342912003+00:00
+updated_at: 2026-11-06T14:39:32.692101+00:00
+closed_at: 2026-11-06T14:39:32.692101+00:00
 ---
 
 # Description
