@@ -86,9 +86,9 @@ pub fn resume(terminal: &mut Tui) -> Result<()> {
 }
 
 /// Translate a terminal event into an [`Action`]. `None` for events we ignore.
-pub fn translate(event: Event) -> Option<Action> {
+pub fn translate(event: Event, app: &App) -> Option<Action> {
     match event {
-        Event::Key(key) => keymap::key_action(key),
+        Event::Key(key) => keymap::resolve(&app.contexts, key, app),
         Event::Resize(w, h) => Some(Action::Resize(w, h)),
         Event::FocusGained => Some(Action::FocusGained),
         _ => None,
@@ -114,7 +114,7 @@ fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
 
         let timeout = next_tick.saturating_duration_since(Instant::now());
         if event::poll(timeout)? {
-            if let Some(action) = translate(event::read()?) {
+            if let Some(action) = translate(event::read()?, app) {
                 app::update(app, action);
             }
         }
@@ -138,18 +138,23 @@ fn debug_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::ModeArg;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn events_translate_to_distinct_actions() {
-        assert_eq!(translate(Event::FocusGained), Some(Action::FocusGained));
+        let app = App::with_mode(ModeArg::Issues);
         assert_eq!(
-            translate(Event::Resize(90, 30)),
+            translate(Event::FocusGained, &app),
+            Some(Action::FocusGained)
+        );
+        assert_eq!(
+            translate(Event::Resize(90, 30), &app),
             Some(Action::Resize(90, 30))
         );
         let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
-        assert_eq!(translate(q), Some(Action::Quit));
-        assert_eq!(translate(Event::FocusLost), None);
+        assert_eq!(translate(q, &app), Some(Action::Quit));
+        assert_eq!(translate(Event::FocusLost, &app), None);
         // Tick is produced by the loop timer, not an event; it is distinct.
         assert_ne!(Action::Tick, Action::FocusGained);
         assert_ne!(Action::Tick, Action::Resize(0, 0));

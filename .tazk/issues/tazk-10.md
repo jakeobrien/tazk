@@ -1,6 +1,6 @@
 ---
 title: 'TUI: single keymap definition shared by input dispatch and help'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -11,7 +11,8 @@ dependencies:
   tazk-1: child_of
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.346194503+00:00
-updated_at: 2026-11-06T03:28:37.387657586+00:00
+updated_at: 2026-11-06T15:13:44.502397056+00:00
+closed_at: 2026-11-06T15:13:44.502397056+00:00
 ---
 
 # Description

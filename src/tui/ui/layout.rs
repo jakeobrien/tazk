@@ -16,3 +16,11 @@ pub const MIN_HEIGHT: u16 = BAR_ROWS + MIN_CELL_HEIGHT;
 pub fn too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }
+
+/// Minimum terminal width for the split view (spec §8).
+pub const SPLIT_MIN_WIDTH: u16 = 160;
+
+/// True if a terminal `width` columns wide uses the split view.
+pub fn is_split(width: u16) -> bool {
+    width >= SPLIT_MIN_WIDTH
+}
