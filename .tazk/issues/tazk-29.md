@@ -1,6 +1,6 @@
 ---
 title: 'TUI: triage helpers — filename timestamp and cell preview text (pure)'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -11,7 +11,8 @@ dependencies:
   tazk-4: child_of
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.372286170+00:00
-updated_at: 2026-11-06T03:28:37.472690586+00:00
+updated_at: 2026-11-06T21:44:00.905925056+00:00
+closed_at: 2026-11-06T21:44:00.905925056+00:00
 ---
 
 # Description
