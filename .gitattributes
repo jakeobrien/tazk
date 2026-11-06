@@ -1,0 +1,2 @@
+**/.tazk/issues/**/*.md merge=tz
+**/.tazk/comments/*.json merge=tz
