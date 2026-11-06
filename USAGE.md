@@ -257,11 +257,9 @@ issues that have unresolved `blocked_by` dependencies; it does not depend on the
 | `feature` | New functionality. |
 | `task` | General work item (default). |
 | `epic` | Large body of work grouping other issues. |
+| `gate` | Gate / checkpoint issue. |
 | `chore` | Maintenance work. |
-
-The following types are also accepted, mainly for agent and workflow
-orchestration: `agent`, `role`, `rig`, `convoy`, `slot`, `queue`, `event`,
-`message`, `molecule`, `gate`, `merge-request`, `workflow`, `patrol`.
+| `spec` | Specification or design document. |
 
 ### Dependency types
 

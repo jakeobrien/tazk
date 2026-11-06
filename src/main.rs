@@ -159,7 +159,7 @@ enum Commands {
         #[arg(short, long, default_value = "2")]
         priority: i32,
 
-        /// Issue type: bug, feature, task, epic, chore
+        /// Issue type: bug, feature, task, epic, gate, chore, spec
         #[arg(
             short = 't',
             long = "issue-type",
@@ -258,7 +258,7 @@ enum Commands {
         #[arg(short = 'p', long)]
         priority: Vec<String>,
 
-        /// Filter by type: bug, feature, task, epic, chore
+        /// Filter by type: bug, feature, task, epic, gate, chore, spec
         #[arg(long)]
         r#type: Option<IssueType>,
 
@@ -604,7 +604,7 @@ enum Commands {
         #[arg(long)]
         priority: Option<i32>,
 
-        /// Filter by type: bug, feature, task, epic, chore
+        /// Filter by type: bug, feature, task, epic, gate, chore, spec
         #[arg(long)]
         r#type: Option<IssueType>,
 
@@ -646,7 +646,7 @@ enum Commands {
         #[arg(short = 'p', long)]
         priority: Vec<String>,
 
-        /// Filter by type: bug, feature, task, epic, chore
+        /// Filter by type: bug, feature, task, epic, gate, chore, spec
         #[arg(long)]
         r#type: Option<IssueType>,
 
@@ -1015,7 +1015,7 @@ enum TriageCommands {
         #[arg(short, long, default_value = "2")]
         priority: i32,
 
-        /// Issue type: bug, feature, task, epic, chore
+        /// Issue type: bug, feature, task, epic, gate, chore, spec
         #[arg(
             short = 't',
             long = "issue-type",

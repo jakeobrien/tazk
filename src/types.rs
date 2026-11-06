@@ -59,20 +59,8 @@ pub enum IssueType {
     Task,
     Epic,
     Chore,
-    Agent,
-    Role,
-    Rig,
-    Convoy,
-    Slot,
-    Queue,
-    Event,
-    Message,
-    Molecule,
     Gate,
-    #[serde(rename = "merge-request")]
-    MergeRequest,
-    Workflow,
-    Patrol,
+    Spec,
 }
 
 impl IssueType {
@@ -84,19 +72,8 @@ impl IssueType {
             IssueType::Task => "task",
             IssueType::Epic => "epic",
             IssueType::Chore => "chore",
-            IssueType::Agent => "agent",
-            IssueType::Role => "role",
-            IssueType::Rig => "rig",
-            IssueType::Convoy => "convoy",
-            IssueType::Slot => "slot",
-            IssueType::Queue => "queue",
-            IssueType::Event => "event",
-            IssueType::Message => "message",
-            IssueType::Molecule => "molecule",
             IssueType::Gate => "gate",
-            IssueType::MergeRequest => "merge-request",
-            IssueType::Workflow => "workflow",
-            IssueType::Patrol => "patrol",
+            IssueType::Spec => "spec",
         }
     }
 }
@@ -117,21 +94,10 @@ impl std::str::FromStr for IssueType {
             "task" => Ok(IssueType::Task),
             "epic" => Ok(IssueType::Epic),
             "chore" => Ok(IssueType::Chore),
-            "agent" => Ok(IssueType::Agent),
-            "role" => Ok(IssueType::Role),
-            "rig" => Ok(IssueType::Rig),
-            "convoy" => Ok(IssueType::Convoy),
-            "slot" => Ok(IssueType::Slot),
-            "queue" => Ok(IssueType::Queue),
-            "event" => Ok(IssueType::Event),
-            "message" => Ok(IssueType::Message),
-            "molecule" => Ok(IssueType::Molecule),
             "gate" => Ok(IssueType::Gate),
-            "merge-request" => Ok(IssueType::MergeRequest),
-            "workflow" => Ok(IssueType::Workflow),
-            "patrol" => Ok(IssueType::Patrol),
+            "spec" => Ok(IssueType::Spec),
             _ => Err(anyhow::anyhow!(
-                "Invalid issue type: '{}'. Valid values are: bug, feature, task, epic, chore, agent, role, rig, convoy, slot, queue, event, message, molecule, gate, merge-request, workflow, patrol",
+                "Invalid issue type: '{}'. Valid values are: bug, feature, task, epic, gate, chore, spec",
                 s
             )),
         }

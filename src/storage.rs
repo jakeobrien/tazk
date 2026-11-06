@@ -3197,12 +3197,12 @@ mod create_integrity_tests {
 
         let original = storage
             .create_issue(
-                "Existing epic".to_string(),
+                "Existing spec".to_string(),
                 "Keep this issue unchanged.".to_string(),
                 None,
                 None,
                 0,
-                IssueType::Epic,
+                IssueType::Spec,
                 None,
                 Vec::new(),
                 None,

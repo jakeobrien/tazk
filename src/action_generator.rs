@@ -259,11 +259,13 @@ impl ActionGenerator {
     fn generate_create(&mut self) -> TazkAction {
         let title = format!("Issue {}", self.rng.gen_range(1000..9999));
         let priority = self.rng.gen_range(0..5);
-        let issue_type = match self.rng.gen_range(0..5) {
+        let issue_type = match self.rng.gen_range(0..7) {
             0 => IssueType::Bug,
             1 => IssueType::Feature,
             2 => IssueType::Task,
             3 => IssueType::Epic,
+            4 => IssueType::Gate,
+            5 => IssueType::Spec,
             _ => IssueType::Chore,
         };
 
