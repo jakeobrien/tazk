@@ -1,6 +1,6 @@
 ---
 title: 'TUI: filter and search model (pure)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -11,7 +11,8 @@ dependencies:
   tazk-2: child_of
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.352120378+00:00
-updated_at: 2026-11-06T06:09:23.317955588+00:00
+updated_at: 2026-11-06T16:43:24.884134563+00:00
+closed_at: 2026-11-06T16:43:24.884134563+00:00
 ---
 
 # Description
