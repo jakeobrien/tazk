@@ -1,0 +1,7 @@
+---
+source: src/tui/ui/bars.rs
+expression: "bars(&app, 100)"
+---
+ Issues (4) │ Triage (3)                                                                group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                     3 of 4
+ ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit

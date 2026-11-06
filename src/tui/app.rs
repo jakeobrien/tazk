@@ -3,8 +3,15 @@
 
 use super::data::Snapshot;
 use super::keymap::Context;
+use super::model::filter::{visible_issues, Filters};
+use super::model::search::visible_triage;
 use super::ui::layout::LayoutMode;
 use super::{GroupByArg, ModeArg, TuiArgs};
+use std::time::{Duration, Instant};
+
+/// How long a transient status message stays in the hint bar if no key is
+/// pressed (spec §13; cleared earlier by the next key press).
+pub const STATUS_TTL: Duration = Duration::from_secs(4);
 
 /// Direction for selection / list movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +154,8 @@ pub struct App {
     pub snapshot: Snapshot,
     pub mode: ModeArg,
     pub grouping: GroupByArg,
+    /// Issues-mode filters (spec §6).
+    pub filters: Filters,
     /// Search query per mode (spec §7: each mode keeps its own).
     pub search: PerMode<String>,
     /// True while typing in the search input.
@@ -157,6 +166,8 @@ pub struct App {
     pub overlay: Overlay,
     /// Transient message for the hint bar; `None` when there is nothing to show.
     pub status: Option<String>,
+    /// When `status` was set, for expiry ([`App::expire_status`]).
+    pub status_since: Option<Instant>,
     /// Selected item per mode: issue ID / triage filename. Placeholder until
     /// the navigation issue gives it real behavior.
     pub selection: PerMode<Option<String>>,
@@ -194,12 +205,14 @@ impl App {
             snapshot,
             mode,
             grouping: GroupByArg::Epic,
+            filters: Filters::default(),
             search: PerMode::default(),
             search_active: false,
             focus: Focus::Grid,
             full_screen_detail: false,
             overlay: Overlay::None,
             status: None,
+            status_since: None,
             selection: PerMode::default(),
             contexts: vec![Context::Grid],
             should_quit: false,
@@ -235,10 +248,50 @@ impl App {
     /// Show a transient status message.
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some(message.into());
+        self.status_since = Some(Instant::now());
     }
 
     pub fn clear_status(&mut self) {
         self.status = None;
+        self.status_since = None;
+    }
+
+    /// Clear the status message once it is older than [`STATUS_TTL`] at `now`.
+    pub fn expire_status(&mut self, now: Instant) {
+        if let Some(since) = self.status_since {
+            if now.saturating_duration_since(since) >= STATUS_TTL {
+                self.clear_status();
+            }
+        }
+    }
+
+    /// When the current status message expires (for the event loop's poll
+    /// timeout); `None` if there is none.
+    pub fn status_deadline(&self) -> Option<Instant> {
+        self.status.as_ref()?;
+        self.status_since.map(|t| t + STATUS_TTL)
+    }
+
+    /// `(shown, total)` for the filter bar's `X of Y` (spec §4).
+    ///
+    /// - Issues: `shown` is the number of issues passing the filters and the
+    ///   search; `total` is every loaded issue, closed ones included. Each
+    ///   issue counts once, so an epic that passes is counted once even though
+    ///   epic grouping draws it both as a header and (if nested) a cell. An
+    ///   epic that only appears as a dimmed header (it fails the filters or
+    ///   search) is not counted, since it is not a matching issue.
+    /// - Triage: items matching the search vs all items.
+    pub fn counts(&self) -> (usize, usize) {
+        match self.mode {
+            ModeArg::Issues => (
+                visible_issues(&self.snapshot, &self.filters, self.query()).len(),
+                self.snapshot.issues.len(),
+            ),
+            ModeArg::Triage => (
+                visible_triage(&self.snapshot, self.query()).len(),
+                self.snapshot.triage.len(),
+            ),
+        }
     }
 
     /// Returns and clears the pending reload request.

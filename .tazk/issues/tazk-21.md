@@ -1,6 +1,6 @@
 ---
 title: 'TUI: mode bar, filter bar (incl. search input) and hint bar'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -14,7 +14,8 @@ dependencies:
   tazk-14: blocked_by
   tazk-2: child_of
 created_at: 2026-11-06T03:28:37.362487753+00:00
-updated_at: 2026-11-06T03:28:37.434008878+00:00
+updated_at: 2026-11-06T17:04:58.691400669+00:00
+closed_at: 2026-11-06T17:04:58.691400669+00:00
 ---
 
 # Description

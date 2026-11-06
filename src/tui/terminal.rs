@@ -6,7 +6,7 @@
 use super::app::{self, Action, App};
 use super::{keymap, ui};
 use anyhow::Result;
-use crossterm::event::{self, DisableFocusChange, EnableFocusChange, Event};
+use crossterm::event::{self, DisableFocusChange, EnableFocusChange, Event, KeyEventKind};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -95,6 +95,19 @@ pub fn translate(event: Event, app: &App) -> Option<Action> {
     }
 }
 
+/// Handle one terminal event: a key press first clears any transient status
+/// message (even if the key does nothing), then the event is translated and
+/// applied. Anything the action sets afterwards (e.g. a clipboard error)
+/// survives.
+pub fn handle_event(app: &mut App, event: Event) {
+    if matches!(&event, Event::Key(k) if k.kind != KeyEventKind::Release) {
+        app.clear_status();
+    }
+    if let Some(action) = translate(event, app) {
+        app::update(app, action);
+    }
+}
+
 /// Set up the terminal, run the event loop until quit, and restore the terminal.
 pub fn run(mut app: App) -> Result<()> {
     install_panic_hook();
@@ -112,12 +125,15 @@ fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
         terminal.draw(|f| ui::draw(f, app))?;
         debug_panic_hook();
 
-        let timeout = next_tick.saturating_duration_since(Instant::now());
+        // Wake up for the next tick or to expire the status message.
+        let wake = app
+            .status_deadline()
+            .map_or(next_tick, |d| d.min(next_tick));
+        let timeout = wake.saturating_duration_since(Instant::now());
         if event::poll(timeout)? {
-            if let Some(action) = translate(event::read()?, app) {
-                app::update(app, action);
-            }
+            handle_event(app, event::read()?);
         }
+        app.expire_status(Instant::now());
         if Instant::now() >= next_tick {
             app::update(app, Action::Tick);
             next_tick = Instant::now() + TICK_INTERVAL;
@@ -158,6 +174,19 @@ mod tests {
         // Tick is produced by the loop timer, not an event; it is distinct.
         assert_ne!(Action::Tick, Action::FocusGained);
         assert_ne!(Action::Tick, Action::Resize(0, 0));
+    }
+
+    #[test]
+    fn key_press_clears_status_but_other_events_do_not() {
+        let mut app = App::with_mode(ModeArg::Issues);
+        app.set_status("clipboard unavailable");
+        handle_event(&mut app, Event::Resize(80, 24));
+        handle_event(&mut app, Event::FocusGained);
+        assert!(app.status.is_some());
+        // A key that maps to nothing still clears it.
+        let k = Event::Key(KeyEvent::new(KeyCode::Char('~'), KeyModifiers::NONE));
+        handle_event(&mut app, k);
+        assert_eq!(app.status, None);
     }
 
     #[test]

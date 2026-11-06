@@ -1,6 +1,6 @@
 //! Split-pane vs full-screen layout decisions.
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 
 /// Width of one grid column (spec §4).
 pub const MIN_COLUMN_WIDTH: u16 = 32;
@@ -15,6 +15,34 @@ pub const MIN_HEIGHT: u16 = BAR_ROWS + MIN_CELL_HEIGHT;
 /// True if `area` can't fit one column plus the bars and one cell.
 pub fn too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
+}
+
+/// The screen split into the three bars and the main area (spec §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Areas {
+    pub mode_bar: Rect,
+    pub filter_bar: Rect,
+    /// Grid, grid + detail, or full-screen detail.
+    pub main: Rect,
+    pub hint_bar: Rect,
+}
+
+/// Split `area`: mode bar on top, then the filter bar, the main area, and the
+/// hint bar at the bottom.
+pub fn areas(area: Rect) -> Areas {
+    let [mode_bar, filter_bar, main, hint_bar] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    Areas {
+        mode_bar,
+        filter_bar,
+        main,
+        hint_bar,
+    }
 }
 
 /// Minimum terminal width for the split view (spec §8).

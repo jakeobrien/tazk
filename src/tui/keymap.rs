@@ -272,6 +272,106 @@ pub fn bindings_for(context: Context) -> &'static [Binding] {
     }
 }
 
+/// One entry of the hint bar: key text and a short label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hint {
+    pub keys: String,
+    pub label: &'static str,
+}
+
+/// The hint bar entries for the app's innermost context, most important first.
+///
+/// The key text always comes from the keymap tables (the first key of each
+/// binding's display, several joined with `/`); the curated lists below only
+/// choose *which* actions to hint, in what order and with which short label.
+/// Actions whose binding is not active ([`When`]) are left out, so e.g. filter
+/// keys are absent in triage mode. A context's own bindings are looked up
+/// before [`GLOBAL`].
+pub fn hints(app: &App) -> Vec<Hint> {
+    let ctx = app.context();
+    let tables: Vec<&[Binding]> = if ctx.inherits_global() {
+        vec![bindings_for(ctx), GLOBAL]
+    } else {
+        vec![bindings_for(ctx)]
+    };
+    let keys_of = |action: &Action| -> Option<String> {
+        let b = tables
+            .iter()
+            .flat_map(|t| t.iter())
+            .find(|b| b.when.holds(app) && matches!(&b.act, Act::Fixed(a) if a == action))?;
+        Some(
+            b.display
+                .split(", ")
+                .next()
+                .unwrap_or(b.display)
+                .to_string(),
+        )
+    };
+    let hint = |actions: &[Action], label: &'static str| -> Option<Hint> {
+        let keys: Vec<String> = actions.iter().filter_map(&keys_of).collect();
+        // Show a group only if every action is available.
+        (keys.len() == actions.len() && !keys.is_empty()).then(|| Hint {
+            keys: keys.join("/"),
+            label,
+        })
+    };
+    let pickers = [
+        FilterKind::Role,
+        FilterKind::Status,
+        FilterKind::Type,
+        FilterKind::Priority,
+        FilterKind::Effort,
+    ]
+    .map(Action::OpenPicker);
+
+    let entries: Vec<Option<Hint>> = match ctx {
+        Context::Grid => vec![
+            hint(&[Action::OpenHelp], "help"),
+            hint(&[Action::OpenDetail], "open"),
+            hint(&[Action::StartSearch], "search"),
+            if app.query().is_empty() {
+                None
+            } else {
+                hint(&[Action::ClearSearchFromGrid], "clear search")
+            },
+            hint(&[Action::CycleGrouping], "group"),
+            hint(&pickers, "filter"),
+            hint(&[Action::ResetFilters], "reset"),
+            hint(&[Action::CycleMode], "mode"),
+            hint(&[Action::Quit], "quit"),
+            hint(&[Action::CopyId], "copy"),
+            hint(&[Action::OpenEditor], "edit"),
+        ],
+        Context::Detail => vec![
+            hint(&[Action::OpenHelp], "help"),
+            hint(&[Action::DetailLineUp, Action::DetailLineDown], "scroll"),
+            hint(&[Action::NextLink, Action::PrevLink], "links"),
+            hint(&[Action::FollowLink], "follow"),
+            hint(&[Action::DetailBack], "back"),
+            hint(&[Action::Quit], "quit"),
+            hint(&[Action::CopyId], "copy"),
+            hint(&[Action::OpenEditor], "edit"),
+        ],
+        Context::SearchInput => vec![
+            hint(&[Action::SearchKeep], "keep"),
+            hint(&[Action::SearchCancel], "cancel"),
+            hint(&[Action::SearchClear], "clear"),
+        ],
+        Context::Picker => vec![
+            hint(
+                &[Action::PickerMove(Dir::Up), Action::PickerMove(Dir::Down)],
+                "move",
+            ),
+            hint(&[Action::PickerToggle], "toggle"),
+            hint(&[Action::PickerAll, Action::PickerNone], "all/none"),
+            hint(&[Action::PickerApply], "apply"),
+            hint(&[Action::PickerCancel], "cancel"),
+        ],
+        Context::Help => vec![hint(&[Action::CloseHelp], "close")],
+    };
+    entries.into_iter().flatten().collect()
+}
+
 /// Map a key event to an [`Action`] for the innermost context in `stack`.
 ///
 /// - Key releases are ignored (Windows reports them).

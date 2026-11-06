@@ -19,12 +19,17 @@ use ratatui::Frame;
 pub const TOO_SMALL_MESSAGE: &str = "Terminal too small";
 
 /// Draw the whole UI.
-pub fn draw(frame: &mut Frame, _app: &App) {
+pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     if layout::too_small(area) {
         draw_too_small(frame, area);
+        return;
     }
-    // Real content is added by the later grid/bars issues.
+    let areas = layout::areas(area);
+    bars::draw_mode_bar(frame, areas.mode_bar, app);
+    bars::draw_filter_bar(frame, areas.filter_bar, app);
+    bars::draw_hint_bar(frame, areas.hint_bar, app);
+    // The main area is drawn by the later grid/detail issues.
 }
 
 /// Only a centered message; nothing else is drawn.

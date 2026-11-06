@@ -2,4 +2,13 @@
 source: src/tui/testing.rs
 expression: "render_app(&app, 40, 10)"
 ---
+ Issues (0) │ Triage (0)    group: epic
+ role:all  status:!closed  type: 0 of 0
 
+
+
+
+
+
+
+ ? help  Enter open  / search  g group
