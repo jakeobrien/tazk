@@ -706,7 +706,7 @@ enum Commands {
         #[arg(long = "tz-patch-code")]
         tz_patch_code: bool,
 
-        /// Don't update config-tazk.yaml
+        /// Don't update config.yaml
         #[arg(long = "no-change-config")]
         no_change_config: bool,
 
@@ -3291,7 +3291,7 @@ fn run() -> Result<()> {
                             changes.len() / 3
                         );
                         if update_config {
-                            println!("Updated config-tazk.yaml: tz-hash-ids: true");
+                            println!("Updated config.yaml: tz-hash-ids: true");
                         }
 
                         // Patch code references if requested
@@ -3324,7 +3324,7 @@ fn run() -> Result<()> {
                             issue_count
                         );
                         if update_config {
-                            println!("Updated config-tazk.yaml: tz-hash-ids: false");
+                            println!("Updated config.yaml: tz-hash-ids: false");
                         }
 
                         // Patch code references if requested
@@ -3373,7 +3373,7 @@ fn run() -> Result<()> {
                         }
                         if update_config {
                             println!(
-                                "Updated config-tazk.yaml: issue-storage-layout: {}",
+                                "Updated config.yaml: issue-storage-layout: {}",
                                 target_layout.as_str()
                             );
                         }
@@ -3465,7 +3465,7 @@ fn log_command(tazk_dir: &Path, args: &[String]) -> Result<()> {
         .open(&log_path)
         .context("Failed to open command history log")?;
 
-    writeln!(file, "<<BD_INVOKE>> {} {}", timestamp, command_line)
+    writeln!(file, "{} {}", timestamp, command_line)
         .context("Failed to write to command history log")?;
 
     Ok(())

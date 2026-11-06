@@ -331,12 +331,9 @@ impl Storage {
                 .context("Failed to parse config.yaml")?;
         }
 
-        // Ensure config-tazk.yaml exists with defaults (don't clobber if exists)
-        let tazk_config_path = tazk_dir.join("config-tazk.yaml");
-        if !tazk_config_path.exists() {
-            create_tazk_config(&tazk_dir, false, IssueStorageLayout::Flat)?;
-            // Default to false/flat for existing repos
-        }
+        // Fold a legacy config-tazk.yaml (from before the two files were merged)
+        // into config.yaml. Options absent from config.yaml use their defaults.
+        merge_legacy_tazk_config(&tazk_dir)?;
 
         // Ensure .gitignore exists and has required entries
         ensure_gitignore(&tazk_dir)?;
@@ -363,6 +360,10 @@ impl Storage {
             issues_dir,
             access: StorageAccess::ReadOnly,
         };
+        anyhow::ensure!(
+            !storage.tazk_dir.join(LEGACY_TAZK_CONFIG).exists(),
+            "{LEGACY_TAZK_CONFIG} is obsolete; run any command without --readonly to merge it into config.yaml"
+        );
         let _lock = storage.lock_for_read()?;
         storage.list_config_values()?;
         storage.issue_storage_layout()?;
@@ -418,15 +419,8 @@ impl Storage {
             .unwrap_or_else(|| "tz".to_string());
 
         IssueId::parse(&prefix)?;
-        // Create config.yaml with the issue prefix
-        let config_path = tazk_dir.join("config.yaml");
-        let mut config = HashMap::new();
-        config.insert("issue-prefix".to_string(), prefix);
-        let config_yaml = serde_yaml::to_string(&config)?;
-        fs::write(&config_path, config_yaml).context("Failed to write config.yaml")?;
-
-        // Create config-tazk.yaml with tazk-specific options
-        create_tazk_config(&tazk_dir, tz_hash_ids, issue_layout)?;
+        // Create config.yaml with the issue prefix and tazk options
+        write_initial_config(&tazk_dir, &prefix, tz_hash_ids, issue_layout)?;
 
         // Ensure .gitignore exists and has required entries
         ensure_gitignore(&tazk_dir)?;
@@ -462,9 +456,8 @@ impl Storage {
         }
     }
 
-    /// Get a compatibility config value from config.yaml.
+    /// Get a config value from config.yaml.
     pub fn get_config_value(&self, key: &str) -> Result<Option<String>> {
-        let key = normalize_config_key(key);
         let config_path = self.config_path();
 
         if !config_path.exists() {
@@ -475,13 +468,12 @@ impl Storage {
         let config: HashMap<String, serde_yaml::Value> =
             serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
 
-        Ok(config.get(&key).map(yaml_value_to_string))
+        Ok(config.get(key).map(yaml_value_to_string))
     }
 
-    /// Set a compatibility config value in config.yaml.
+    /// Set a config value in config.yaml.
     pub fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
         let _lock = self.lock_for_write()?;
-        let key = normalize_config_key(key);
         if key == "issue-prefix" {
             IssueId::parse(value)?;
         }
@@ -491,7 +483,7 @@ impl Storage {
             fs::write(&config_path, "").context("Failed to create config.yaml")?;
         }
 
-        upsert_yaml_key_value(&config_path, &key, value)
+        upsert_yaml_key_value(&config_path, key, value)
     }
 
     /// Return all config.yaml scalar values for `tz config list`.
@@ -512,18 +504,21 @@ impl Storage {
             .collect())
     }
 
-    /// Check if hash-based IDs are enabled in config-tazk.yaml
-    fn use_hash_ids(&self) -> Result<bool> {
-        let config_path = self.tazk_dir.join("config-tazk.yaml");
+    /// Read config.yaml as string key/value pairs (empty if the file is missing).
+    fn read_config_map(&self) -> Result<HashMap<String, String>> {
+        let config_path = self.config_path();
 
         if !config_path.exists() {
-            return Ok(false); // Default to false if no config
+            return Ok(HashMap::new());
         }
 
-        let content =
-            fs::read_to_string(&config_path).context("Failed to read config-tazk.yaml")?;
-        let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config-tazk.yaml")?;
+        let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
+        serde_yaml::from_str(&content).context("Failed to parse config.yaml")
+    }
+
+    /// Check if hash-based IDs are enabled in config.yaml
+    fn use_hash_ids(&self) -> Result<bool> {
+        let config = self.read_config_map()?;
 
         // Parse tz-hash-ids field (default to false if not present)
         match config.get("tz-hash-ids") {
@@ -534,16 +529,7 @@ impl Storage {
 
     /// Return the configured issue file layout.
     pub fn issue_storage_layout(&self) -> Result<IssueStorageLayout> {
-        let config_path = self.tazk_dir.join("config-tazk.yaml");
-
-        if !config_path.exists() {
-            return Ok(IssueStorageLayout::Flat);
-        }
-
-        let content =
-            fs::read_to_string(&config_path).context("Failed to read config-tazk.yaml")?;
-        let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config-tazk.yaml")?;
+        let config = self.read_config_map()?;
 
         match config.get("issue-storage-layout") {
             Some(value) => IssueStorageLayout::parse(value),
@@ -651,18 +637,9 @@ impl Storage {
         issue_file_paths_in(&self.issues_dir)
     }
 
-    /// Get hash encoding format from config-tazk.yaml
+    /// Get hash encoding format from config.yaml
     fn get_hash_encoding(&self) -> Result<hash::HashEncoding> {
-        let config_path = self.tazk_dir.join("config-tazk.yaml");
-
-        if !config_path.exists() {
-            return Ok(hash::HashEncoding::Base36); // Default to base36 if no config
-        }
-
-        let content =
-            fs::read_to_string(&config_path).context("Failed to read config-tazk.yaml")?;
-        let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config-tazk.yaml")?;
+        let config = self.read_config_map()?;
 
         // Parse hash-encoding field (default to base36 if not present)
         match config.get("hash-encoding") {
@@ -671,7 +648,7 @@ impl Storage {
                 "base36" => Ok(hash::HashEncoding::Base36),
                 _ => {
                     eprintln!(
-                        "Warning: Unknown hash-encoding value '{}' in config-tazk.yaml, using base36",
+                        "Warning: Unknown hash-encoding value '{}' in config.yaml, using base36",
                         value
                     );
                     Ok(hash::HashEncoding::Base36)
@@ -1663,13 +1640,6 @@ pub(crate) fn append_paragraph(text: &str, addition: &str) -> String {
     }
 }
 
-fn normalize_config_key(key: &str) -> String {
-    match key {
-        "issue_prefix" => "issue-prefix".to_string(),
-        other => other.to_string(),
-    }
-}
-
 fn yaml_value_to_string(value: &serde_yaml::Value) -> String {
     match value {
         serde_yaml::Value::String(s) => s.clone(),
@@ -2331,7 +2301,7 @@ impl Storage {
         let mut changes = Vec::new();
         if update_config && current_layout != target_layout {
             changes.push(format!(
-                "Update config-tazk.yaml: issue-storage-layout: {} -> {}",
+                "Update config.yaml: issue-storage-layout: {} -> {}",
                 current_layout.as_str(),
                 target_layout.as_str()
             ));
@@ -2375,7 +2345,7 @@ impl Storage {
         }
         if update_config {
             transaction.config(
-                "config-tazk.yaml",
+                "config.yaml",
                 "issue-storage-layout",
                 target_layout.as_str(),
             )?;
@@ -2430,7 +2400,7 @@ impl Storage {
     /// - Renames all issue files from prefix-N to prefix-hash
     /// - Updates all dependency references
     /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
-    /// - Updates config-tazk.yaml to set tz-hash-ids: true (unless update_config is false)
+    /// - Updates config.yaml to set tz-hash-ids: true (unless update_config is false)
     /// - Is atomic (all updates succeed or none)
     pub fn migrate_to_hash_ids(
         &self,
@@ -2442,7 +2412,7 @@ impl Storage {
         // Check if already using hash IDs
         if self.use_hash_ids()? {
             anyhow::bail!(
-                "Database is already using hash-based IDs (tz-hash-ids: true in config-tazk.yaml)"
+                "Database is already using hash-based IDs (tz-hash-ids: true in config.yaml)"
             );
         }
 
@@ -2488,7 +2458,7 @@ impl Storage {
         // Track all changes for dry-run mode
         let mut changes = Vec::new();
         if update_config {
-            changes.push("Update config-tazk.yaml: tz-hash-ids: false -> true".to_string());
+            changes.push("Update config.yaml: tz-hash-ids: false -> true".to_string());
         }
 
         // Plan all file renames and content updates
@@ -2520,7 +2490,7 @@ impl Storage {
         }
 
         let configs = if update_config {
-            vec![("config-tazk.yaml", "tz-hash-ids", "true")]
+            vec![("config.yaml", "tz-hash-ids", "true")]
         } else {
             Vec::new()
         };
@@ -2537,7 +2507,7 @@ impl Storage {
     /// - Assigns sequential numbers starting from MAX_ID+1
     /// - Updates all dependency references
     /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
-    /// - Updates config-tazk.yaml to set tz-hash-ids: false (unless update_config is false)
+    /// - Updates config.yaml to set tz-hash-ids: false (unless update_config is false)
     /// - Is atomic (all updates succeed or none)
     pub fn migrate_to_numeric_ids(
         &self,
@@ -2632,7 +2602,7 @@ impl Storage {
         // Track all changes for dry-run mode
         let mut changes = Vec::new();
         if update_config {
-            changes.push("Update config-tazk.yaml: tz-hash-ids: true -> false".to_string());
+            changes.push("Update config.yaml: tz-hash-ids: true -> false".to_string());
         }
 
         // Plan all file renames and content updates
@@ -2664,7 +2634,7 @@ impl Storage {
         }
 
         let configs = if update_config {
-            vec![("config-tazk.yaml", "tz-hash-ids", "false")]
+            vec![("config.yaml", "tz-hash-ids", "false")]
         } else {
             Vec::new()
         };
@@ -2919,25 +2889,33 @@ fn infer_prefix(tazk_dir: &Path) -> Option<String> {
     Some(prefix)
 }
 
-/// Create config-tazk.yaml with tazk-specific options
-fn create_tazk_config(
+/// Legacy file that used to hold the tazk options before they moved into config.yaml.
+const LEGACY_TAZK_CONFIG: &str = "config-tazk.yaml";
+
+/// Write a fresh config.yaml: the issue prefix plus the documented tazk options.
+fn write_initial_config(
     tazk_dir: &Path,
+    prefix: &str,
     tz_hash_ids: bool,
     issue_layout: IssueStorageLayout,
 ) -> Result<()> {
     use std::io::Write;
 
-    let config_path = tazk_dir.join("config-tazk.yaml");
+    let config_path = tazk_dir.join("config.yaml");
+    let mut file = fs::File::create(&config_path).context("Failed to write config.yaml")?;
 
-    // Don't clobber existing config
-    if config_path.exists() {
-        return Ok(());
-    }
+    writeln!(file, "# Tazk configuration")?;
+    writeln!(file)?;
 
-    let mut file = fs::File::create(&config_path).context("Failed to create config-tazk.yaml")?;
-
-    // Write header with commented explanation
-    writeln!(file, "# Tazk-specific configuration options")?;
+    writeln!(
+        file,
+        "# Prefix for issue IDs (e.g. prefix-1 or prefix-a1b2c3)"
+    )?;
+    writeln!(
+        file,
+        "issue-prefix: {}",
+        serde_yaml::to_string(prefix)?.trim()
+    )?;
     writeln!(file)?;
 
     writeln!(
@@ -2989,6 +2967,37 @@ fn create_tazk_config(
     writeln!(file, "issue-storage-layout: {}", issue_layout.as_str())?;
 
     Ok(())
+}
+
+/// Fold a legacy `config-tazk.yaml` into `config.yaml` and delete it.
+/// Keys already present in config.yaml are kept.
+fn merge_legacy_tazk_config(tazk_dir: &Path) -> Result<()> {
+    let legacy_path = tazk_dir.join(LEGACY_TAZK_CONFIG);
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+    let config_path = tazk_dir.join("config.yaml");
+
+    let legacy: HashMap<String, String> = serde_yaml::from_str(
+        &fs::read_to_string(&legacy_path)
+            .with_context(|| format!("Failed to read {LEGACY_TAZK_CONFIG}"))?,
+    )
+    .with_context(|| format!("Failed to parse {LEGACY_TAZK_CONFIG}"))?;
+    let current: HashMap<String, String> = serde_yaml::from_str(
+        &fs::read_to_string(&config_path).context("Failed to read config.yaml")?,
+    )
+    .context("Failed to parse config.yaml")?;
+
+    let mut missing: Vec<_> = legacy
+        .iter()
+        .filter(|(key, _)| !current.contains_key(*key))
+        .collect();
+    missing.sort();
+    for (key, value) in missing {
+        upsert_yaml_key_value(&config_path, key, value)?;
+    }
+
+    fs::remove_file(&legacy_path).with_context(|| format!("Failed to remove {LEGACY_TAZK_CONFIG}"))
 }
 
 /// Ensure .gitignore exists and contains required entries
@@ -3335,6 +3344,64 @@ mod ready_tests {
 #[cfg(test)]
 mod config_tests {
     use super::*;
+
+    #[test]
+    fn init_writes_all_options_to_config_yaml_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tazk_dir = tmp.path().join(".tazk");
+        let storage = Storage::init(
+            tazk_dir.clone(),
+            Some("acme".into()),
+            true,
+            IssueStorageLayout::Sharded,
+        )
+        .unwrap();
+
+        assert!(!tazk_dir.join("config-tazk.yaml").exists());
+        assert_eq!(storage.get_prefix().unwrap(), "acme");
+        assert!(storage.use_hash_ids().unwrap());
+        assert_eq!(
+            storage.issue_storage_layout().unwrap(),
+            IssueStorageLayout::Sharded
+        );
+        assert_eq!(
+            storage
+                .get_config_value("hash-encoding")
+                .unwrap()
+                .as_deref(),
+            Some("base36")
+        );
+    }
+
+    #[test]
+    fn open_merges_legacy_tazk_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tazk_dir = tmp.path().join(".tazk");
+        fs::create_dir_all(tazk_dir.join("issues")).unwrap();
+        fs::write(tazk_dir.join("config.yaml"), "issue-prefix: acme\n").unwrap();
+        fs::write(
+            tazk_dir.join("config-tazk.yaml"),
+            "# comment\ntz-hash-ids: true\nhash-encoding: hex\nissue-storage-layout: sharded\n",
+        )
+        .unwrap();
+
+        let storage = Storage::open(tazk_dir.clone()).unwrap();
+        assert!(!tazk_dir.join("config-tazk.yaml").exists());
+        assert_eq!(storage.get_prefix().unwrap(), "acme");
+        assert!(storage.use_hash_ids().unwrap());
+        assert_eq!(
+            storage.issue_storage_layout().unwrap(),
+            IssueStorageLayout::Sharded
+        );
+        assert!(matches!(
+            storage.get_hash_encoding().unwrap(),
+            hash::HashEncoding::Hex
+        ));
+
+        // Read-only open refuses to ignore an unmerged legacy file.
+        fs::write(tazk_dir.join("config-tazk.yaml"), "tz-hash-ids: false\n").unwrap();
+        assert!(Storage::open_readonly(tazk_dir).is_err());
+    }
 
     /// A config.yaml may have `issue-prefix` commented out. Opening such a
     /// repo must succeed, and the

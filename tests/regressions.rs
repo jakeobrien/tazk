@@ -783,6 +783,7 @@ fn command_history_keeps_multiline_arguments_on_one_line() {
     );
     let history = fs::read_to_string(storage.get_tazk_dir().join("command_history.log")).unwrap();
     assert_eq!(history.lines().count(), 1);
+    assert!(!history.contains("BD_INVOKE"));
     assert!(history.contains(r#"first line\nsecond \"line\"\r\nthird line"#));
 }
 
@@ -790,7 +791,7 @@ fn command_history_keeps_multiline_arguments_on_one_line() {
 fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "r-1", "keep").unwrap();
-    for name in ["config.yaml", "config-tazk.yaml", ".gitignore"] {
+    for name in ["config.yaml", ".gitignore"] {
         fs::remove_file(storage.get_tazk_dir().join(name)).unwrap();
     }
     for args in [
@@ -815,12 +816,7 @@ fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    for name in [
-        "config.yaml",
-        "config-tazk.yaml",
-        ".gitignore",
-        "command_history.log",
-    ] {
+    for name in ["config.yaml", ".gitignore", "command_history.log"] {
         assert!(
             !storage.get_tazk_dir().join(name).exists(),
             "created {name}"

@@ -129,8 +129,8 @@ cd "$TEST_DIR"
 echo -e "\n${YELLOW}Test 1: Initialize database (default: numeric IDs)${NC}"
 OUTPUT=$("$TZ_BIN" init --prefix test 2>&1)
 assert_contains "$OUTPUT" "Initialized tazk database with prefix: test" "Initialize should succeed"
-# Check config-tazk.yaml has tz-hash-ids: false
-CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config-tazk.yaml | awk '{print $2}' | tr -d "'\"")
+# Check config.yaml has tz-hash-ids: false
+CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config.yaml | awk '{print $2}' | tr -d "'\"")
 assert_equals "false" "$CONFIG_VALUE" "tz-hash-ids should default to false"
 
 # Test 2: Create issues with numeric IDs
@@ -148,7 +148,7 @@ assert_file_exists ".tazk/issues/test-3.md" "test-3.md should exist"
 echo -e "\n${YELLOW}Test 3: Dry-run migration${NC}"
 OUTPUT=$("$TZ_BIN" migrate --dry-run 2>&1)
 assert_contains "$OUTPUT" "Dry run - would make the following changes:" "Should show dry-run header"
-assert_contains "$OUTPUT" "Update config-tazk.yaml: tz-hash-ids: false -> true" "Should update config"
+assert_contains "$OUTPUT" "Update config.yaml: tz-hash-ids: false -> true" "Should update config"
 assert_contains "$OUTPUT" "Rename file: test-1.md ->" "Should rename test-1"
 assert_contains "$OUTPUT" "Rename file: test-2.md ->" "Should rename test-2"
 assert_contains "$OUTPUT" "Rename file: test-3.md ->" "Should rename test-3"
@@ -163,7 +163,7 @@ assert_file_exists ".tazk/issues/test-3.md" "test-3.md should still exist after 
 echo -e "\n${YELLOW}Test 4: Actual migration${NC}"
 OUTPUT=$("$TZ_BIN" migrate 2>&1)
 assert_contains "$OUTPUT" "Successfully migrated 3 issue(s) to hash-based IDs" "Should report success"
-assert_contains "$OUTPUT" "Updated config-tazk.yaml: tz-hash-ids: true" "Should confirm config update"
+assert_contains "$OUTPUT" "Updated config.yaml: tz-hash-ids: true" "Should confirm config update"
 
 # Verify old files are gone
 assert_file_not_exists ".tazk/issues/test-1.md" "test-1.md should be removed"
@@ -171,7 +171,7 @@ assert_file_not_exists ".tazk/issues/test-2.md" "test-2.md should be removed"
 assert_file_not_exists ".tazk/issues/test-3.md" "test-3.md should be removed"
 
 # Verify config was updated
-CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config-tazk.yaml | awk '{print $2}' | tr -d "'\"")
+CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config.yaml | awk '{print $2}' | tr -d "'\"")
 assert_equals "true" "$CONFIG_VALUE" "tz-hash-ids should now be true"
 
 # Test 5: List issues after migration

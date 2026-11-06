@@ -76,7 +76,7 @@ tazk stores issues in `.tazk/issues/` as markdown files, and triage items
 
 ```
 .tazk/
-├── config.yaml           # Contains issue-prefix
+├── config.yaml           # issue-prefix, tz-hash-ids, hash-encoding, issue-storage-layout
 ├── .gitignore           # Auto-managed (tazk.lock, command_history.log)
 ├── issues/
 │   ├── myproject-1.md   # Issue files with YAML frontmatter
