@@ -1,6 +1,6 @@
 ---
 title: 'TUI: detail state — scrolling, relationship highlight and link stack'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -13,7 +13,8 @@ dependencies:
   tazk-24: blocked_by
   tazk-3: child_of
 created_at: 2026-11-06T03:28:37.367619753+00:00
-updated_at: 2026-11-06T03:28:37.455086670+00:00
+updated_at: 2026-11-06T19:06:29.777098857+00:00
+closed_at: 2026-11-06T19:06:29.777098857+00:00
 ---
 
 # Description

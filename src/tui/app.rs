@@ -3,8 +3,10 @@
 
 use super::data::Snapshot;
 use super::keymap::Context;
+use super::model::detail::DetailState;
 use super::model::filter::{visible_issues, Filters};
 use super::model::grid::{GridState, Viewport};
+use super::model::relations::{relationships, Relationships};
 use super::model::search::visible_triage;
 use super::ui::layout::{grid_capacity, LayoutMode};
 use super::{GroupByArg, ModeArg, TuiArgs};
@@ -174,6 +176,8 @@ pub struct App {
     pub selection: PerMode<Option<String>>,
     /// Issues grid: columns, selection and scroll offsets (spec §5).
     pub grid: GridState,
+    /// Detail view: scroll, relationship highlight and link stack (spec §9).
+    pub detail: DetailState,
     /// Input contexts, innermost last. Never empty (starts as `[Grid]`).
     /// Derived; see [`App::sync_contexts`].
     pub contexts: Vec<Context>,
@@ -225,6 +229,7 @@ impl App {
             status_since: None,
             selection: PerMode::default(),
             grid: GridState::default(),
+            detail: DetailState::default(),
             contexts: vec![Context::Grid],
             should_quit: false,
             size: (0, 0),
@@ -270,6 +275,68 @@ impl App {
             _ => {}
         }
         self.selection.issues = self.grid.selected_id().map(str::to_string);
+    }
+
+    /// The issue the detail view shows (issues mode): the top of the link stack,
+    /// else the selected grid item (spec §8, §9.4). `None` in triage mode.
+    pub fn displayed_issue_id(&self) -> Option<&str> {
+        if self.mode != ModeArg::Issues {
+            return None;
+        }
+        self.detail.top().or(self.selection.issues.as_deref())
+    }
+
+    /// Relationships of the displayed issue; empty if there is none (or in
+    /// triage mode).
+    pub fn displayed_relationships(&self) -> Relationships {
+        self.displayed_issue_id()
+            .and_then(|id| self.snapshot.issue(id))
+            .map(|issue| relationships(issue, &self.snapshot))
+            .unwrap_or_default()
+    }
+
+    /// `Esc` in the detail: pop the link stack, else close the full-screen
+    /// detail / return focus to the grid.
+    fn detail_back(&mut self) {
+        if !self.detail.pop() {
+            self.full_screen_detail = false;
+            self.focus = Focus::Grid;
+        }
+    }
+
+    /// Apply a detail-view action (spec §9.4, §9.6).
+    fn detail_action(&mut self, action: &Action) {
+        match action {
+            Action::DetailLineUp => self.detail.line_up(),
+            Action::DetailLineDown => self.detail.line_down(),
+            Action::DetailPageUp => self.detail.page_up(),
+            Action::DetailPageDown => self.detail.page_down(),
+            Action::DetailHalfPageUp => self.detail.half_page_up(),
+            Action::DetailHalfPageDown => self.detail.half_page_down(),
+            Action::DetailTop => self.detail.top_of_content(),
+            Action::DetailBottom => self.detail.bottom_of_content(),
+            // Triage items have no relationships: Tab / Enter do nothing.
+            Action::NextLink if self.mode == ModeArg::Issues => {
+                let len = self.displayed_relationships().len();
+                self.detail.next_link(len);
+            }
+            Action::PrevLink if self.mode == ModeArg::Issues => {
+                let len = self.displayed_relationships().len();
+                self.detail.prev_link(len);
+            }
+            Action::FollowLink if self.mode == ModeArg::Issues => {
+                let target = self
+                    .detail
+                    .highlight()
+                    .and_then(|i| self.displayed_relationships().entry(i).cloned())
+                    .filter(|e| e.followable());
+                if let Some(entry) = target {
+                    self.detail.push(entry.id);
+                }
+            }
+            Action::DetailBack => self.detail_back(),
+            _ => {}
+        }
     }
 
     /// The active layout, derived from the terminal width (spec §8).
@@ -370,6 +437,19 @@ impl App {
 
 /// Apply an action to the state.
 pub fn update(app: &mut App, action: Action) {
+    // Moving the selection (by key, or because search / filters / grouping
+    // changed it) clears the link stack and resets the detail scroll
+    // (spec §9.4). A reload keeps both: it has its own rule (spec §3.4).
+    let before = (app.mode, app.selection.get(app.mode).clone());
+    let reloaded = matches!(action, Action::Reloaded(_));
+    apply(app, action);
+    if !reloaded && before != (app.mode, app.selection.get(app.mode).clone()) {
+        app.detail.reset();
+        app.sync_contexts();
+    }
+}
+
+fn apply(app: &mut App, action: Action) {
     // Pure navigation moves the selection only; everything else may change
     // what the grid shows (filters, search, grouping, snapshot, size).
     let navigation = matches!(
@@ -396,7 +476,7 @@ pub fn update(app: &mut App, action: Action) {
         Action::Reloaded(snapshot) => {
             app.snapshot = *snapshot;
             // The grid keeps the selection by ID (refresh_grid, below).
-            // EXTENSION POINT (detail issue): keep or clear the link stack (spec §3.4).
+            // EXTENSION POINT (reload issue): keep or clear the link stack (spec §3.4).
         }
 
         // Global
@@ -417,6 +497,7 @@ pub fn update(app: &mut App, action: Action) {
                 ModeArg::Triage => ModeArg::Issues,
             };
             // Each mode has its own selection; start from the grid.
+            app.detail.reset();
             app.focus = Focus::Grid;
             app.full_screen_detail = false;
         }
@@ -436,9 +517,21 @@ pub fn update(app: &mut App, action: Action) {
         Action::ClearSearchFromGrid => app.query_mut().clear(),
         Action::CycleGrouping => app.grouping = app.grouping.next(),
 
+        Action::DetailLineUp
+        | Action::DetailLineDown
+        | Action::DetailPageUp
+        | Action::DetailPageDown
+        | Action::DetailHalfPageUp
+        | Action::DetailHalfPageDown
+        | Action::DetailTop
+        | Action::DetailBottom
+        | Action::NextLink
+        | Action::PrevLink
+        | Action::FollowLink
+        | Action::DetailBack => app.detail_action(&action),
+
         // EXTENSION POINTS, each handled by its own issue:
-        // - navigation: OpenDetail, Detail*, NextLink, PrevLink,
-        //   FollowLink, DetailBack, layout switching, CopyId, OpenEditor
+        // - navigation: OpenDetail, layout switching, CopyId, OpenEditor
         //   (grid movement: Move, Column* are handled by `App::navigate`)
         // - filters / grouping: CycleGrouping, OpenPicker, ResetFilters, Picker*
         Action::CopyId
@@ -451,18 +544,6 @@ pub fn update(app: &mut App, action: Action) {
         | Action::OpenDetail
         | Action::OpenPicker(_)
         | Action::ResetFilters
-        | Action::DetailLineUp
-        | Action::DetailLineDown
-        | Action::DetailPageUp
-        | Action::DetailPageDown
-        | Action::DetailHalfPageUp
-        | Action::DetailHalfPageDown
-        | Action::DetailTop
-        | Action::DetailBottom
-        | Action::NextLink
-        | Action::PrevLink
-        | Action::FollowLink
-        | Action::DetailBack
         | Action::PickerMove(_)
         | Action::PickerToggle
         | Action::PickerAll
@@ -910,6 +991,202 @@ mod tests {
         send(&mut a, key(KeyCode::Char('m')));
         send(&mut a, key(KeyCode::Down));
         assert_eq!(selected(&a), Some("a"));
+    }
+
+    // ---- Detail: scrolling, link highlight and link stack (spec §9.4, §9.6)
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    /// `me` (selected, first) has parent `p`, blocker `b`, child `k` and a
+    /// missing blocker `ghost`. Display order: Parent p; Blocked by b, ghost;
+    /// Children k. Priorities keep `me` first in the grid.
+    fn detail_app() -> App {
+        let mut a = grid_app(vec![
+            fixtures::issue("me", "Me")
+                .priority(0)
+                .child_of("p")
+                .blocked_by("b")
+                .blocked_by("ghost"),
+            fixtures::issue("p", "Parent").priority(1),
+            fixtures::issue("b", "Blocker").priority(2),
+            fixtures::issue("k", "Kid").priority(3).child_of("me"),
+        ]);
+        assert_eq!(selected(&a), Some("me"));
+        a.focus = Focus::Detail;
+        a.sync_contexts();
+        assert_eq!(a.context(), Context::Detail);
+        a
+    }
+
+    fn displayed(a: &App) -> Option<&str> {
+        a.displayed_issue_id()
+    }
+
+    fn tab(a: &mut App) {
+        send(a, key(KeyCode::Tab));
+    }
+
+    #[test]
+    fn tab_and_shift_tab_walk_entries_across_sections() {
+        let mut a = detail_app();
+        let back = key(KeyCode::BackTab);
+        assert_eq!(a.detail.highlight(), None);
+        for want in [0, 1, 2, 3, 0] {
+            tab(&mut a);
+            assert_eq!(a.detail.highlight(), Some(want));
+        }
+        let rels = a.displayed_relationships();
+        assert_eq!(rels.entry(3).unwrap().id, "k");
+        send(&mut a, back);
+        assert_eq!(a.detail.highlight(), Some(3));
+        send(&mut a, back);
+        assert_eq!(a.detail.highlight(), Some(2));
+        assert!(a.detail.reveal_pending());
+    }
+
+    #[test]
+    fn enter_pushes_esc_pops_one_at_a_time_and_last_esc_unfocuses() {
+        let mut a = detail_app();
+        tab(&mut a); // p
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(displayed(&a), Some("p"));
+        assert_eq!(a.detail.stack(), ["p"]);
+        assert_eq!(a.detail.highlight(), None);
+        // `p` has the child `me`: follow it back.
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.detail.stack(), ["p", "me"]);
+        // Following never moves the grid selection.
+        assert_eq!(selected(&a), Some("me"));
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(displayed(&a), Some("p"));
+        assert_eq!(a.focus, Focus::Detail);
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(displayed(&a), Some("me"));
+        assert_eq!(a.focus, Focus::Detail);
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.focus, Focus::Grid);
+        assert_eq!(a.context(), Context::Grid);
+    }
+
+    #[test]
+    fn final_esc_closes_full_screen_detail() {
+        let mut a = detail_app();
+        a.focus = Focus::Grid;
+        a.full_screen_detail = true;
+        a.sync_contexts();
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        send(&mut a, key(KeyCode::Esc));
+        assert!(a.full_screen_detail);
+        send(&mut a, key(KeyCode::Esc));
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Grid);
+    }
+
+    #[test]
+    fn enter_on_a_missing_target_or_no_highlight_does_nothing() {
+        let mut a = detail_app();
+        send(&mut a, key(KeyCode::Enter));
+        assert!(a.detail.stack().is_empty());
+        tab(&mut a);
+        tab(&mut a);
+        tab(&mut a); // ghost
+        assert!(a.displayed_relationships().entry(2).unwrap().is_missing());
+        send(&mut a, key(KeyCode::Enter));
+        assert!(a.detail.stack().is_empty());
+        assert_eq!(a.detail.highlight(), Some(2));
+    }
+
+    #[test]
+    fn moving_the_grid_selection_clears_the_stack_and_scroll() {
+        let mut a = detail_app();
+        a.detail.set_metrics(100, 10);
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        send(&mut a, key(KeyCode::PageDown));
+        assert!(a.detail.scroll() > 0);
+        a.focus = Focus::Grid;
+        a.sync_contexts();
+        send(&mut a, key(KeyCode::Down));
+        assert_eq!(selected(&a), Some("p"));
+        assert!(a.detail.stack().is_empty());
+        assert_eq!(a.detail.scroll(), 0);
+        assert_eq!(displayed(&a), Some("p"));
+    }
+
+    #[test]
+    fn a_reload_keeps_the_stack() {
+        let mut a = detail_app();
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        let snap = a.snapshot.clone();
+        update(&mut a, Action::Reloaded(Box::new(snap)));
+        assert_eq!(a.detail.stack(), ["p"]);
+    }
+
+    #[test]
+    fn scroll_keys_clamp_and_ctrl_u_d_move_half_a_page() {
+        let mut a = detail_app();
+        a.detail.set_metrics(40, 10);
+        send(&mut a, key(KeyCode::Up));
+        assert_eq!(a.detail.scroll(), 0);
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Down));
+        assert_eq!(a.detail.scroll(), 2);
+        send(&mut a, key(KeyCode::Char('k')));
+        assert_eq!(a.detail.scroll(), 1);
+        send(&mut a, ctrl('d'));
+        assert_eq!(a.detail.scroll(), 6);
+        send(&mut a, ctrl('u'));
+        assert_eq!(a.detail.scroll(), 1);
+        send(&mut a, key(KeyCode::PageDown));
+        assert_eq!(a.detail.scroll(), 11);
+        send(&mut a, key(KeyCode::Char(' ')));
+        assert_eq!(a.detail.scroll(), 21);
+        send(&mut a, key(KeyCode::PageDown));
+        send(&mut a, key(KeyCode::PageDown));
+        assert_eq!(a.detail.scroll(), 30);
+        send(&mut a, key(KeyCode::Down));
+        assert_eq!(a.detail.scroll(), 30);
+        send(&mut a, key(KeyCode::Home));
+        assert_eq!(a.detail.scroll(), 0);
+        send(&mut a, key(KeyCode::End));
+        assert_eq!(a.detail.scroll(), 30);
+        send(&mut a, key(KeyCode::PageUp));
+        assert_eq!(a.detail.scroll(), 20);
+    }
+
+    #[test]
+    fn ctrl_d_in_the_split_grid_scrolls_the_detail_without_moving_focus() {
+        let mut a = detail_app();
+        update(&mut a, Action::Resize(160, 40));
+        a.focus = Focus::Grid;
+        a.sync_contexts();
+        a.detail.set_metrics(40, 10);
+        send(&mut a, ctrl('d'));
+        assert_eq!(a.detail.scroll(), 5);
+        assert_eq!(a.focus, Focus::Grid);
+        assert_eq!(selected(&a), Some("me"));
+    }
+
+    #[test]
+    fn tab_and_enter_are_no_ops_in_triage_mode() {
+        let mut a = fixture_app();
+        send(&mut a, key(KeyCode::Char('m')));
+        a.focus = Focus::Detail;
+        a.sync_contexts();
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.detail.highlight(), None);
+        assert!(a.detail.stack().is_empty());
+        // Direct actions are guarded too.
+        update(&mut a, Action::NextLink);
+        update(&mut a, Action::FollowLink);
+        assert_eq!(a.detail.highlight(), None);
+        assert_eq!(a.displayed_issue_id(), None);
     }
 
     #[test]
