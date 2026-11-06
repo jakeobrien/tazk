@@ -1,6 +1,6 @@
 ---
 title: 'TUI: wire grouping cycle, filter reset and live search in issues mode'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-2: child_of
   tazk-21: blocked_by
 created_at: 2026-11-06T03:28:37.364953670+00:00
-updated_at: 2026-11-06T03:28:37.445880003+00:00
+updated_at: 2026-11-06T20:27:24.627174+00:00
+closed_at: 2026-11-06T20:27:24.627174+00:00
 ---
 
 # Description

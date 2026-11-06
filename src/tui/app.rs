@@ -544,6 +544,7 @@ fn apply(app: &mut App, action: Action) {
         }
         Action::ClearSearchFromGrid => app.query_mut().clear(),
         Action::CycleGrouping => app.grouping = app.grouping.next(),
+        Action::ResetFilters => app.filters.reset(),
 
         Action::DetailLineUp
         | Action::DetailLineDown
@@ -561,7 +562,7 @@ fn apply(app: &mut App, action: Action) {
         // EXTENSION POINTS, each handled by its own issue:
         // - navigation: OpenDetail, layout switching, OpenEditor
         //   (grid movement: Move, Column* are handled by `App::navigate`)
-        // - filters / grouping: CycleGrouping, OpenPicker, ResetFilters, Picker*
+        // - filters: OpenPicker, Picker*
         Action::CopyId => match app.copy_text() {
             Some(text) => app.copy_request = Some(text),
             None => app.set_status("Nothing to copy"),
@@ -574,7 +575,6 @@ fn apply(app: &mut App, action: Action) {
         | Action::ColumnBottom
         | Action::OpenDetail
         | Action::OpenPicker(_)
-        | Action::ResetFilters
         | Action::PickerMove(_)
         | Action::PickerToggle
         | Action::PickerAll
@@ -1022,6 +1022,121 @@ mod tests {
         send(&mut a, key(KeyCode::Char('m')));
         send(&mut a, key(KeyCode::Down));
         assert_eq!(selected(&a), Some("a"));
+    }
+
+    // ---- Grouping cycle, filter reset and live search (spec §5.1, §6, §7)
+
+    #[test]
+    fn g_five_times_returns_to_epic_and_keeps_the_selection() {
+        let mut a = grid_app(vec![
+            fixtures::epic("e", "Epic").priority(0),
+            fixtures::issue("a", "A").priority(1).child_of("e"),
+            fixtures::issue("b", "B")
+                .priority(2)
+                .role(crate::types::Role::Human),
+            fixtures::issue("c", "C").priority(3),
+        ]);
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char('j')));
+        let id = selected(&a).map(str::to_string);
+        assert!(id.is_some());
+        let start = a.grouping;
+        for _ in 0..5 {
+            send(&mut a, key(KeyCode::Char('g')));
+            assert_eq!(selected(&a).map(str::to_string), id);
+        }
+        assert_eq!(a.grouping, start);
+        assert_eq!(a.grouping, GroupByArg::Epic);
+    }
+
+    #[test]
+    fn c_restores_default_filters_after_narrowing() {
+        use crate::tui::model::filter::FilterSet;
+        use crate::types::Status;
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B")
+                .priority(1)
+                .status(Status::Blocked),
+            fixtures::issue("z", "Z").priority(2).closed(),
+        ]);
+        assert_eq!(a.counts(), (2, 3));
+        a.filters.status = FilterSet::only([Status::Closed]);
+        a.filters.priority = FilterSet::only([2]);
+        a.refresh_grid();
+        assert_eq!(a.counts(), (1, 3));
+        assert_eq!(selected(&a), Some("z"));
+        send(&mut a, key(KeyCode::Char('c')));
+        assert_eq!(a.filters, Filters::default());
+        assert_eq!(a.counts(), (2, 3));
+        assert_eq!(selected(&a), Some("a"));
+    }
+
+    #[test]
+    fn c_does_nothing_in_triage_mode() {
+        use crate::tui::model::filter::FilterSet;
+        let mut a = grid_app(vec![fixtures::issue("a", "A")]);
+        a.filters.status = FilterSet::all();
+        send(&mut a, key(KeyCode::Char('m')));
+        send(&mut a, key(KeyCode::Char('c')));
+        assert_eq!(a.filters.status, FilterSet::all());
+    }
+
+    #[test]
+    fn typing_in_search_narrows_the_grid_after_each_character() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "login page").priority(0),
+            fixtures::issue("b", "logout button").priority(1),
+            fixtures::issue("c", "signup form").priority(2),
+        ]);
+        let shown = |a: &App| a.counts().0;
+        let cells = |a: &App| -> Vec<String> {
+            a.grid
+                .columns()
+                .iter()
+                .flat_map(|c| c.cells.clone())
+                .collect()
+        };
+        assert_eq!(shown(&a), 3);
+        send(&mut a, key(KeyCode::Char('/')));
+        type_str(&mut a, "l");
+        assert_eq!(cells(&a), ["a", "b"]);
+        type_str(&mut a, "o");
+        type_str(&mut a, "g");
+        assert_eq!(cells(&a), ["a", "b"]);
+        type_str(&mut a, "i");
+        assert_eq!(cells(&a), ["a"]);
+        assert_eq!(selected(&a), Some("a"));
+        type_str(&mut a, "x");
+        assert!(cells(&a).is_empty());
+        assert_eq!(selected(&a), None);
+        send(&mut a, key(KeyCode::Backspace));
+        assert_eq!(cells(&a), ["a"]);
+    }
+
+    #[test]
+    fn esc_in_grid_clears_search_but_not_with_detail_focused() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "login").priority(0),
+            fixtures::issue("b", "other").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::Char('/')));
+        type_str(&mut a, "login");
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.counts().0, 1);
+
+        // Detail focused: Esc leaves the detail and keeps the query.
+        a.focus = Focus::Detail;
+        a.sync_contexts();
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.focus, Focus::Grid);
+        assert_eq!(a.query(), "login");
+        assert_eq!(a.counts().0, 1);
+
+        // Grid focused: Esc clears the search and restores the grid.
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.query(), "");
+        assert_eq!(a.counts().0, 2);
     }
 
     // ---- Detail: scrolling, link highlight and link stack (spec §9.4, §9.6)
