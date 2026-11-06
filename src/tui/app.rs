@@ -186,6 +186,9 @@ pub struct App {
     pub size: (u16, u16),
     /// Set by `FocusGained` / `Tick` / `Reload`; the loader consumes it with [`App::take_reload`].
     pub reload_requested: bool,
+    /// Text `y` wants on the clipboard; the event loop performs the copy
+    /// ([`App::take_copy`]) so `update` stays free of side effects.
+    pub copy_request: Option<String>,
 }
 
 impl App {
@@ -234,6 +237,7 @@ impl App {
             should_quit: false,
             size: (0, 0),
             reload_requested: false,
+            copy_request: None,
         };
         app.refresh_grid();
         app
@@ -417,6 +421,30 @@ impl App {
         std::mem::take(&mut self.reload_requested)
     }
 
+    /// What `y` copies (spec §11): in triage mode the selected filename; in
+    /// issues mode the selected issue while the grid has focus, or the
+    /// displayed issue (top of the link stack) when the detail has focus or
+    /// is full-screen. `None` if nothing is selected.
+    pub fn copy_text(&self) -> Option<String> {
+        match self.mode {
+            ModeArg::Triage => self.selection.triage.clone(),
+            ModeArg::Issues => {
+                let detail = self.focus == Focus::Detail || self.full_screen_detail;
+                let id = if detail {
+                    self.displayed_issue_id()
+                } else {
+                    self.selection.issues.as_deref()
+                };
+                id.map(str::to_string)
+            }
+        }
+    }
+
+    /// Returns and clears the pending clipboard request.
+    pub fn take_copy(&mut self) -> Option<String> {
+        self.copy_request.take()
+    }
+
     /// Rebuild `contexts` from the state fields.
     fn sync_contexts(&mut self) {
         self.contexts.clear();
@@ -531,11 +559,14 @@ fn apply(app: &mut App, action: Action) {
         | Action::DetailBack => app.detail_action(&action),
 
         // EXTENSION POINTS, each handled by its own issue:
-        // - navigation: OpenDetail, layout switching, CopyId, OpenEditor
+        // - navigation: OpenDetail, layout switching, OpenEditor
         //   (grid movement: Move, Column* are handled by `App::navigate`)
         // - filters / grouping: CycleGrouping, OpenPicker, ResetFilters, Picker*
-        Action::CopyId
-        | Action::OpenEditor
+        Action::CopyId => match app.copy_text() {
+            Some(text) => app.copy_request = Some(text),
+            None => app.set_status("Nothing to copy"),
+        },
+        Action::OpenEditor
         | Action::Move(_)
         | Action::ColumnPageUp
         | Action::ColumnPageDown

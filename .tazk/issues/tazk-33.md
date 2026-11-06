@@ -1,6 +1,6 @@
 ---
 title: 'TUI: copy ID / triage filename to clipboard (`y`)'
-status: open
+status: closed
 priority: 3
 issue_type: task
 role: agent
@@ -13,7 +13,8 @@ dependencies:
   tazk-25: blocked_by
   tazk-5: child_of
 created_at: 2026-11-06T03:28:37.377305128+00:00
-updated_at: 2026-11-06T03:28:37.504290378+00:00
+updated_at: 2026-11-06T19:28:44.483802385+00:00
+closed_at: 2026-11-06T19:28:44.483802385+00:00
 ---
 
 # Description

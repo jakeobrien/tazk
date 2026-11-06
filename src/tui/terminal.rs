@@ -3,6 +3,7 @@
 //! The loop is deliberately thin: it translates events into [`Action`]s,
 //! calls [`app::update`] and redraws. All behavior lives in `app.rs`.
 
+use super::actions::clipboard::{self, SystemClipboard};
 use super::app::{self, Action, App};
 use super::{keymap, ui};
 use anyhow::Result;
@@ -121,6 +122,7 @@ pub fn run(mut app: App) -> Result<()> {
 
 fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
     let mut next_tick = Instant::now() + TICK_INTERVAL;
+    let mut clipboard = SystemClipboard;
     while !app.should_quit {
         terminal.draw(|f| ui::draw(f, app))?;
         debug_panic_hook();
@@ -132,6 +134,8 @@ fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
         let timeout = wake.saturating_duration_since(Instant::now());
         if event::poll(timeout)? {
             handle_event(app, event::read()?);
+            // After the key press cleared the status, so the result stays visible.
+            clipboard::perform_pending(app, &mut clipboard);
         }
         app.expire_status(Instant::now());
         if Instant::now() >= next_tick {
