@@ -1,6 +1,6 @@
 ---
 title: 'TUI: apply command-line flags to the initial state'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-11: blocked_by
   tazk-14: blocked_by
 created_at: 2026-11-06T03:28:37.350825295+00:00
-updated_at: 2026-11-06T03:28:37.400329461+00:00
+updated_at: 2026-11-06T18:51:53.152540939+00:00
+closed_at: 2026-11-06T18:51:53.152540939+00:00
 ---
 
 # Description

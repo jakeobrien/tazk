@@ -18,6 +18,8 @@ mod ui;
 use crate::storage::Storage;
 use anyhow::Result;
 use clap::{Args, ValueEnum};
+use model::cli::FilterFlags;
+use model::filter::Filters;
 
 /// Starting mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -49,10 +51,12 @@ impl GroupByArg {
     }
 }
 
-/// Command-line flags. They only set the initial view state.
+/// Command-line flags. They only set the initial view state; nothing is
+/// persisted.
 ///
-/// `VALUES` flags are repeatable and/or comma-separated; `none` selects
-/// issues with the property unset (role, effort).
+/// `VALUES` flags are repeatable and/or comma-separated (`-p 0,1 -p 3`), like
+/// `tz list -p 0,1`. The literal `none` selects issues with the property
+/// unset (role, effort).
 #[derive(Debug, Args)]
 pub struct TuiArgs {
     /// Starting mode
@@ -63,15 +67,18 @@ pub struct TuiArgs {
     #[arg(long, value_enum, default_value = "epic")]
     pub group_by: GroupByArg,
 
-    /// Initial role filter (human, agent, none)
+    /// Initial role filter: human, agent, none (unset). Repeatable and/or
+    /// comma-separated. Default: all
     #[arg(short, long, value_name = "VALUES", value_delimiter = ',')]
     pub role: Vec<String>,
 
-    /// Initial status filter (default: all except closed)
+    /// Initial status filter: open, in_progress, blocked, deferred, closed.
+    /// Repeatable and/or comma-separated. Default: all except closed
     #[arg(short, long, value_name = "VALUES", value_delimiter = ',')]
     pub status: Vec<String>,
 
-    /// Initial type filter
+    /// Initial type filter: epic, spec, feature, bug, task, gate, chore.
+    /// Repeatable and/or comma-separated. Default: all
     #[arg(
         short = 't',
         long = "type",
@@ -80,11 +87,13 @@ pub struct TuiArgs {
     )]
     pub r#type: Vec<String>,
 
-    /// Initial priority filter
+    /// Initial priority filter, e.g. 0,1 (repeatable and/or comma-separated).
+    /// Default: all
     #[arg(short, long, value_name = "VALUES", value_delimiter = ',')]
     pub priority: Vec<String>,
 
-    /// Initial effort filter (values or none)
+    /// Initial effort filter: 1-5 or none (unset). Repeatable and/or
+    /// comma-separated. Default: all
     #[arg(long, value_name = "VALUES", value_delimiter = ',')]
     pub effort: Vec<String>,
 
@@ -93,9 +102,25 @@ pub struct TuiArgs {
     pub search: Option<String>,
 }
 
+impl TuiArgs {
+    /// The initial filters from `-r -s -t -p --effort`; an error names the
+    /// bad flag value.
+    pub fn initial_filters(&self) -> Result<Filters> {
+        Filters::from_flags(FilterFlags {
+            role: &self.role,
+            status: &self.status,
+            issue_type: &self.r#type,
+            priority: &self.priority,
+            effort: &self.effort,
+        })
+    }
+}
+
 /// Entry point. The storage has already been opened (so a missing `.tazk`
 /// has failed before the terminal is touched).
 pub fn run(storage: Storage, args: TuiArgs) -> Result<()> {
+    // Validate the flags first: bad values must fail before the terminal is touched.
+    let filters = args.initial_filters()?;
     let snapshot = data::Snapshot::load(&storage)?;
-    terminal::run(app::App::with_snapshot(&args, snapshot))
+    terminal::run(app::App::with_snapshot(&args, filters, snapshot))
 }

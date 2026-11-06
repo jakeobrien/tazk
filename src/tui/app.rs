@@ -185,16 +185,23 @@ pub struct App {
 }
 
 impl App {
+    /// An app with the flags' initial state and an empty snapshot. Panics if a
+    /// filter flag is invalid (tests only; [`crate::tui::run`] reports it).
     pub fn new(args: &TuiArgs) -> Self {
-        Self::with_snapshot(args, Snapshot::default())
+        let filters = args.initial_filters().expect("valid filter flags");
+        Self::with_snapshot(args, filters, Snapshot::default())
     }
 
-    pub fn with_snapshot(args: &TuiArgs, snapshot: Snapshot) -> Self {
+    /// Initial state from the flags (spec §2.1): mode, grouping, `filters`
+    /// (from [`TuiArgs::initial_filters`]) and the issues-mode search.
+    pub fn with_snapshot(args: &TuiArgs, filters: Filters, snapshot: Snapshot) -> Self {
         let mut app = Self::from_snapshot(args.mode, snapshot);
         app.grouping = args.group_by;
+        app.filters = filters;
         if let Some(q) = &args.search {
             app.search.issues = q.clone();
         }
+        app.refresh_grid();
         app
     }
 
@@ -471,6 +478,7 @@ pub fn update(app: &mut App, action: Action) {
 mod tests {
     use super::*;
     use crate::tui::keymap;
+    use crate::tui::model::columns::ColumnKey;
     use crate::tui::testing as fixtures;
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -669,11 +677,96 @@ mod tests {
             "x",
         ])
         .args;
-        let a = App::with_snapshot(&args, fixtures::snapshot());
+        let a = App::with_snapshot(&args, args.initial_filters().unwrap(), fixtures::snapshot());
         assert_eq!(a.mode, ModeArg::Triage);
         assert_eq!(a.grouping, GroupByArg::Role);
         assert_eq!(a.search.issues, "x");
         assert_eq!(a.search.triage, "");
+    }
+
+    fn app_from_flags(flags: &[&str], snapshot: Snapshot) -> App {
+        let args = Cli::parse_from(std::iter::once("tz").chain(flags.iter().copied())).args;
+        App::with_snapshot(&args, args.initial_filters().unwrap(), snapshot)
+    }
+
+    #[test]
+    fn mode_triage_flag_starts_in_triage_mode() {
+        let a = app_from_flags(&["--mode", "triage"], fixtures::snapshot());
+        assert_eq!(a.mode, ModeArg::Triage);
+        assert_eq!(a.filters, Filters::default());
+    }
+
+    #[test]
+    fn group_by_status_with_closed_status_shows_only_closed_issues() {
+        let snap = fixtures::snapshot_of([
+            fixtures::issue("a", "Open one"),
+            fixtures::issue("b", "Closed one").closed(),
+            fixtures::issue("c", "Closed two").closed(),
+        ]);
+        let a = app_from_flags(&["--group-by", "status", "-s", "closed"], snap);
+        assert_eq!(a.grouping, GroupByArg::Status);
+        let cols = a.grid.columns();
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].key, ColumnKey::Status(crate::types::Status::Closed));
+        assert_eq!(cols[0].cells, ["b", "c"]);
+        assert_eq!(a.counts(), (2, 3));
+        assert_eq!(a.selection.issues.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn filter_and_search_flags_narrow_the_initial_grid() {
+        use crate::types::Role;
+        let snap = fixtures::snapshot_of([
+            fixtures::issue("a", "Login").role(Role::Agent).priority(0),
+            fixtures::issue("b", "Login too").priority(1),
+            fixtures::issue("c", "Logout").role(Role::Agent).priority(1),
+        ]);
+        let a = app_from_flags(
+            &[
+                "--group-by",
+                "priority",
+                "-r",
+                "agent",
+                "-p",
+                "0,1",
+                "--search",
+                "login",
+            ],
+            snap,
+        );
+        let ids: Vec<_> = a
+            .grid
+            .columns()
+            .iter()
+            .flat_map(|c| c.cells.clone())
+            .collect();
+        assert_eq!(ids, ["a"]);
+    }
+
+    #[test]
+    fn invalid_flag_values_are_errors_naming_the_value() {
+        let err = Cli::try_parse_from(["tz", "--group-by", "bar"])
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("'bar'"), "{err}");
+        let args = Cli::parse_from(["tz", "-s", "foo"]).args;
+        let err = format!("{:#}", args.initial_filters().unwrap_err());
+        assert!(err.contains("--status") && err.contains("'foo'"), "{err}");
+    }
+
+    #[test]
+    fn help_documents_none_and_the_comma_repeat_syntax() {
+        use clap::CommandFactory;
+        let help = Cli::command().render_long_help().to_string();
+        for needle in [
+            "none",
+            "comma-separated",
+            "Repeatable",
+            "--effort",
+            "--search",
+        ] {
+            assert!(help.contains(needle), "missing {needle:?} in\n{help}");
+        }
     }
 
     fn selected(a: &App) -> Option<&str> {
