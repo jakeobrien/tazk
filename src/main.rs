@@ -647,6 +647,7 @@ enum Commands {
         priority: Vec<String>,
 
         /// Filter by type: bug, feature, task, epic, gate, chore, spec
+        /// (epics are hidden unless `--type epic` is given)
         #[arg(long)]
         r#type: Option<IssueType>,
 
@@ -3162,6 +3163,12 @@ fn run() -> Result<()> {
             let mut ready =
                 storage.get_ready(assignee.as_deref(), priority_list, r#type, sort_policy)?;
 
+            // Epics group other work rather than being worked directly, so hide
+            // them unless the caller asks for them with `--type epic`.
+            if r#type.is_none() {
+                ready.retain(|issue| issue.issue_type != IssueType::Epic);
+            }
+
             // Apply in-memory filters shared with `list`
             IssueFilters {
                 labels: &labels,
@@ -3574,6 +3581,7 @@ DEPENDENCY TYPES
 READY WORK
   tz ready       Show issues ready to work on
             Ready = status is 'open' AND no blocking dependencies
+            (epics are hidden unless --type epic)
             Perfect for agents to claim next work!
 
 CLAIMING WORK (cross-machine coordination)
