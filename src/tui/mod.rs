@@ -80,6 +80,6 @@ pub struct TuiArgs {
 
 /// Entry point. The storage has already been opened (so a missing `.tazk`
 /// has failed before the terminal is touched).
-pub fn run(_storage: Storage, _args: TuiArgs) -> Result<()> {
-    anyhow::bail!("tz tui is not implemented yet")
+pub fn run(_storage: Storage, args: TuiArgs) -> Result<()> {
+    terminal::run(app::App::new(&args))
 }

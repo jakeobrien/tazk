@@ -1,6 +1,6 @@
 ---
 title: 'TUI: terminal lifecycle, panic-safe restore and event loop'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -11,7 +11,8 @@ dependencies:
   tazk-1: child_of
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.344627003+00:00
-updated_at: 2026-11-06T03:28:37.384805045+00:00
+updated_at: 2026-11-06T14:42:07.544377901+00:00
+closed_at: 2026-11-06T14:42:07.544377901+00:00
 ---
 
 # Description
