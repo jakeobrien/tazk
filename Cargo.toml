@@ -59,6 +59,7 @@ winapi = { version = "0.3", features = ["handleapi", "processthreadsapi", "winnt
 
 [dev-dependencies]
 dir-test = "0.4"
+insta = "1.49.0"
 
 [build-dependencies]
 built = { version = "0.8.1", features = ["git2"] }

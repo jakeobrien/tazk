@@ -1,0 +1,5 @@
+---
+source: src/tui/testing.rs
+expression: "render_app(&app, 40, 10)"
+---
+

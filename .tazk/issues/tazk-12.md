@@ -1,6 +1,6 @@
 ---
 title: 'TUI: snapshot-test harness and fixture builders'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -11,7 +11,8 @@ dependencies:
   tazk-1: child_of
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.349342295+00:00
-updated_at: 2026-11-06T03:28:37.395938420+00:00
+updated_at: 2026-11-06T16:07:34.549193054+00:00
+closed_at: 2026-11-06T16:07:34.549193054+00:00
 ---
 
 # Description

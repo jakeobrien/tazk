@@ -54,36 +54,9 @@ impl Snapshot {
     }
 }
 
-/// Fixture builders for tests (no filesystem access).
-#[cfg(test)]
-pub mod fixtures {
-    use super::*;
-    use crate::types::IssueType;
-
-    pub fn issue(id: &str, title: &str) -> Issue {
-        Issue::new(id.to_string(), title.to_string(), 2, IssueType::Task)
-    }
-
-    pub fn triage_item(name: &str, body: &str) -> TriageItem {
-        TriageItem {
-            name: name.to_string(),
-            body: body.to_string(),
-        }
-    }
-
-    /// Two issues and one triage item.
-    pub fn snapshot() -> Snapshot {
-        Snapshot::new(
-            vec![issue("tz-1", "First"), issue("tz-2", "Second")],
-            vec![triage_item("20250101T000000-aaaa.md", "idea")],
-            Vec::new(),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::fixtures::*;
+    use crate::tui::testing::*;
 
     #[test]
     fn new_builds_index() {

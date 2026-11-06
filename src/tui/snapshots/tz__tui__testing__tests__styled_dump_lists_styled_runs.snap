@@ -1,0 +1,8 @@
+---
+source: src/tui/testing.rs
+expression: out
+---
+plain red
+hi
+--- styles ---
+1:0..2 fg=Red bg=Reset mods=BOLD "hi"

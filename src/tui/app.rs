@@ -356,8 +356,8 @@ pub fn update(app: &mut App, action: Action) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::data::fixtures;
     use crate::tui::keymap;
+    use crate::tui::testing as fixtures;
     use clap::Parser;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn reloaded_replaces_snapshot() {
         let mut a = fixture_app();
-        let snap = Snapshot::new(vec![fixtures::issue("tz-9", "New")], vec![], vec![]);
+        let snap = Snapshot::new(vec![fixtures::issue("tz-9", "New").build()], vec![], vec![]);
         update(&mut a, Action::Reloaded(Box::new(snap)));
         assert_eq!(a.snapshot.issues.len(), 1);
         assert!(a.snapshot.by_id.contains_key("tz-9"));

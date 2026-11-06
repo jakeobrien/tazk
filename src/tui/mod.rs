@@ -11,6 +11,8 @@ mod data;
 mod keymap;
 mod model;
 mod terminal;
+#[cfg(test)]
+mod testing;
 mod ui;
 
 use crate::storage::Storage;
