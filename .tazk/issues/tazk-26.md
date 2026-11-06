@@ -1,6 +1,6 @@
 ---
 title: 'TUI: markdown body rendering via tui-markdown'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-3: child_of
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.368860503+00:00
-updated_at: 2026-11-06T03:28:37.458741586+00:00
+updated_at: 2026-11-06T19:22:10.971498281+00:00
+closed_at: 2026-11-06T19:22:10.971498281+00:00
 ---
 
 # Description

@@ -1,0 +1,19 @@
+---
+source: src/tui/ui/markdown.rs
+expression: "draw(&render_at(&md, 40), 40, 16)"
+---
+# Description
+
+desc text
+
+# Design
+
+d text
+
+# Acceptance Criteria
+
+ac text
+
+# Notes
+
+n text

@@ -1,0 +1,5 @@
+---
+source: src/tui/ui/markdown.rs
+expression: "draw(&r, 40, 2)"
+---
+(no description)

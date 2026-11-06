@@ -1,0 +1,7 @@
+---
+source: src/tui/ui/markdown.rs
+expression: "draw(&render_at(&md, 40), 40, 4)"
+---
+# Notes
+
+just notes
