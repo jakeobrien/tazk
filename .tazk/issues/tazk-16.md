@@ -1,6 +1,6 @@
 ---
 title: 'TUI: column building for all groupings (pure)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-15: blocked_by
   tazk-2: child_of
 created_at: 2026-11-06T03:28:37.354754628+00:00
-updated_at: 2026-11-06T06:09:23.330691338+00:00
+updated_at: 2026-11-06T17:19:31.548346918+00:00
+closed_at: 2026-11-06T17:19:31.548346918+00:00
 ---
 
 # Description

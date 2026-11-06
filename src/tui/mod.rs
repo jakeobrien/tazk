@@ -36,6 +36,19 @@ pub enum GroupByArg {
     Priority,
 }
 
+impl GroupByArg {
+    /// The grouping `g` switches to: epic → status → role → type → priority → epic.
+    pub fn next(self) -> Self {
+        match self {
+            GroupByArg::Epic => GroupByArg::Status,
+            GroupByArg::Status => GroupByArg::Role,
+            GroupByArg::Role => GroupByArg::Type,
+            GroupByArg::Type => GroupByArg::Priority,
+            GroupByArg::Priority => GroupByArg::Epic,
+        }
+    }
+}
+
 /// Command-line flags. They only set the initial view state.
 ///
 /// `VALUES` flags are repeatable and/or comma-separated; `none` selects

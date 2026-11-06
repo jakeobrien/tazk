@@ -368,6 +368,7 @@ pub fn update(app: &mut App, action: Action) {
             app.search_active = false;
         }
         Action::ClearSearchFromGrid => app.query_mut().clear(),
+        Action::CycleGrouping => app.grouping = app.grouping.next(),
 
         // EXTENSION POINTS, each handled by its own issue:
         // - navigation: Move, Column*, OpenDetail, Detail*, NextLink, PrevLink,
@@ -381,7 +382,6 @@ pub fn update(app: &mut App, action: Action) {
         | Action::ColumnTop
         | Action::ColumnBottom
         | Action::OpenDetail
-        | Action::CycleGrouping
         | Action::OpenPicker(_)
         | Action::ResetFilters
         | Action::DetailLineUp
