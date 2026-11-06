@@ -1,0 +1,32 @@
+---
+title: 'TUI: triage detail view'
+status: open
+priority: 2
+issue_type: task
+role: agent
+effort: 2
+labels:
+- tui
+dependencies:
+  tazk-26: blocked_by
+  tazk-28: blocked_by
+  tazk-29: blocked_by
+  tazk-30: blocked_by
+  tazk-4: child_of
+created_at: 2026-11-06T03:28:37.374700170+00:00
+updated_at: 2026-11-06T03:28:37.488433128+00:00
+---
+
+# Description
+
+Spec docs/tui-spec.md §9.5.
+
+- Header: filename, plus the parsed creation time (local, to the minute) when the name is standard.
+- Full text rendered as markdown with the shared renderer.
+- No properties or relationships; `Tab`/`Enter` do nothing. Scrolling keys as §9.6.
+- Works in split view (live-follow) and full-screen, using the same layout logic as issues.
+
+# Acceptance Criteria
+
+- Snapshot tests: triage detail full-screen (standard name) and in split view (non-standard name, no time shown).
+- Key test: `Tab`/`Enter` in triage detail leave state unchanged; `Esc` returns to grid.

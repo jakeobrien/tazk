@@ -1,0 +1,36 @@
+---
+title: 'TUI: background reload with state preservation (focus, 10 s tick, `R`)'
+status: open
+priority: 1
+issue_type: task
+role: agent
+effort: 3
+labels:
+- tui
+dependencies:
+  tazk-11: blocked_by
+  tazk-19: blocked_by
+  tazk-25: blocked_by
+  tazk-30: blocked_by
+  tazk-5: child_of
+  tazk-8: blocked_by
+  tazk-9: blocked_by
+created_at: 2026-11-06T03:28:37.376068461+00:00
+updated_at: 2026-11-06T03:28:37.499072336+00:00
+---
+
+# Description
+
+Spec docs/tui-spec.md §3.1, §3.3, §3.4.
+
+- `Snapshot::load(storage)` using the tolerant issue + triage loaders (read lock only).
+- Initial load happens before the first draw (or shows a brief loading state).
+- Reload triggers: `FocusGained`, 10 s tick, `R`. Run loads on a background thread and deliver `Action::Reloaded(Snapshot)` through the event loop so input stays responsive; coalesce overlapping requests (at most one load in flight).
+- On apply: keep filters, search and grouping; keep selection by issue ID / triage filename if still visible, else the selection-disappears rule; keep the link stack only if every ID still exists, else clear it; keep scroll positions where possible (clamped).
+
+# Acceptance Criteria
+
+- Unit tests on `apply_reload`: selection kept by ID when the item moves to another column/row; selection fallback when the item disappears; link stack kept vs cleared; filters/search/grouping unchanged; detail scroll clamped when content shrinks.
+- Manual/integration check: editing an issue file in another shell shows up within 10 s, immediately on focus regain (in a focus-reporting terminal), and immediately on `R`.
+- A deliberately slow loader (test double) does not block key handling.
+- A new bad file appearing between reloads updates the `⚠ N skipped` count.

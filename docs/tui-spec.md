@@ -24,10 +24,11 @@ side by side.
 - A "no grouping" (plain wrapped) layout for issues.
 - Special rendering of nested epics (§5.2).
 
-### Prerequisite (separate work)
+### Issue types
 
-Issue types are being culled to the five common ones (`bug`, `feature`, `task`,
-`epic`, `chore`) in a separate thread. This spec assumes only those five exist.
+The TUI supports all seven issue types: `epic`, `spec`, `feature`, `bug`,
+`task`, `gate`, `chore`. Wherever types are listed (type grouping, type filter,
+picker, colors) all seven appear, in that order.
 
 ## 2. Launch and packaging
 
@@ -191,7 +192,7 @@ property can be unset.
 |----------|--------------|
 | status | open, in_progress, blocked, deferred, closed |
 | role | agent, human, (none) |
-| type | epic, feature, bug, task, chore |
+| type | epic, spec, feature, bug, task, gate, chore |
 | priority | P0, P1, P2, P3, P4, then any other values in numeric order |
 
 Because empty columns are hidden, the `closed` column only appears when the
@@ -478,7 +479,7 @@ Truecolor or 256-color is assumed. Suggested starting palette (to tune by eye):
 
 | Element | Values |
 |---------|--------|
-| Type (border) | epic = purple, feature = green, bug = red, task = blue, chore = gray |
+| Type (border) | epic = purple, spec = teal, feature = green, bug = red, task = blue, gate = yellow, chore = gray |
 | Role | agent = cyan, human = magenta |
 | Status | open = default/white, in_prog = yellow, blocked = red, deferred = dim, closed = dim + strikethrough |
 | Priority | P0 red → P1 orange → P2 yellow → P3 default → P4 dim |

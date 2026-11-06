@@ -1,0 +1,32 @@
+---
+title: 'TUI: markdown body rendering via tui-markdown'
+status: open
+priority: 1
+issue_type: task
+role: agent
+effort: 2
+labels:
+- tui
+dependencies:
+  tazk-12: blocked_by
+  tazk-3: child_of
+  tazk-7: blocked_by
+created_at: 2026-11-06T03:28:37.368860503+00:00
+updated_at: 2026-11-06T03:28:37.458741586+00:00
+---
+
+# Description
+
+Spec docs/tui-spec.md §9.3.
+
+- Build markdown from Description, Design, Acceptance Criteria, Notes in that order, each under its `#` heading, skipping empty sections.
+- Render with `tui-markdown` (syntax highlighting for fenced code via its `highlight-code` feature) into `Text`, wrapped to the pane width.
+- Entirely empty body → dim `(no description)`.
+- Expose the wrapped line count for a given width so the detail state can clamp scrolling.
+- Same renderer is reused for triage item text.
+
+# Acceptance Criteria
+
+- Snapshot tests: all four sections; only Notes present (others skipped); empty body shows `(no description)`; a fenced `rust` code block renders with highlight styles (style assertion, not just text).
+- Wrapped line count matches what ratatui `Paragraph` renders at widths 40 and 80 (test).
+- Rendering a large body (e.g. 2,000 lines) for each redraw is cached or fast enough not to lag input (note the approach in code comments).

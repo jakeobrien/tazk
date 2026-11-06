@@ -1,0 +1,36 @@
+---
+title: 'TUI: theme palette and badge spans'
+status: open
+priority: 1
+issue_type: task
+role: agent
+effort: 2
+labels:
+- tui
+dependencies:
+  tazk-2: child_of
+  tazk-7: blocked_by
+created_at: 2026-11-06T03:28:37.356129128+00:00
+updated_at: 2026-11-06T06:09:23.341230338+00:00
+---
+
+# Description
+
+Spec docs/tui-spec.md §5.4 badges and §12 colors. Centralise every style in `ui/theme.rs`.
+
+- Type border colors: epic purple, spec teal, feature green, bug red, task blue, gate yellow, chore gray (all seven types).
+- Role: agent cyan, human magenta, unset = dim `—`.
+- Status labels `open`, `in_prog`, `blocked`, `deferred`, `closed`: open default, in_prog yellow, blocked red, deferred dim, closed dim + strikethrough.
+- Priority `P<n>` red→orange→yellow→default→dim for 0..4; <0 uses P0 color, >4 uses P4 color, label shows the real value.
+- Effort: 5 dots `●`/`○` filled to the value; unset = dim `—`.
+- Open-blockers `⊘` orange.
+- `dim(style)` transform used for dimmed epic headers (all colors reduced).
+- Only one-cell-wide symbols (`⊘ ● ○ — …`), no emoji. Truecolor/256-color assumed.
+
+# Acceptance Criteria
+
+- Unit tests for badge text + style: priority -1 → `P-1` in P0 color, 7 → `P7` in P4 color; effort 2 → `●●○○○`; unset role/effort → dim `—`; closed status has strikethrough.
+- `dim()` applied to every badge yields a style with dimmed/reduced colors (test).
+- No color literals outside `theme.rs` (review check).
+
+- Every `IssueType` variant (including `spec` and `gate`) maps to its own border color via an exhaustive `match` with no wildcard arm; unit test covers all seven.

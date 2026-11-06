@@ -1,0 +1,21 @@
+---
+title: 'TUI: triage mode (grid + detail)'
+status: open
+priority: 2
+issue_type: epic
+role: agent
+effort: 3
+labels:
+- tui
+created_at: 2026-11-06T03:28:37.336042128+00:00
+updated_at: 2026-11-06T03:28:37.336042128+00:00
+---
+
+# Description
+
+Triage mode (docs/tui-spec.md §9.5, §10): wrapped grid of triage cells, triage detail, search.
+
+# Acceptance Criteria
+
+- All child issues closed.
+- `m` switches to Triage mode; grid, search and detail behave as in spec §9.5 and §10 with snapshot tests.
