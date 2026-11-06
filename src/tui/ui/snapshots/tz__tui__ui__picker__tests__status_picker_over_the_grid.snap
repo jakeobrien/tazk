@@ -1,0 +1,34 @@
+---
+source: src/tui/ui/picker.rs
+expression: "render_app(&mut app, 100, 30)"
+---
+ Issues (4) │ Triage (0)                                                                group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                     3 of 4
+ No epic ──────────────────── 2  e-1 Auth rework ──────────── 1
+┏ e-1 ━━━━━━━━━━━━━━━━━━━━━━━━━┓╭ e-1 ─────────────────────────╮
+┃ Auth rework                  ┃│ Auth rework                  │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┃ —  open  P1  —               ┃│ —  open  P1  —               │
+┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛╰────────────────────── epic ──╯
+╭ t-2 ─────────────────────────╮╭ t-1 ─────────────────────────╮
+│ Fix redirect                 ││ Login page                   │
+│                              ││       ┌ Status ──────────┐   │
+│                              ││       │ [x] open         │   │
+│                              ││       │ [x] in_progress  │   │
+│ —  open  P1  —               ││ —  ope│ [x] blocked      │   │
+╰────────────────────── task ──╯╰───────│ [x] deferred     │ ──╯
+                                        │ [ ] closed       │
+                                        └ space · a/n · ⏎ ─┘
+
+
+
+
+
+
+
+
+
+
+ ↑/↓ move  Space toggle  a/n all/none  Enter apply  Esc cancel

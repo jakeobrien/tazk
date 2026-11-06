@@ -33,18 +33,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     bars::draw_mode_bar(frame, areas.mode_bar, app);
     bars::draw_filter_bar(frame, areas.filter_bar, app);
     bars::draw_hint_bar(frame, areas.hint_bar, app);
+    // Where the issues grid is drawn, if at all (the picker is centered over it).
+    let mut grid_area = None;
     if app.full_screen_detail {
         detail::draw_detail_pane(frame, areas.main, app, true);
     } else if app.is_split() {
         // Grid on the left half, detail pane on the right (spec §8).
-        let (grid_area, detail_area) = layout::split_main(areas.main);
+        let (left, detail_area) = layout::split_main(areas.main);
         if app.mode == ModeArg::Issues {
-            grid::draw_grid(frame, grid_area, app);
+            grid::draw_grid(frame, left, app);
+            grid_area = Some(left);
         }
         let focused = app.focus == Focus::Detail;
         detail::draw_detail_pane(frame, detail_area, app, focused);
     } else if app.mode == ModeArg::Issues {
         grid::draw_grid(frame, areas.main, app);
+        grid_area = Some(areas.main);
+    }
+    if let (Some(area), Some(picker)) = (grid_area, &app.picker) {
+        picker::draw_picker(frame, area, picker);
     }
     // The triage grid is drawn by a later issue.
 }

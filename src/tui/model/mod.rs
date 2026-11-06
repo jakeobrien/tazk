@@ -6,6 +6,7 @@ pub mod columns;
 pub mod detail;
 pub mod filter;
 pub mod grid;
+pub mod picker;
 pub mod relations;
 pub mod search;
 pub mod sort;

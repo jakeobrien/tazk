@@ -1,6 +1,6 @@
 ---
 title: 'TUI: filter picker popup (state + render)'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -14,7 +14,8 @@ dependencies:
   tazk-19: blocked_by
   tazk-2: child_of
 created_at: 2026-11-06T03:28:37.363686420+00:00
-updated_at: 2026-11-06T03:28:37.441832420+00:00
+updated_at: 2026-11-06T20:45:11.900023623+00:00
+closed_at: 2026-11-06T20:45:11.900023623+00:00
 ---
 
 # Description

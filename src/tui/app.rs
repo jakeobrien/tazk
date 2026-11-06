@@ -6,6 +6,7 @@ use super::keymap::Context;
 use super::model::detail::DetailState;
 use super::model::filter::{visible_issues, Filters};
 use super::model::grid::{GridState, Viewport};
+use super::model::picker::PickerState;
 use super::model::relations::{relationships, Relationships};
 use super::model::search::visible_triage;
 use super::ui::layout::{grid_capacity, LayoutMode};
@@ -168,6 +169,9 @@ pub struct App {
     /// Detail is shown full-screen (narrow layout only).
     pub full_screen_detail: bool,
     pub overlay: Overlay,
+    /// The open filter picker's draft; `Some` exactly while
+    /// `overlay == Overlay::Picker(_)` (spec §6.1).
+    pub picker: Option<PickerState>,
     /// Transient message for the hint bar; `None` when there is nothing to show.
     pub status: Option<String>,
     /// When `status` was set, for expiry ([`App::expire_status`]).
@@ -231,6 +235,7 @@ impl App {
             focus: Focus::Grid,
             full_screen_detail: false,
             overlay: Overlay::None,
+            picker: None,
             status: None,
             status_since: None,
             selection: PerMode::default(),
@@ -339,6 +344,33 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// `r`/`s`/`t`/`p`/`e`: open the picker for `kind` (issues mode, no
+    /// other overlay open), seeded from the current filters.
+    fn open_picker(&mut self, kind: FilterKind) {
+        if self.mode != ModeArg::Issues || self.overlay != Overlay::None {
+            return;
+        }
+        self.picker = Some(PickerState::open(kind, &self.filters, &self.snapshot));
+        self.overlay = Overlay::Picker(kind);
+    }
+
+    fn close_picker(&mut self) {
+        self.picker = None;
+        if matches!(self.overlay, Overlay::Picker(_)) {
+            self.overlay = Overlay::None;
+        }
+    }
+
+    /// `Enter` in the picker: the draft becomes the filter. Selecting nothing
+    /// is allowed (nothing is visible). The caller recomputes the grid.
+    fn apply_picker(&mut self) {
+        if let Some(p) = self.picker.take() {
+            self.filters
+                .apply_picker(p.kind, &self.snapshot, &p.selected());
+        }
+        self.close_picker();
     }
 
     /// `Esc` in the detail: pop the link stack, else close the full-screen
@@ -547,6 +579,14 @@ fn apply(app: &mut App, action: Action) {
             app.snapshot = *snapshot;
             // The grid keeps the selection by ID (refresh_grid, below).
             // EXTENSION POINT (reload issue): keep or clear the link stack (spec §3.4).
+            // A picker whose rows changed under it (new priorities) is dropped.
+            if app
+                .picker
+                .as_ref()
+                .is_some_and(|p| p.is_stale(&app.filters, &app.snapshot))
+            {
+                app.close_picker();
+            }
         }
 
         // Global
@@ -604,25 +644,40 @@ fn apply(app: &mut App, action: Action) {
         // EXTENSION POINTS, each handled by its own issue:
         // - navigation: OpenEditor
         //   (grid movement: Move, Column* are handled by `App::navigate`)
-        // - filters: OpenPicker, Picker*
         Action::CopyId => match app.copy_text() {
             Some(text) => app.copy_request = Some(text),
             None => app.set_status("Nothing to copy"),
         },
         Action::OpenDetail => app.open_detail(),
+        Action::OpenPicker(kind) => app.open_picker(kind),
+        Action::PickerMove(dir) => {
+            if let Some(p) = &mut app.picker {
+                p.move_cursor(dir);
+            }
+        }
+        Action::PickerToggle => {
+            if let Some(p) = &mut app.picker {
+                p.toggle();
+            }
+        }
+        Action::PickerAll => {
+            if let Some(p) = &mut app.picker {
+                p.select_all();
+            }
+        }
+        Action::PickerNone => {
+            if let Some(p) = &mut app.picker {
+                p.select_none();
+            }
+        }
+        Action::PickerApply => app.apply_picker(),
+        Action::PickerCancel => app.close_picker(),
         Action::OpenEditor
         | Action::Move(_)
         | Action::ColumnPageUp
         | Action::ColumnPageDown
         | Action::ColumnTop
-        | Action::ColumnBottom
-        | Action::OpenPicker(_)
-        | Action::PickerMove(_)
-        | Action::PickerToggle
-        | Action::PickerAll
-        | Action::PickerNone
-        | Action::PickerApply
-        | Action::PickerCancel => {}
+        | Action::ColumnBottom => {}
     }
     app.refresh_grid();
     app.sync_contexts();
@@ -1606,5 +1661,180 @@ mod tests {
             assert_eq!(a.focus, Focus::Grid);
             assert!(!a.full_screen_detail);
         }
+    }
+    // ---- Filter picker popup (spec §6.1)
+
+    fn picker_app() -> App {
+        grid_app(vec![
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B")
+                .priority(1)
+                .status(crate::types::Status::Blocked),
+            fixtures::issue("z", "Z").priority(2).closed(),
+        ])
+    }
+
+    fn shown(a: &App) -> Vec<String> {
+        a.grid
+            .columns()
+            .iter()
+            .flat_map(|c| c.cells.clone())
+            .collect()
+    }
+
+    #[test]
+    fn filter_keys_open_the_picker_for_their_property() {
+        for (k, kind) in [
+            ('r', FilterKind::Role),
+            ('s', FilterKind::Status),
+            ('t', FilterKind::Type),
+            ('p', FilterKind::Priority),
+            ('e', FilterKind::Effort),
+        ] {
+            let mut a = picker_app();
+            send(&mut a, key(KeyCode::Char(k)));
+            assert_eq!(a.overlay, Overlay::Picker(kind));
+            assert_eq!(a.context(), Context::Picker);
+            assert_eq!(a.picker.as_ref().unwrap().kind, kind);
+        }
+    }
+
+    #[test]
+    fn toggle_then_esc_leaves_filters_unchanged() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('s')));
+        // Rows: open, in_progress, blocked, deferred, closed (unticked).
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char(' '))); // untick blocked
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char(' '))); // tick closed
+                                               // Nothing applies while the picker is open.
+        assert_eq!(a.filters, Filters::default());
+        assert_eq!(shown(&a), ["a", "b"]);
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.filters, Filters::default());
+        assert_eq!(shown(&a), ["a", "b"]);
+        assert_eq!(a.overlay, Overlay::None);
+        assert!(a.picker.is_none());
+        assert_eq!(a.context(), Context::Grid);
+        // Reopening shows the real filters, not the discarded draft.
+        send(&mut a, key(KeyCode::Char('s')));
+        assert_eq!(
+            a.picker.as_ref().unwrap().selected(),
+            [true, true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn toggle_then_enter_applies_and_recomputes_the_grid() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('s')));
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char('j')));
+        send(&mut a, key(KeyCode::Char(' '))); // untick blocked
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.overlay, Overlay::None);
+        assert_eq!(a.context(), Context::Grid);
+        assert_eq!(shown(&a), ["a"]);
+        assert_eq!(a.counts(), (1, 3));
+    }
+
+    #[test]
+    fn applying_closed_shows_closed_issues() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('s')));
+        send(&mut a, key(KeyCode::End));
+        for _ in 0..4 {
+            send(&mut a, key(KeyCode::Char('j')));
+        }
+        assert_eq!(a.picker.as_ref().unwrap().cursor, 4);
+        send(&mut a, key(KeyCode::Char(' ')));
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(
+            a.filters.status,
+            crate::tui::model::filter::FilterSet::all()
+        );
+        assert_eq!(shown(&a), ["a", "b", "z"]);
+    }
+
+    #[test]
+    fn selecting_the_selected_issue_away_follows_the_disappearing_rule() {
+        let mut a = picker_app();
+        assert_eq!(selected(&a), Some("a"));
+        send(&mut a, key(KeyCode::Char('p')));
+        // Rows P0..P4: untick P0.
+        send(&mut a, key(KeyCode::Char(' ')));
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(shown(&a), ["b"]);
+        assert_eq!(selected(&a), Some("b"));
+    }
+
+    #[test]
+    fn a_and_n_select_all_and_none() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('s')));
+        send(&mut a, key(KeyCode::Char('a')));
+        assert!(a.picker.as_ref().unwrap().selected().iter().all(|s| *s));
+        send(&mut a, key(KeyCode::Char('n')));
+        assert!(a.picker.as_ref().unwrap().selected().iter().all(|s| !*s));
+        send(&mut a, key(KeyCode::Char('a')));
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(shown(&a), ["a", "b", "z"]);
+    }
+
+    #[test]
+    fn empty_apply_shows_no_issues() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('s')));
+        send(&mut a, key(KeyCode::Char('n')));
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.counts(), (0, 3));
+        assert_eq!(selected(&a), None);
+        assert!(a.grid.columns().is_empty());
+        let text = fixtures::render_app(&mut a, 100, 40);
+        assert!(text.contains("No matching issues"), "{text}");
+        assert!(text.contains("status:none selected"), "{text}");
+    }
+
+    #[test]
+    fn picker_swallows_other_keys() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('s')));
+        for c in ['q', 'g', 'm', '/', 'c', 'r'] {
+            send(&mut a, key(KeyCode::Char(c)));
+        }
+        assert!(!a.should_quit && !a.search_active);
+        assert_eq!(a.mode, ModeArg::Issues);
+        assert_eq!(a.overlay, Overlay::Picker(FilterKind::Status));
+        assert_eq!(a.grouping, GroupByArg::Epic);
+    }
+
+    #[test]
+    fn picker_keys_are_inactive_in_triage_mode() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('m')));
+        for c in ['r', 's', 't', 'p', 'e'] {
+            send(&mut a, key(KeyCode::Char(c)));
+            assert_eq!(a.overlay, Overlay::None);
+            assert!(a.picker.is_none());
+        }
+        // Even a direct action is ignored.
+        update(&mut a, Action::OpenPicker(FilterKind::Status));
+        assert!(a.picker.is_none());
+    }
+
+    #[test]
+    fn a_reload_that_changes_the_rows_closes_the_picker() {
+        let mut a = picker_app();
+        send(&mut a, key(KeyCode::Char('p')));
+        let same = a.snapshot.clone();
+        update(&mut a, Action::Reloaded(Box::new(same)));
+        assert!(a.picker.is_some());
+        let snap = fixtures::snapshot_of(vec![fixtures::issue("n", "N").priority(9)]);
+        update(&mut a, Action::Reloaded(Box::new(snap)));
+        assert!(a.picker.is_none());
+        assert_eq!(a.overlay, Overlay::None);
     }
 }
