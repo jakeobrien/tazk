@@ -1,6 +1,6 @@
 ---
 title: 'TUI: relationships model for the detail view (pure)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-7: blocked_by
   tazk-8: blocked_by
 created_at: 2026-11-06T03:28:37.366319336+00:00
-updated_at: 2026-11-06T03:28:37.449697795+00:00
+updated_at: 2026-11-06T17:50:24.390130948+00:00
+closed_at: 2026-11-06T17:50:24.390130948+00:00
 ---
 
 # Description
