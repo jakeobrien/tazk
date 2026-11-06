@@ -73,6 +73,17 @@ impl LayoutMode {
     }
 }
 
+/// Split `main` into the grid (left) and detail pane (right) halves of the
+/// split view (spec §8). The grid gets `width / 2` (what [`grid_capacity`]
+/// counts columns in), the detail pane the rest.
+pub fn split_main(main: Rect) -> (Rect, Rect) {
+    let left = main.width / 2;
+    (
+        Rect::new(main.x, main.y, left, main.height),
+        Rect::new(main.x + left, main.y, main.width - left, main.height),
+    )
+}
+
 /// Height of a column's title bar.
 pub const COLUMN_TITLE_HEIGHT: u16 = 1;
 

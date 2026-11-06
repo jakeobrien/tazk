@@ -247,7 +247,7 @@ mod tests {
     }
 
     /// The three bar rows only (the grid between them is ignored).
-    fn bars(app: &App, width: u16) -> String {
+    fn bars(app: &mut App, width: u16) -> String {
         let text = render_app(app, width, 11);
         let lines: Vec<&str> = text.lines().collect();
         format!("{}\n{}\n{}", lines[0], lines[1], lines[10])
@@ -266,8 +266,8 @@ mod tests {
 
     #[test]
     fn issues_mode_default_bars() {
-        let app = fixture(ModeArg::Issues);
-        insta::assert_snapshot!(bars(&app, 100));
+        let mut app = fixture(ModeArg::Issues);
+        insta::assert_snapshot!(bars(&mut app, 100));
     }
 
     #[test]
@@ -275,14 +275,14 @@ mod tests {
         let mut app = with_skipped(fixture(ModeArg::Issues), 2);
         app.search.issues = "log".into();
         app.filters.role = FilterSet::only([None]);
-        insta::assert_snapshot!(bars(&app, 100));
+        insta::assert_snapshot!(bars(&mut app, 100));
     }
 
     #[test]
     fn triage_mode_bars_have_no_filter_keys() {
         let mut app = with_skipped(fixture(ModeArg::Triage), 1);
         app.search.triage = "apple".into();
-        insta::assert_snapshot!(bars(&app, 100));
+        insta::assert_snapshot!(bars(&mut app, 100));
 
         let hints = keymap::hints(&app);
         let keys: Vec<&str> = hints.iter().map(|h| h.keys.as_str()).collect();
@@ -299,17 +299,17 @@ mod tests {
         let mut app = fixture(ModeArg::Issues);
         type_str(&mut app, "/log");
         assert!(app.search_active);
-        insta::assert_snapshot!(bars(&app, 100));
+        insta::assert_snapshot!(bars(&mut app, 100));
     }
 
     #[test]
     fn transient_message_replaces_hints() {
         let mut app = fixture(ModeArg::Issues);
         app.set_status("clipboard unavailable");
-        insta::assert_snapshot!(bars(&app, 100));
+        insta::assert_snapshot!(bars(&mut app, 100));
         // The next key press clears it.
         send_key(&mut app, crossterm::event::KeyCode::Char('~'));
-        assert!(bars(&app, 100).contains("help"));
+        assert!(bars(&mut app, 100).contains("help"));
     }
 
     #[test]
@@ -330,8 +330,8 @@ mod tests {
 
     #[test]
     fn mode_bar_highlights_current_mode_and_shows_grouping() {
-        let app = fixture(ModeArg::Issues);
-        let out = render_app_styled(&app, 100, 11);
+        let mut app = fixture(ModeArg::Issues);
+        let out = render_app_styled(&mut app, 100, 11);
         let styles: Vec<&str> = out
             .lines()
             .skip_while(|l| *l != "--- styles ---")
@@ -344,7 +344,7 @@ mod tests {
 
         let mut triage = fixture(ModeArg::Triage);
         triage.grouping = GroupByArg::Status;
-        let top = render_app(&triage, 100, 11)
+        let top = render_app(&mut triage, 100, 11)
             .lines()
             .next()
             .unwrap()
@@ -352,7 +352,7 @@ mod tests {
         assert!(top.contains("Triage (3)") && !top.contains("group"));
         let mut issues = fixture(ModeArg::Issues);
         issues.grouping = GroupByArg::Priority;
-        assert!(render_app(&issues, 100, 11)
+        assert!(render_app(&mut issues, 100, 11)
             .lines()
             .next()
             .unwrap()
@@ -408,15 +408,15 @@ mod tests {
 
     #[test]
     fn no_skipped_marker_without_skipped_files() {
-        let app = fixture(ModeArg::Issues);
-        assert!(!bars(&app, 100).contains("skipped"));
+        let mut app = fixture(ModeArg::Issues);
+        assert!(!bars(&mut app, 100).contains("skipped"));
     }
 
     #[test]
     fn narrow_terminal_keeps_counts_visible() {
         let mut app = with_skipped(fixture(ModeArg::Issues), 1);
         update(&mut app, Action::Resize(40, 11));
-        let text = bars(&app, 40);
+        let text = bars(&mut app, 40);
         let filter_row = text.lines().nth(1).unwrap();
         assert!(filter_row.ends_with("3 of 4  ⚠ 1 skipped"), "{filter_row}");
     }

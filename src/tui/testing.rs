@@ -225,6 +225,11 @@ fn draw_buffer(width: u16, height: u16, draw: impl FnOnce(&mut Frame)) -> Buffer
     term.backend().buffer().clone()
 }
 
+/// Draw and return the raw buffer (for cell-level assertions).
+pub fn render_buffer(width: u16, height: u16, draw: impl FnOnce(&mut Frame)) -> Buffer {
+    draw_buffer(width, height, draw)
+}
+
 /// The buffer's text, one line per row, trailing spaces trimmed.
 pub fn buffer_text(buf: &Buffer) -> String {
     let area = buf.area;
@@ -288,13 +293,13 @@ pub fn render_styled(width: u16, height: u16, draw: impl FnOnce(&mut Frame)) -> 
 
 /// Render the whole app. The app's recorded size is *not* changed; set it with
 /// `Action::Resize` first if layout depends on it.
-pub fn render_app(app: &App, width: u16, height: u16) -> String {
-    render(width, height, |f| super::ui::draw(f, app))
+pub fn render_app(app: &mut App, width: u16, height: u16) -> String {
+    render(width, height, |f| super::ui::draw(f, &mut *app))
 }
 
 /// [`render_app`] with a style dump.
-pub fn render_app_styled(app: &App, width: u16, height: u16) -> String {
-    render_styled(width, height, |f| super::ui::draw(f, app))
+pub fn render_app_styled(app: &mut App, width: u16, height: u16) -> String {
+    render_styled(width, height, |f| super::ui::draw(f, &mut *app))
 }
 
 #[cfg(test)]
@@ -309,7 +314,7 @@ mod tests {
     fn empty_app_snapshot() {
         let mut app = App::from_snapshot(ModeArg::Issues, Snapshot::default());
         update(&mut app, Action::Resize(40, 11));
-        insta::assert_snapshot!(render_app(&app, 40, 11));
+        insta::assert_snapshot!(render_app(&mut app, 40, 11));
     }
 
     #[test]

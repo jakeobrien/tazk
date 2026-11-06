@@ -9,6 +9,7 @@ use super::model::grid::{GridState, Viewport};
 use super::model::relations::{relationships, Relationships};
 use super::model::search::visible_triage;
 use super::ui::layout::{grid_capacity, LayoutMode};
+use super::ui::markdown::MarkdownCache;
 use super::{GroupByArg, ModeArg, TuiArgs};
 use std::time::{Duration, Instant};
 
@@ -178,6 +179,8 @@ pub struct App {
     pub grid: GridState,
     /// Detail view: scroll, relationship highlight and link stack (spec §9).
     pub detail: DetailState,
+    /// Rendered-markdown cache for the detail body (rendering only).
+    pub markdown: MarkdownCache,
     /// Input contexts, innermost last. Never empty (starts as `[Grid]`).
     /// Derived; see [`App::sync_contexts`].
     pub contexts: Vec<Context>,
@@ -233,6 +236,7 @@ impl App {
             selection: PerMode::default(),
             grid: GridState::default(),
             detail: DetailState::default(),
+            markdown: MarkdownCache::new(),
             contexts: vec![Context::Grid],
             should_quit: false,
             size: (0, 0),
@@ -297,6 +301,44 @@ impl App {
             .and_then(|id| self.snapshot.issue(id))
             .map(|issue| relationships(issue, &self.snapshot))
             .unwrap_or_default()
+    }
+
+    /// `Enter` in the grid (spec §8): focus the detail pane in the split view,
+    /// open the full-screen detail otherwise. Nothing selected: nothing to open.
+    fn open_detail(&mut self) {
+        if self.selection.get(self.mode).is_none() {
+            return;
+        }
+        if self.is_split() {
+            self.focus = Focus::Detail;
+        } else {
+            self.full_screen_detail = true;
+        }
+    }
+
+    /// Keep the detail state consistent when a resize crossed the split
+    /// threshold (`was` is the layout before the resize; spec §8). The
+    /// selection and link stack are untouched.
+    ///
+    /// - narrow -> split: a full-screen detail becomes the split with the
+    ///   detail pane focused; otherwise focus stays on the grid.
+    /// - split -> narrow: a focused detail pane becomes the full-screen
+    ///   detail; with the grid focused only the grid remains.
+    ///
+    /// Invariant afterwards: `full_screen_detail` only in the narrow layout,
+    /// and `focus == Detail` only in the split layout.
+    fn reconcile_layout(&mut self, was: LayoutMode) {
+        match (was, self.layout()) {
+            (LayoutMode::Narrow, LayoutMode::Split) if self.full_screen_detail => {
+                self.full_screen_detail = false;
+                self.focus = Focus::Detail;
+            }
+            (LayoutMode::Split, LayoutMode::Narrow) if self.focus == Focus::Detail => {
+                self.focus = Focus::Grid;
+                self.full_screen_detail = true;
+            }
+            _ => {}
+        }
     }
 
     /// `Esc` in the detail: pop the link stack, else close the full-screen
@@ -496,9 +538,9 @@ fn apply(app: &mut App, action: Action) {
     match action {
         // Events
         Action::Resize(w, h) => {
+            let was = app.layout();
             app.size = (w, h);
-            // EXTENSION POINT (layout switching issue): reconcile `focus` /
-            // `full_screen_detail` when the width crosses the split threshold.
+            app.reconcile_layout(was);
         }
         Action::FocusGained | Action::Tick | Action::Reload => app.reload_requested = true,
         Action::Reloaded(snapshot) => {
@@ -560,20 +602,20 @@ fn apply(app: &mut App, action: Action) {
         | Action::DetailBack => app.detail_action(&action),
 
         // EXTENSION POINTS, each handled by its own issue:
-        // - navigation: OpenDetail, layout switching, OpenEditor
+        // - navigation: OpenEditor
         //   (grid movement: Move, Column* are handled by `App::navigate`)
         // - filters: OpenPicker, Picker*
         Action::CopyId => match app.copy_text() {
             Some(text) => app.copy_request = Some(text),
             None => app.set_status("Nothing to copy"),
         },
+        Action::OpenDetail => app.open_detail(),
         Action::OpenEditor
         | Action::Move(_)
         | Action::ColumnPageUp
         | Action::ColumnPageDown
         | Action::ColumnTop
         | Action::ColumnBottom
-        | Action::OpenDetail
         | Action::OpenPicker(_)
         | Action::PickerMove(_)
         | Action::PickerToggle
@@ -1342,5 +1384,227 @@ mod tests {
         assert_eq!(a.layout(), LayoutMode::Narrow);
         update(&mut a, Action::Resize(160, 40));
         assert_eq!(a.layout(), LayoutMode::Split);
+    }
+
+    // ---- Split pane vs full-screen detail and resize transitions (spec §8)
+
+    const NARROW: (u16, u16) = (120, 40);
+    const WIDE: (u16, u16) = (200, 50);
+
+    fn layout_app(size: (u16, u16)) -> App {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0).blocked_by("b"),
+            fixtures::issue("b", "B").priority(1),
+            fixtures::issue("c", "C").priority(2),
+        ]);
+        update(&mut a, Action::Resize(size.0, size.1));
+        a
+    }
+
+    fn resize(a: &mut App, size: (u16, u16)) {
+        update(a, Action::Resize(size.0, size.1));
+    }
+
+    #[test]
+    fn narrow_enter_opens_full_screen_detail_and_esc_returns_to_grid() {
+        let mut a = layout_app(NARROW);
+        send(&mut a, key(KeyCode::Down));
+        send(&mut a, key(KeyCode::Enter));
+        assert!(a.full_screen_detail);
+        assert_eq!(a.focus, Focus::Grid);
+        assert_eq!(a.context(), Context::Detail);
+        assert_eq!(displayed(&a), Some("b"));
+        send(&mut a, key(KeyCode::Esc));
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Grid);
+        assert_eq!(selected(&a), Some("b"));
+    }
+
+    #[test]
+    fn split_enter_focuses_the_detail_and_esc_returns_focus_to_the_grid() {
+        let mut a = layout_app(WIDE);
+        assert_eq!(a.focus, Focus::Grid);
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.focus, Focus::Detail);
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Detail);
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.focus, Focus::Grid);
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Grid);
+    }
+
+    #[test]
+    fn esc_with_a_link_stack_pops_before_leaving_in_both_layouts() {
+        for size in [NARROW, WIDE] {
+            let mut a = layout_app(size);
+            send(&mut a, key(KeyCode::Enter));
+            tab(&mut a);
+            send(&mut a, key(KeyCode::Enter));
+            assert_eq!(a.detail.stack(), ["b"], "{size:?}");
+            send(&mut a, key(KeyCode::Esc));
+            assert!(a.detail.stack().is_empty());
+            assert_eq!(a.context(), Context::Detail, "{size:?}");
+            send(&mut a, key(KeyCode::Esc));
+            assert_eq!(a.context(), Context::Grid, "{size:?}");
+        }
+    }
+
+    #[test]
+    fn enter_with_nothing_selected_opens_nothing() {
+        for size in [NARROW, WIDE] {
+            let mut a = App::from_snapshot(ModeArg::Issues, Snapshot::default());
+            resize(&mut a, size);
+            send(&mut a, key(KeyCode::Enter));
+            assert!(!a.full_screen_detail && a.focus == Focus::Grid, "{size:?}");
+        }
+    }
+
+    #[test]
+    fn split_detail_follows_the_grid_selection() {
+        let mut a = layout_app(WIDE);
+        assert_eq!(displayed(&a), Some("a"));
+        send(&mut a, key(KeyCode::Down));
+        assert_eq!(displayed(&a), Some("b"));
+        assert_eq!(a.focus, Focus::Grid);
+    }
+
+    #[test]
+    fn grid_focused_narrow_to_split_and_back_keeps_grid_focus() {
+        let mut a = layout_app(NARROW);
+        send(&mut a, key(KeyCode::Down));
+        resize(&mut a, WIDE);
+        assert_eq!(a.focus, Focus::Grid);
+        assert!(!a.full_screen_detail);
+        assert_eq!(selected(&a), Some("b"));
+        resize(&mut a, NARROW);
+        assert_eq!(a.focus, Focus::Grid);
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Grid);
+        assert_eq!(selected(&a), Some("b"));
+    }
+
+    #[test]
+    fn full_screen_detail_to_wide_becomes_split_with_detail_focused() {
+        let mut a = layout_app(NARROW);
+        send(&mut a, key(KeyCode::Down));
+        send(&mut a, key(KeyCode::Enter));
+        assert!(a.full_screen_detail);
+        resize(&mut a, WIDE);
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.focus, Focus::Detail);
+        assert_eq!(a.context(), Context::Detail);
+        assert_eq!(selected(&a), Some("b"));
+        // Esc then returns to the grid in the split.
+        send(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.focus, Focus::Grid);
+        assert!(!a.full_screen_detail);
+    }
+
+    #[test]
+    fn split_detail_focused_to_narrow_opens_full_screen_detail() {
+        let mut a = layout_app(WIDE);
+        send(&mut a, key(KeyCode::Down));
+        send(&mut a, key(KeyCode::Enter));
+        resize(&mut a, NARROW);
+        assert!(a.full_screen_detail);
+        assert_eq!(a.context(), Context::Detail);
+        assert_eq!(selected(&a), Some("b"));
+        assert_eq!(displayed(&a), Some("b"));
+        send(&mut a, key(KeyCode::Esc));
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Grid);
+    }
+
+    #[test]
+    fn resizes_within_a_layout_change_no_focus_state() {
+        let mut a = layout_app(NARROW);
+        send(&mut a, key(KeyCode::Enter));
+        resize(&mut a, (100, 30));
+        assert!(a.full_screen_detail);
+        resize(&mut a, (159, 30));
+        assert!(a.full_screen_detail);
+        let mut a = layout_app(WIDE);
+        send(&mut a, key(KeyCode::Enter));
+        resize(&mut a, (160, 30));
+        assert_eq!(a.focus, Focus::Detail);
+        assert!(!a.full_screen_detail);
+    }
+
+    #[test]
+    fn crossing_the_threshold_at_exactly_160() {
+        let mut a = layout_app((159, 40));
+        send(&mut a, key(KeyCode::Enter));
+        assert!(a.full_screen_detail);
+        resize(&mut a, (160, 40));
+        assert_eq!(a.focus, Focus::Detail);
+        resize(&mut a, (159, 40));
+        assert!(a.full_screen_detail);
+    }
+
+    #[test]
+    fn resizing_across_the_threshold_keeps_the_link_stack() {
+        let mut a = layout_app(WIDE);
+        send(&mut a, key(KeyCode::Enter));
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        resize(&mut a, NARROW);
+        assert_eq!(a.detail.stack(), ["b"]);
+        assert_eq!(displayed(&a), Some("b"));
+        assert_eq!(selected(&a), Some("a"));
+        resize(&mut a, WIDE);
+        assert_eq!(a.detail.stack(), ["b"]);
+        assert_eq!(a.focus, Focus::Detail);
+    }
+
+    #[test]
+    fn grid_columns_in_split_use_the_left_halfs_width() {
+        let mut a = layout_app((158, 40));
+        assert_eq!(a.viewport().columns, 4); // 158 / 32
+        resize(&mut a, (160, 40));
+        assert_eq!(a.viewport().columns, 2); // 80 / 32
+        resize(&mut a, (200, 40));
+        assert_eq!(a.viewport().columns, 3); // 100 / 32
+    }
+
+    #[test]
+    fn narrowing_to_one_column_keeps_the_selection_visible() {
+        let mut a = grid_app(
+            (0..4)
+                .map(|i| fixtures::issue(&format!("i{i}"), "x").priority(i))
+                .collect(),
+        );
+        send(&mut a, key(KeyCode::Char('g')));
+        send(&mut a, key(KeyCode::Char('g')));
+        send(&mut a, key(KeyCode::Char('g'))); // type: one column
+        resize(&mut a, WIDE);
+        send(&mut a, key(KeyCode::End));
+        let id = selected(&a).map(str::to_string);
+        resize(&mut a, NARROW);
+        assert_eq!(selected(&a).map(str::to_string), id);
+    }
+
+    #[test]
+    fn ctrl_u_d_in_the_grid_only_scroll_the_detail_in_split_view() {
+        let mut a = layout_app(NARROW);
+        a.detail.set_metrics(100, 10);
+        send(&mut a, ctrl('d'));
+        assert_eq!(a.detail.scroll(), 0);
+        resize(&mut a, WIDE);
+        send(&mut a, ctrl('d'));
+        assert_eq!(a.detail.scroll(), 5);
+        assert_eq!(a.focus, Focus::Grid);
+        send(&mut a, ctrl('u'));
+        assert_eq!(a.detail.scroll(), 0);
+    }
+
+    #[test]
+    fn esc_in_the_grid_never_changes_the_layout_state() {
+        for size in [NARROW, WIDE] {
+            let mut a = layout_app(size);
+            send(&mut a, key(KeyCode::Esc));
+            assert_eq!(a.focus, Focus::Grid);
+            assert!(!a.full_screen_detail);
+        }
     }
 }

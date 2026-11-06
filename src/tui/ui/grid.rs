@@ -139,7 +139,7 @@ mod tests {
     }
 
     /// The grid region of the rendered screen (bars cut off).
-    fn grid_text(app: &App, size: (u16, u16)) -> String {
+    fn grid_text(app: &mut App, size: (u16, u16)) -> String {
         render_app(app, size.0, size.1)
             .lines()
             .skip(TOP_BARS)
@@ -187,16 +187,16 @@ mod tests {
 
     #[test]
     fn grid_by_epic_with_dimmed_header_and_nested_epic() {
-        let app = app_at(fixture(), GroupByArg::Epic, WIDE);
+        let mut app = app_at(fixture(), GroupByArg::Epic, WIDE);
         let cols: Vec<_> = app.grid.columns().iter().map(|c| &c.title).collect();
         assert_eq!(cols.len(), 4, "{cols:?}");
-        insta::assert_snapshot!(grid_text(&app, WIDE));
+        insta::assert_snapshot!(grid_text(&mut app, WIDE));
     }
 
     #[test]
     fn dimmed_epic_header_is_dimmed_in_styles() {
-        let app = app_at(fixture(), GroupByArg::Epic, WIDE);
-        let out = render_app_styled(&app, WIDE.0, WIDE.1);
+        let mut app = app_at(fixture(), GroupByArg::Epic, WIDE);
+        let out = render_app_styled(&mut app, WIDE.0, WIDE.1);
         // The closed e-2 (third column, x 64..96) is the only dimmed epic.
         let dimmed = theme::dim(theme::type_style(IssueType::Epic)).fg.unwrap();
         let needle = format!("fg={dimmed:?}");
@@ -220,26 +220,26 @@ mod tests {
 
     #[test]
     fn grid_by_status() {
-        let app = app_at(fixture(), GroupByArg::Status, WIDE);
-        insta::assert_snapshot!(grid_text(&app, WIDE));
+        let mut app = app_at(fixture(), GroupByArg::Status, WIDE);
+        insta::assert_snapshot!(grid_text(&mut app, WIDE));
     }
 
     #[test]
     fn grid_by_role() {
-        let app = app_at(fixture(), GroupByArg::Role, WIDE);
-        insta::assert_snapshot!(grid_text(&app, WIDE));
+        let mut app = app_at(fixture(), GroupByArg::Role, WIDE);
+        insta::assert_snapshot!(grid_text(&mut app, WIDE));
     }
 
     #[test]
     fn grid_by_type() {
-        let app = app_at(fixture(), GroupByArg::Type, WIDE);
-        insta::assert_snapshot!(grid_text(&app, WIDE));
+        let mut app = app_at(fixture(), GroupByArg::Type, WIDE);
+        insta::assert_snapshot!(grid_text(&mut app, WIDE));
     }
 
     #[test]
     fn grid_by_priority() {
-        let app = app_at(fixture(), GroupByArg::Priority, WIDE);
-        insta::assert_snapshot!(grid_text(&app, WIDE));
+        let mut app = app_at(fixture(), GroupByArg::Priority, WIDE);
+        insta::assert_snapshot!(grid_text(&mut app, WIDE));
     }
 
     #[test]
@@ -249,7 +249,7 @@ mod tests {
         press(&mut app, Action::Move(Dir::Right));
         press(&mut app, Action::Move(Dir::Right));
         assert_eq!(app.grid.col_offset(), 1);
-        insta::assert_snapshot!(grid_text(&app, size));
+        insta::assert_snapshot!(grid_text(&mut app, size));
     }
 
     #[test]
@@ -263,7 +263,7 @@ mod tests {
             press(&mut app, Action::Move(Dir::Down));
         }
         assert_eq!(app.grid.row_offset(&app.grid.columns()[0].key), 2);
-        let text = grid_text(&app, size);
+        let text = grid_text(&mut app, size);
         assert!(!text.contains("v-0") && !text.contains("v-1"));
         assert!(text.contains("v-2") && text.contains("v-3"));
         insta::assert_snapshot!(text);
@@ -279,7 +279,7 @@ mod tests {
         );
         app.search.issues = "zzz".into();
         app.refresh_grid();
-        let out = render_app(&app, size.0, size.1);
+        let out = render_app(&mut app, size.0, size.1);
         let (y, line) = out
             .lines()
             .enumerate()
@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(line.find('N'), Some((60 - NO_MATCHES_MESSAGE.len()) / 2));
         // Middle of the main area (rows 2..11).
         assert_eq!(y, 2 + (12 - 3) / 2);
-        insta::assert_snapshot!(grid_text(&app, size));
+        insta::assert_snapshot!(grid_text(&mut app, size));
     }
 
     #[test]
@@ -299,8 +299,8 @@ mod tests {
             issue("t-2", "b").child_of("e-1"),
         ]);
         let size = (70, 12);
-        let app = app_at(snap, GroupByArg::Epic, size);
-        let text = grid_text(&app, size);
+        let mut app = app_at(snap, GroupByArg::Epic, size);
+        let text = grid_text(&mut app, size);
         // The epic's own column is the second one (after "No epic").
         let title: String = text
             .lines()
@@ -348,7 +348,7 @@ mod tests {
                     let id = app.grid.selected_id().unwrap().to_string();
                     let (_, rows) = grid_capacity(size);
                     let _ = rows;
-                    let out = render_app(&app, size.0, size.1);
+                    let out = render_app(&mut app, size.0, size.1);
                     // The selected cell has a thick border and its whole box is drawn.
                     let tops: Vec<_> = out.lines().filter(|l| l.contains('┏')).collect();
                     let bottoms = out.lines().filter(|l| l.contains('┗')).count();
@@ -367,10 +367,21 @@ mod tests {
     fn rendering_stays_inside_the_main_area() {
         // Split view: the grid only gets the left half.
         let size = (160, 20);
-        let app = app_at(fixture(), GroupByArg::Status, size);
-        let out = render_app(&app, size.0, size.1);
-        for line in out.lines().skip(TOP_BARS).take(usize::from(size.1) - 3) {
-            assert!(line.chars().count() <= 80, "{line}");
+        let mut app = app_at(fixture(), GroupByArg::Status, size);
+        let out = render_app(&mut app, size.0, size.1);
+        // The detail pane's border starts right after the left half, so
+        // nothing of the grid reaches column 80.
+        for (n, line) in out
+            .lines()
+            .skip(TOP_BARS)
+            .take(usize::from(size.1) - 3)
+            .enumerate()
+        {
+            let chars: Vec<char> = line.chars().collect();
+            let pane_edge = if n == 0 { '┌' } else { '│' };
+            let bottom = n == usize::from(size.1) - 4;
+            let want = if bottom { '└' } else { pane_edge };
+            assert_eq!(chars.get(80), Some(&want), "{line}");
         }
     }
 }

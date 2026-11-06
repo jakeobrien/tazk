@@ -181,6 +181,18 @@ pub fn empty_message_style() -> Style {
     Style::new().fg(DIM)
 }
 
+// --- Panes ---------------------------------------------------------------------
+
+/// Border of the detail pane: accented when it has focus (or is full-screen),
+/// dim when the grid has focus (spec §8).
+pub fn pane_border_style(focused: bool) -> Style {
+    if focused {
+        Style::new().fg(CYAN).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(DIM)
+    }
+}
+
 // --- Detail view -------------------------------------------------------------
 
 /// Marker in front of the highlighted relationship entry.

@@ -124,7 +124,7 @@ fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
     let mut next_tick = Instant::now() + TICK_INTERVAL;
     let mut clipboard = SystemClipboard;
     while !app.should_quit {
-        terminal.draw(|f| ui::draw(f, app))?;
+        terminal.draw(|f| ui::draw(f, &mut *app))?;
         debug_panic_hook();
 
         // Wake up for the next tick or to expire the status message.

@@ -1,0 +1,44 @@
+---
+source: src/tui/ui/mod.rs
+expression: "render_app(&mut app, 120, 40)"
+---
+ Issues (4) │ Triage (0)                                                                                    group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                                         4 of 4
+ No epic ──────────────────── 2  tz-1 Auth rework ─────────── 2
+╭ tz-1 ────────────────────────╮╭ tz-1 ────────────────────────╮
+│ Auth rework                  ││ Auth rework                  │
+│                              ││                              │
+│                              ││                              │
+│                              ││                              │
+│ —  open  P0  —               ││ —  open  P0  —               │
+╰────────────────────── epic ──╯╰────────────────────── epic ──╯
+╭ tz-4 ────────────────────────╮┏ tz-2 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+│ Unrelated chore              │┃ Fix Safari login fails on    ┃
+│                              │┃ redirect after timeout       ┃
+│                              │┃                              ┃
+│                              │┃                              ┃
+│ —  open  P3  —               │┃ agent  open  P1  ●●●○○       ┃
+╰────────────────────── task ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
+                                ╭ tz-3 ────────────────────────╮
+                                │ Set up the session store     │
+                                │                              │
+                                │                              │
+                                │                              │
+                                │ —  open  P2  —               │
+                                ╰────────────────────── task ──╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit

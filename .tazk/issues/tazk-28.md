@@ -1,6 +1,6 @@
 ---
 title: 'TUI: split pane vs full-screen detail layout and resize transitions'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -13,7 +13,8 @@ dependencies:
   tazk-27: blocked_by
   tazk-3: child_of
 created_at: 2026-11-06T03:28:37.371152836+00:00
-updated_at: 2026-11-06T03:28:37.470980170+00:00
+updated_at: 2026-11-06T20:31:50.909446482+00:00
+closed_at: 2026-11-06T20:31:50.909446482+00:00
 ---
 
 # Description

@@ -1,0 +1,44 @@
+---
+source: src/tui/ui/mod.rs
+expression: "render_app(&mut app, 120, 40)"
+---
+ Issues (4) │ Triage (0)                                                                                    group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                                         4 of 4
+┌ tz-2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Fix Safari login fails on redirect after timeout                                                                      │
+│                                                                                                                      │
+│ID           tz-2                                                                                                     │
+│Type         task                                                                                                     │
+│Status       open  ⊘ open blockers                                                                                    │
+│Priority     P1                                                                                                       │
+│Role         agent                                                                                                    │
+│Effort       ●●●○○                                                                                                    │
+│Assignee     —                                                                                                        │
+│Labels       —                                                                                                        │
+│External ref —                                                                                                        │
+│Created      2025-01-01 00:00                                                                                         │
+│Updated      2025-01-01 00:00                                                                                         │
+│                                                                                                                      │
+│Parent                                                                                                                │
+│  tz-1 open Auth rework                                                                                               │
+│                                                                                                                      │
+│Blocked by                                                                                                            │
+│  tz-3 open Set up the session store                                                                                  │
+│                                                                                                                      │
+│# Description                                                                                                         │
+│                                                                                                                      │
+│The session cookie is dropped on redirect.                                                                            │
+│                                                                                                                      │
+│# Acceptance Criteria                                                                                                 │
+│                                                                                                                      │
+│- works in Safari                                                                                                     │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ? help  ↑/↓ scroll  Tab/Shift-Tab links  Enter follow  Esc back  q quit  y copy  o edit

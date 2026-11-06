@@ -30,17 +30,19 @@
 use super::cell::{truncate_with_ellipsis, wrap_title};
 use super::markdown::{issue_markdown, MarkdownCache, Rendered};
 use super::theme;
+use crate::tui::app::App;
 use crate::tui::data::Snapshot;
 use crate::tui::model::blockers::has_open_blockers;
 use crate::tui::model::detail::DetailState;
 use crate::tui::model::relations::{relationships, Entry, Relationships};
+use crate::tui::ModeArg;
 use crate::types::Issue;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Paragraph, Widget};
 use ratatui::Frame;
 use std::rc::Rc;
 
@@ -186,6 +188,52 @@ pub fn draw_issue_detail(
     view.sync_state(state, area.height);
     view.render(area, frame.buffer_mut(), state.scroll());
 }
+
+/// Draw the detail pane (split view or full-screen) into `area`: a border
+/// (accented when `focused`) around the displayed issue (spec §8, §9). The
+/// displayed issue is the top of the link stack, else the grid selection.
+/// Triage detail is drawn by its own issue.
+pub fn draw_detail_pane(frame: &mut Frame, area: Rect, app: &mut App, focused: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let id = app.displayed_issue_id().map(str::to_string);
+    let mut block = Block::bordered().border_style(theme::pane_border_style(focused));
+    if let Some(id) = &id {
+        block = block.title(format!(" {id} "));
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if app.mode != ModeArg::Issues || inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    match id.as_deref().and_then(|id| app.snapshot.issue(id)) {
+        Some(issue) => draw_issue_detail(
+            frame,
+            inner,
+            issue,
+            &app.snapshot,
+            &mut app.detail,
+            &app.markdown,
+        ),
+        None => {
+            let [_, mid, _] = Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
+            .areas(inner);
+            frame.render_widget(
+                Paragraph::new(NO_SELECTION_MESSAGE)
+                    .alignment(Alignment::Center)
+                    .style(theme::empty_message_style()),
+                mid,
+            );
+        }
+    }
+}
+
+pub const NO_SELECTION_MESSAGE: &str = "No issue selected";
 
 fn body_width(width: usize) -> u16 {
     width.min(usize::from(u16::MAX)) as u16
