@@ -1,0 +1,31 @@
+---
+source: src/tui/ui/cell.rs
+expression: out
+---
+╭ tz-3 ────────────────────────╮
+│ Auth overhaul                │
+│                              │
+│                              │
+│                              │
+│ human  closed  P2  —         │
+╰────────────────────── epic ──╯
+--- styles ---
+0:0..1 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "╭"
+0:1..7 fg=Rgb(110, 110, 110) bg=Reset mods=NONE " tz-3 "
+0:7..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "────────────────────────╮"
+1:0..1 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+1:2..15 fg=Rgb(110, 110, 110) bg=Reset mods=BOLD "Auth overhaul"
+1:31..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+2:0..1 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+2:31..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+3:0..1 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+3:31..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+4:0..1 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+4:31..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+5:0..1 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+5:2..7 fg=Rgb(110, 50, 100) bg=Reset mods=NONE "human"
+5:9..15 fg=Rgb(55, 55, 55) bg=Reset mods=CROSSED_OUT "closed"
+5:17..19 fg=Rgb(116, 102, 36) bg=Reset mods=NONE "P2"
+5:21..22 fg=Rgb(55, 55, 55) bg=Reset mods=NONE "—"
+5:31..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "│"
+6:0..32 fg=Rgb(88, 62, 116) bg=Reset mods=NONE "╰────────────────────── epic ──╯"

@@ -1,0 +1,11 @@
+---
+source: src/tui/ui/cell.rs
+expression: "draw_cell(IssueCell::new(&i, false), CELL_WIDTH)"
+---
+╭ tz-15 ───────────────────────╮
+│ A really quite long title    │
+│ that goes on and on and on   │
+│ and on well past three line… │
+│                              │
+│ —  open  P2  —               │
+╰────────────────────── task ──╯

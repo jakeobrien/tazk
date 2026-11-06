@@ -1,0 +1,31 @@
+---
+source: src/tui/ui/cell.rs
+expression: "draw_cell_styled(IssueCell::new(&i, true))"
+---
+╭ tz-19 ──────────────────── ⊘ ╮
+│ Release sign-off             │
+│                              │
+│                              │
+│                              │
+│ human  blocked  P0  —        │
+╰────────────────────── gate ──╯
+--- styles ---
+0:0..29 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "╭ tz-19 ──────────────────── "
+0:29..30 fg=Rgb(255, 160, 40) bg=Reset mods=NONE "⊘"
+0:30..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE " ╮"
+1:0..1 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+1:2..18 fg=Reset bg=Reset mods=BOLD "Release sign-off"
+1:31..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+2:0..1 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+2:31..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+3:0..1 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+3:31..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+4:0..1 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+4:31..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+5:0..1 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+5:2..7 fg=Rgb(220, 100, 200) bg=Reset mods=NONE "human"
+5:9..16 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "blocked"
+5:18..20 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "P0"
+5:22..23 fg=Rgb(110, 110, 110) bg=Reset mods=NONE "—"
+5:31..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "│"
+6:0..32 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "╰────────────────────── gate ──╯"

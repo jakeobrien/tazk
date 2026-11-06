@@ -1,0 +1,28 @@
+---
+source: src/tui/ui/cell.rs
+expression: "draw_cell_styled(IssueCell::new(&i, false))"
+---
+╭ tz-18 ───────────────────────╮
+│ Plan the importer            │
+│                              │
+│                              │
+│                              │
+│ —  open  P2  —               │
+╰────────────────────── spec ──╯
+--- styles ---
+0:0..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "╭ tz-18 ───────────────────────╮"
+1:0..1 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+1:2..19 fg=Reset bg=Reset mods=BOLD "Plan the importer"
+1:31..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+2:0..1 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+2:31..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+3:0..1 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+3:31..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+4:0..1 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+4:31..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+5:0..1 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+5:2..3 fg=Rgb(110, 110, 110) bg=Reset mods=NONE "—"
+5:11..13 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "P2"
+5:15..16 fg=Rgb(110, 110, 110) bg=Reset mods=NONE "—"
+5:31..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "│"
+6:0..32 fg=Rgb(64, 200, 190) bg=Reset mods=NONE "╰────────────────────── spec ──╯"

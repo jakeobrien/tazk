@@ -1,6 +1,6 @@
 ---
 title: 'TUI: issue cell widget (32×7)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -13,7 +13,8 @@ dependencies:
   tazk-17: blocked_by
   tazk-2: child_of
 created_at: 2026-11-06T03:28:37.357610253+00:00
-updated_at: 2026-11-06T06:09:23.347872921+00:00
+updated_at: 2026-11-06T17:32:48.202158987+00:00
+closed_at: 2026-11-06T17:32:48.202158987+00:00
 ---
 
 # Description

@@ -1,0 +1,11 @@
+---
+source: src/tui/ui/cell.rs
+expression: "draw_cell(IssueCell::new(&i, false), CELL_WIDTH)"
+---
+╭ tz-16 ───────────────────────╮
+│ supercalifragilisticsupercal │
+│ ifragilisticsupercalifragili │
+│ sticsupercalifragilisticsup… │
+│                              │
+│ —  open  P2  —               │
+╰────────────────────── task ──╯

@@ -1,0 +1,33 @@
+---
+source: src/tui/ui/cell.rs
+expression: "draw_cell_styled(IssueCell::new(&sample(), true))"
+---
+╭ tz-14 ──────────────────── ⊘ ╮
+│ Fix Safari login fails on    │
+│ redirect after timeout when  │
+│ the session                  │
+│                              │
+│ agent  in_prog  P1  ●●○○○    │
+╰─────────────────────── bug ──╯
+--- styles ---
+0:0..29 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "╭ tz-14 ──────────────────── "
+0:29..30 fg=Rgb(255, 160, 40) bg=Reset mods=NONE "⊘"
+0:30..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE " ╮"
+1:0..1 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+1:2..27 fg=Reset bg=Reset mods=BOLD "Fix Safari login fails on"
+1:31..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+2:0..1 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+2:2..29 fg=Reset bg=Reset mods=BOLD "redirect after timeout when"
+2:31..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+3:0..1 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+3:2..13 fg=Reset bg=Reset mods=BOLD "the session"
+3:31..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+4:0..1 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+4:31..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+5:0..1 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+5:2..7 fg=Rgb(80, 210, 230) bg=Reset mods=NONE "agent"
+5:9..16 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "in_prog"
+5:18..20 fg=Rgb(255, 160, 40) bg=Reset mods=NONE "P1"
+5:22..27 fg=Rgb(94, 154, 240) bg=Reset mods=NONE "●●○○○"
+5:31..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "│"
+6:0..32 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "╰─────────────────────── bug ──╯"
