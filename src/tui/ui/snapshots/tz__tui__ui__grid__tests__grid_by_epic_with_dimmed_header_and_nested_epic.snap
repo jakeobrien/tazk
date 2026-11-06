@@ -1,0 +1,26 @@
+---
+source: src/tui/ui/grid.rs
+expression: "grid_text(&app, WIDE)"
+---
+ No epic ──────────────────── 3  e-1 Auth rework ──────────── 2  e-2 Old platform work ────── 1  e-3 Nested sessions epic ─── 0
+┏ e-1 ━━━━━━━━━━━━━━━━━━━━━━━━━┓╭ e-1 ─────────────────────────╮╭ e-2 ─────────────────────────╮╭ e-3 ─────────────────────────╮
+┃ Auth rework                  ┃│ Auth rework                  ││ Old platform work            ││ Nested sessions epic         │
+┃                              ┃│                              ││                              ││                              │
+┃                              ┃│                              ││                              ││                              │
+┃                              ┃│                              ││                              ││                              │
+┃ —  open  P1  —               ┃│ —  open  P1  —               ││ —  closed  P2  —             ││ —  open  P2  —               │
+┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛╰────────────────────── epic ──╯╰────────────────────── epic ──╯╰────────────────────── epic ──╯
+╭ t-4 ────────────────────── ⊘ ╮╭ t-1 ─────────────────────────╮╭ t-2 ─────────────────────────╮
+│ Blocked task                 ││ Login page                   ││ Fix redirect                 │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ —  blocked  P2  —            ││ agent  open  P0  ●●○○○       ││ human  in_prog  P1  —        │
+╰────────────────────── task ──╯╰─────────────────── feature ──╯╰─────────────────────── bug ──╯
+╭ t-3 ─────────────────────────╮╭ e-3 ─────────────────────────╮
+│ Orphan chore                 ││ Nested sessions epic         │
+│                              ││                              │
+│                              ││                              │
+│                              ││                              │
+│ —  open  P3  —               ││ —  open  P2  —               │
+╰───────────────────── chore ──╯╰────────────────────── epic ──╯

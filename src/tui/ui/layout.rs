@@ -10,9 +10,10 @@ pub const BAR_ROWS: u16 = 3;
 pub const MIN_CELL_HEIGHT: u16 = 7;
 
 pub const MIN_WIDTH: u16 = MIN_COLUMN_WIDTH;
-pub const MIN_HEIGHT: u16 = BAR_ROWS + MIN_CELL_HEIGHT;
+pub const MIN_HEIGHT: u16 = BAR_ROWS + COLUMN_TITLE_HEIGHT + MIN_CELL_HEIGHT;
 
-/// True if `area` can't fit one column plus the bars and one cell.
+/// True if `area` can't fit one column plus the bars, a column title and one
+/// cell.
 pub fn too_small(area: Rect) -> bool {
     area.width < MIN_WIDTH || area.height < MIN_HEIGHT
 }

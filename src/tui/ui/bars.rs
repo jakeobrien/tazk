@@ -231,7 +231,7 @@ mod tests {
             ],
         );
         let mut app = App::from_snapshot(mode, snap);
-        update(&mut app, Action::Resize(100, 10));
+        update(&mut app, Action::Resize(100, 11));
         app
     }
 
@@ -246,11 +246,11 @@ mod tests {
         app
     }
 
-    /// The three bar rows only (the main area is empty in these tests).
+    /// The three bar rows only (the grid between them is ignored).
     fn bars(app: &App, width: u16) -> String {
-        let text = render_app(app, width, 10);
+        let text = render_app(app, width, 11);
         let lines: Vec<&str> = text.lines().collect();
-        format!("{}\n{}\n{}", lines[0], lines[1], lines[9])
+        format!("{}\n{}\n{}", lines[0], lines[1], lines[10])
     }
 
     fn send_key(app: &mut App, code: crossterm::event::KeyCode) {
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn mode_bar_highlights_current_mode_and_shows_grouping() {
         let app = fixture(ModeArg::Issues);
-        let out = render_app_styled(&app, 100, 10);
+        let out = render_app_styled(&app, 100, 11);
         let styles: Vec<&str> = out
             .lines()
             .skip_while(|l| *l != "--- styles ---")
@@ -344,7 +344,7 @@ mod tests {
 
         let mut triage = fixture(ModeArg::Triage);
         triage.grouping = GroupByArg::Status;
-        let top = render_app(&triage, 100, 10)
+        let top = render_app(&triage, 100, 11)
             .lines()
             .next()
             .unwrap()
@@ -352,7 +352,7 @@ mod tests {
         assert!(top.contains("Triage (3)") && !top.contains("group"));
         let mut issues = fixture(ModeArg::Issues);
         issues.grouping = GroupByArg::Priority;
-        assert!(render_app(&issues, 100, 10)
+        assert!(render_app(&issues, 100, 11)
             .lines()
             .next()
             .unwrap()
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn narrow_terminal_keeps_counts_visible() {
         let mut app = with_skipped(fixture(ModeArg::Issues), 1);
-        update(&mut app, Action::Resize(40, 10));
+        update(&mut app, Action::Resize(40, 11));
         let text = bars(&app, 40);
         let filter_row = text.lines().nth(1).unwrap();
         assert!(filter_row.ends_with("3 of 4  ⚠ 1 skipped"), "{filter_row}");
@@ -438,7 +438,7 @@ mod tests {
 
         // Detail
         app.focus = crate::tui::app::Focus::Detail;
-        update(&mut app, Action::Resize(100, 10));
+        update(&mut app, Action::Resize(100, 11));
         assert_eq!(app.context(), Context::Detail);
         let detail = labels(&app);
         assert!(
@@ -449,13 +449,13 @@ mod tests {
 
         // Search input
         app.search_active = true;
-        update(&mut app, Action::Resize(100, 10));
+        update(&mut app, Action::Resize(100, 11));
         assert_eq!(labels(&app), ["keep", "cancel", "clear"]);
         app.search_active = false;
 
         // Picker
         app.overlay = Overlay::Picker(FilterKind::Status);
-        update(&mut app, Action::Resize(100, 10));
+        update(&mut app, Action::Resize(100, 11));
         assert_eq!(app.context(), Context::Picker);
         assert_eq!(
             labels(&app),
@@ -464,7 +464,7 @@ mod tests {
 
         // Help
         app.overlay = Overlay::Help;
-        update(&mut app, Action::Resize(100, 10));
+        update(&mut app, Action::Resize(100, 11));
         assert_eq!(labels(&app), ["close"]);
     }
 
@@ -484,7 +484,7 @@ mod tests {
     fn triage_detail_hides_follow_link() {
         let mut app = fixture(ModeArg::Triage);
         app.focus = crate::tui::app::Focus::Detail;
-        update(&mut app, Action::Resize(100, 10));
+        update(&mut app, Action::Resize(100, 11));
         let l = labels(&app);
         assert!(!l.contains(&"follow") && !l.contains(&"links"));
         assert!(l.contains(&"scroll"));

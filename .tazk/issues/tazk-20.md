@@ -1,6 +1,6 @@
 ---
 title: 'TUI: issues grid rendering (columns, title bars, headers, scrolling)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-19: blocked_by
   tazk-2: child_of
 created_at: 2026-11-06T03:28:37.361148211+00:00
-updated_at: 2026-11-06T03:28:37.425937336+00:00
+updated_at: 2026-11-06T18:04:04.225308673+00:00
+closed_at: 2026-11-06T18:04:04.225308673+00:00
 ---
 
 # Description

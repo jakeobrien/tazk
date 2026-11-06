@@ -1,0 +1,12 @@
+---
+source: src/tui/ui/grid.rs
+expression: "grid_text(&app, size)"
+---
+ in_progress ──────────────── 1  blocked ──────────────────── 1
+╭ t-2 ─────────────────────────╮┏ t-4 ━━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+│ Fix redirect                 │┃ Blocked task                 ┃
+│                              │┃                              ┃
+│                              │┃                              ┃
+│                              │┃                              ┃
+│ human  in_prog  P1  —        │┃ —  blocked  P2  —            ┃
+╰─────────────────────── bug ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛

@@ -308,8 +308,8 @@ mod tests {
     #[test]
     fn empty_app_snapshot() {
         let mut app = App::from_snapshot(ModeArg::Issues, Snapshot::default());
-        update(&mut app, Action::Resize(40, 10));
-        insta::assert_snapshot!(render_app(&app, 40, 10));
+        update(&mut app, Action::Resize(40, 11));
+        insta::assert_snapshot!(render_app(&app, 40, 11));
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod theme;
 pub mod triage;
 
 use super::app::App;
+use super::ModeArg;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -29,7 +30,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
     bars::draw_mode_bar(frame, areas.mode_bar, app);
     bars::draw_filter_bar(frame, areas.filter_bar, app);
     bars::draw_hint_bar(frame, areas.hint_bar, app);
-    // The main area is drawn by the later grid/detail issues.
+    if app.mode == ModeArg::Issues && !app.full_screen_detail {
+        // In the split view the grid gets the left half (spec §8).
+        let mut grid_area = areas.main;
+        if app.is_split() {
+            grid_area.width /= 2;
+        }
+        grid::draw_grid(frame, grid_area, app);
+    }
+    // The detail view and triage grid are drawn by later issues.
 }
 
 /// Only a centered message; nothing else is drawn.
@@ -91,16 +100,16 @@ mod tests {
 
     #[test]
     fn too_small_by_height_shows_only_message() {
-        let lines = render(80, 9);
+        let lines = render(80, 10);
         let text: Vec<_> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
         assert_eq!(text.len(), 1);
         assert_eq!(text[0].trim(), TOO_SMALL_MESSAGE);
-        assert_eq!(lines[4].trim(), TOO_SMALL_MESSAGE);
+        assert_eq!(lines[5].trim(), TOO_SMALL_MESSAGE);
     }
 
     #[test]
     fn minimum_size_is_not_too_small() {
-        let lines = render(32, 10);
+        let lines = render(32, 11);
         assert!(lines.iter().all(|l| !l.contains(TOO_SMALL_MESSAGE)));
     }
 }

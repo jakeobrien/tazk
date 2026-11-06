@@ -159,6 +159,28 @@ pub fn blockers_marker() -> Span<'static> {
     Span::styled(BLOCKERS_SYMBOL, Style::new().fg(ORANGE))
 }
 
+// --- Grid ------------------------------------------------------------------
+
+/// Column title text: bold; the selected column's title is accented.
+pub fn column_title_style(selected: bool) -> Style {
+    let style = Style::new().add_modifier(Modifier::BOLD);
+    if selected {
+        style.fg(CYAN)
+    } else {
+        style
+    }
+}
+
+/// The rule and count of a column title bar.
+pub fn column_rule_style() -> Style {
+    Style::new().fg(DIM)
+}
+
+/// The centered "No matching issues" message.
+pub fn empty_message_style() -> Style {
+    Style::new().fg(DIM)
+}
+
 fn unset_badge() -> Span<'static> {
     Span::styled(UNSET, Style::new().fg(DIM))
 }

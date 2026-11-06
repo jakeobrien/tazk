@@ -1,6 +1,6 @@
 ---
 source: src/tui/testing.rs
-expression: "render_app(&app, 40, 10)"
+expression: "render_app(&app, 40, 11)"
 ---
  Issues (0) │ Triage (0)    group: epic
  role:all  status:!closed  type: 0 of 0
@@ -8,6 +8,7 @@ expression: "render_app(&app, 40, 10)"
 
 
 
+           No matching issues
 
 
 
