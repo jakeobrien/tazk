@@ -1,6 +1,6 @@
 ---
 title: 'TUI: open-blockers detection and cell sort order (pure)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-7: blocked_by
   tazk-8: blocked_by
 created_at: 2026-11-06T03:28:37.353485128+00:00
-updated_at: 2026-11-06T03:28:37.406580711+00:00
+updated_at: 2026-11-06T16:14:11.074366910+00:00
+closed_at: 2026-11-06T16:14:11.074366910+00:00
 ---
 
 # Description

@@ -2,10 +2,10 @@
 //! skipped files) and loading from storage.
 
 use crate::storage::triage::TriageItem;
-use crate::storage::{SkippedFile, Storage};
+use crate::storage::{closed_issue_ids, SkippedFile, Storage};
 use crate::types::Issue;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// An immutable view of everything on disk at one moment (spec §3.1).
 ///
@@ -16,6 +16,8 @@ pub struct Snapshot {
     pub issues: Vec<Issue>,
     /// Issue ID -> index into `issues`.
     pub by_id: HashMap<String, usize>,
+    /// IDs of closed issues, as the storage helper for `tz ready` wants them.
+    pub closed_ids: HashSet<String>,
     /// Triage items, sorted by file name.
     pub triage: Vec<TriageItem>,
     /// Files that failed to load (spec §3.2).
@@ -31,9 +33,11 @@ impl Snapshot {
             .enumerate()
             .map(|(i, issue)| (issue.id.clone(), i))
             .collect();
+        let closed_ids = closed_issue_ids(&issues);
         Self {
             issues,
             by_id,
+            closed_ids,
             triage,
             skipped,
         }

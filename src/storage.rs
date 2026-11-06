@@ -4274,7 +4274,7 @@ fn remap_issue(issue: &mut Issue, mapping: &HashMap<String, String>) -> bool {
 }
 
 // Own only the closed IDs so callers can move Issue values into their results.
-fn closed_issue_ids(issues: &[Issue]) -> HashSet<String> {
+pub(crate) fn closed_issue_ids(issues: &[Issue]) -> HashSet<String> {
     issues
         .iter()
         .filter(|issue| issue.status == Status::Closed)
