@@ -1,0 +1,63 @@
+---
+source: src/tui/ui/detail.rs
+expression: "draw(&v, 60, v.height() as u16, 0)"
+---
+Fix Safari login fails on redirect after timeout
+
+ID           tz-1
+Type         bug
+Status       in_prog  ⊘ open blockers
+Priority     P1
+Role         agent
+Effort       ●●●○○
+Assignee     jake
+Labels       web, auth
+External ref gh-123
+Created      2025-01-01 10:00
+Updated      2025-01-01 20:00
+Closed       2025-01-02 06:00
+
+Parent
+  tz-2 open Auth epic
+  tz-404 (missing)
+
+Blocked by
+  tz-3 blocked Set up the session store
+  tz-4 closed Closed work
+
+Children
+  tz-8 open Child one
+
+Blocks
+  tz-9 open Waits on it
+
+Related
+  tz-5 open Related thing
+
+Discovered from
+  tz-6 open Origin
+
+Discoveries
+  tz-10 open Found while fixing
+
+Tracks
+  tz-7 open Tracked thing
+
+Tracked by
+  tz-11 open Tracker
+
+# Description
+
+The session cookie is dropped.
+
+# Design
+
+Keep it in localStorage.
+
+# Acceptance Criteria
+
+- works in Safari
+
+# Notes
+
+See the ticket.

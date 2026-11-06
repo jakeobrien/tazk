@@ -1,0 +1,61 @@
+---
+source: src/tui/ui/detail.rs
+expression: out
+---
+Fix Safari login fails on redirect after timeout
+
+ID           tz-1
+Type         bug
+Status       in_prog  ⊘ open blockers
+Priority     P1
+Role         agent
+Effort       ●●●○○
+Assignee     jake
+Labels       web, auth
+External ref —
+Created      2025-01-01 10:00
+Updated      2025-01-01 20:00
+
+Parent
+  tz-2 open Auth epic
+  tz-404 (missing)
+
+Blocked by
+▶ tz-3 blocked Set up the session store
+  tz-4 closed Closed work
+
+Children
+  tz-8 open Child one
+
+Blocks
+  tz-9 open Waits on it
+
+--- styles ---
+0:0..60 fg=Reset bg=Reset mods=BOLD "Fix Safari login fails on redirect after timeout            "
+2:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "ID           "
+3:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Type         "
+3:13..16 fg=Rgb(236, 84, 84) bg=Reset mods=NONE "bug"
+4:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Status       "
+4:13..20 fg=Rgb(232, 204, 72) bg=Reset mods=NONE "in_prog"
+4:22..37 fg=Rgb(255, 160, 40) bg=Reset mods=NONE "⊘ open blockers"
+5:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Priority     "
+5:13..15 fg=Rgb(255, 160, 40) bg=Reset mods=NONE "P1"
+6:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Role         "
+6:13..18 fg=Rgb(80, 210, 230) bg=Reset mods=NONE "agent"
+7:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Effort       "
+7:13..18 fg=Rgb(94, 154, 240) bg=Reset mods=NONE "●●●○○"
+8:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Assignee     "
+9:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Labels       "
+10:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "External ref "
+10:13..14 fg=Rgb(110, 110, 110) bg=Reset mods=NONE "—"
+11:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Created      "
+12:0..13 fg=Rgb(150, 150, 150) bg=Reset mods=NONE "Updated      "
+14:0..60 fg=Reset bg=Reset mods=BOLD "Parent                                                      "
+16:8..18 fg=Rgb(110, 110, 110) bg=Reset mods=NONE " (missing)"
+18:0..60 fg=Reset bg=Reset mods=BOLD "Blocked by                                                  "
+19:0..7 fg=Reset bg=Rgb(52, 58, 84) mods=BOLD "▶ tz-3 "
+19:7..14 fg=Rgb(236, 84, 84) bg=Rgb(52, 58, 84) mods=BOLD "blocked"
+19:14..60 fg=Reset bg=Rgb(52, 58, 84) mods=BOLD " Set up the session store                     "
+20:7..13 fg=Rgb(110, 110, 110) bg=Reset mods=CROSSED_OUT "closed"
+22:0..60 fg=Reset bg=Reset mods=BOLD "Children                                                    "
+25:0..60 fg=Reset bg=Reset mods=BOLD "Blocks                                                      "

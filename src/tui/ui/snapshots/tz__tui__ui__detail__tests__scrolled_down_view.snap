@@ -1,0 +1,14 @@
+---
+source: src/tui/ui/detail.rs
+expression: out
+---
+
+# Design
+
+Keep it in localStorage.
+
+# Acceptance Criteria
+
+- works in Safari
+
+# Notes

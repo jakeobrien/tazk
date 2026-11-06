@@ -1,6 +1,6 @@
 ---
 title: 'TUI: issue detail rendering (title, properties, relationships, body)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -14,7 +14,8 @@ dependencies:
   tazk-26: blocked_by
   tazk-3: child_of
 created_at: 2026-11-06T03:28:37.370007003+00:00
-updated_at: 2026-11-06T03:28:37.465763628+00:00
+updated_at: 2026-11-06T20:24:00.922694+00:00
+closed_at: 2026-11-06T20:24:00.922694+00:00
 ---
 
 # Description

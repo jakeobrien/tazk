@@ -181,6 +181,33 @@ pub fn empty_message_style() -> Style {
     Style::new().fg(DIM)
 }
 
+// --- Detail view -------------------------------------------------------------
+
+/// Marker in front of the highlighted relationship entry.
+pub const HIGHLIGHT_MARKER: &str = "▶";
+/// Background of the highlighted relationship entry.
+pub const HIGHLIGHT_BG: Color = Color::Rgb(52, 58, 84);
+
+/// Property labels (`Status`, `Created`, ...).
+pub fn label_style() -> Style {
+    Style::new().fg(GRAY)
+}
+
+/// The issue title and relationship section headings.
+pub fn heading_style() -> Style {
+    Style::new().add_modifier(Modifier::BOLD)
+}
+
+/// Dim text: `(missing)`, unset values.
+pub fn dim_style() -> Style {
+    Style::new().fg(DIM)
+}
+
+/// Whole-line style of the highlighted relationship entry.
+pub fn highlight_style() -> Style {
+    Style::new().bg(HIGHLIGHT_BG).add_modifier(Modifier::BOLD)
+}
+
 fn unset_badge() -> Span<'static> {
     Span::styled(UNSET, Style::new().fg(DIM))
 }
@@ -352,7 +379,7 @@ mod tests {
 
     #[test]
     fn symbols_are_one_cell_wide() {
-        for sym in [UNSET, BLOCKERS_SYMBOL, "●", "○", "…"] {
+        for sym in [UNSET, BLOCKERS_SYMBOL, "●", "○", "…", HIGHLIGHT_MARKER] {
             assert_eq!(Span::raw(sym).width(), 1, "{sym}");
         }
     }
