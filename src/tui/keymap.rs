@@ -85,7 +85,7 @@ impl KeySpec {
 }
 
 /// How a matched binding produces its [`Action`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Act {
     Fixed(Action),
     /// Built from the typed character ([`KeySpec::AnyChar`]).
@@ -93,7 +93,7 @@ pub enum Act {
 }
 
 /// One row of the keymap.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Binding {
     pub keys: &'static [KeySpec],
     pub act: Act,
@@ -110,8 +110,8 @@ impl Binding {
     }
 
     fn action(&self, key: KeyEvent) -> Action {
-        match (self.act, key.code) {
-            (Act::Fixed(a), _) => a,
+        match (&self.act, key.code) {
+            (Act::Fixed(a), _) => a.clone(),
             (Act::Char(f), KeyCode::Char(c)) => f(c),
             // AnyChar only matches Char keys.
             (Act::Char(_), _) => unreachable!("Act::Char bound to a non-character key"),

@@ -80,6 +80,7 @@ pub struct TuiArgs {
 
 /// Entry point. The storage has already been opened (so a missing `.tazk`
 /// has failed before the terminal is touched).
-pub fn run(_storage: Storage, args: TuiArgs) -> Result<()> {
-    terminal::run(app::App::new(&args))
+pub fn run(storage: Storage, args: TuiArgs) -> Result<()> {
+    let snapshot = data::Snapshot::load(&storage)?;
+    terminal::run(app::App::with_snapshot(&args, snapshot))
 }

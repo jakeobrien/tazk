@@ -24,3 +24,22 @@ pub const SPLIT_MIN_WIDTH: u16 = 160;
 pub fn is_split(width: u16) -> bool {
     width >= SPLIT_MIN_WIDTH
 }
+
+/// Which layout is active (derived from the terminal width, spec §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutMode {
+    /// Grid only; detail opens full-screen.
+    Narrow,
+    /// Grid and detail pane side by side.
+    Split,
+}
+
+impl LayoutMode {
+    pub fn for_width(width: u16) -> Self {
+        if is_split(width) {
+            LayoutMode::Split
+        } else {
+            LayoutMode::Narrow
+        }
+    }
+}

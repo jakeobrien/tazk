@@ -282,7 +282,7 @@ impl std::str::FromStr for DependencyType {
 }
 
 /// Dependency representation for JSON output
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dependency {
     /// The issue this one depends on.
     pub id: String,
@@ -358,7 +358,7 @@ where
 }
 
 /// Issue structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
     pub title: String,

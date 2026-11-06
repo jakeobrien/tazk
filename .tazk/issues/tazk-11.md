@@ -1,6 +1,6 @@
 ---
 title: 'TUI: App state core, Action enum and update loop'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -12,7 +12,8 @@ dependencies:
   tazk-10: blocked_by
   tazk-7: blocked_by
 created_at: 2026-11-06T03:28:37.347693461+00:00
-updated_at: 2026-11-06T03:28:37.393607920+00:00
+updated_at: 2026-11-06T15:59:18.961360360+00:00
+closed_at: 2026-11-06T15:59:18.961360360+00:00
 ---
 
 # Description
