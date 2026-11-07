@@ -516,6 +516,34 @@ impl App {
         }
     }
 
+    /// Replace the snapshot with a freshly loaded one (spec §3.4). Filters,
+    /// search and grouping are untouched; the grid keeps the selection by
+    /// ID / filename (or applies the disappearing rule) in `refresh_grid`,
+    /// which `apply` runs right after. The link stack survives only if every
+    /// ID in it still exists; the detail highlight is kept valid; the detail
+    /// scroll is clamped by the renderer's next metrics update.
+    fn apply_reload(&mut self, snapshot: Snapshot) {
+        self.snapshot = snapshot;
+        if self
+            .detail
+            .stack()
+            .iter()
+            .any(|id| self.snapshot.issue(id).is_none())
+        {
+            self.detail.reset();
+        }
+        let len = self.displayed_relationships().len();
+        self.detail.clamp_highlight(len);
+        // A picker whose rows changed under it (new priorities) is dropped.
+        if self
+            .picker
+            .as_ref()
+            .is_some_and(|p| p.is_stale(&self.filters, &self.snapshot))
+        {
+            self.close_picker();
+        }
+    }
+
     /// Returns and clears the pending reload request.
     pub fn take_reload(&mut self) -> bool {
         std::mem::take(&mut self.reload_requested)
@@ -567,12 +595,17 @@ impl App {
 pub fn update(app: &mut App, action: Action) {
     // Moving the selection (by key, or because search / filters / grouping
     // changed it) clears the link stack and resets the detail scroll
-    // (spec §9.4). A reload keeps both: it has its own rule (spec §3.4).
+    // (spec §9.4). A reload that keeps the selection keeps both (spec §3.4;
+    // the stack has its own rule in `App::apply_reload`).
     let before = (app.mode, app.selection.get(app.mode).clone());
-    let reloaded = matches!(action, Action::Reloaded(_));
     apply(app, action);
-    if !reloaded && before != (app.mode, app.selection.get(app.mode).clone()) {
+    if before != (app.mode, app.selection.get(app.mode).clone()) {
         app.detail.reset();
+        // Nothing left to show in the detail.
+        if app.selection.get(app.mode).is_none() {
+            app.focus = Focus::Grid;
+            app.full_screen_detail = false;
+        }
         app.sync_contexts();
     }
 }
@@ -601,19 +634,7 @@ fn apply(app: &mut App, action: Action) {
             app.reconcile_layout(was);
         }
         Action::FocusGained | Action::Tick | Action::Reload => app.reload_requested = true,
-        Action::Reloaded(snapshot) => {
-            app.snapshot = *snapshot;
-            // The grid keeps the selection by ID (refresh_grid, below).
-            // EXTENSION POINT (reload issue): keep or clear the link stack (spec §3.4).
-            // A picker whose rows changed under it (new priorities) is dropped.
-            if app
-                .picker
-                .as_ref()
-                .is_some_and(|p| p.is_stale(&app.filters, &app.snapshot))
-            {
-                app.close_picker();
-            }
-        }
+        Action::Reloaded(snapshot) => app.apply_reload(*snapshot),
 
         // Global
         Action::Quit => app.should_quit = true,
@@ -1408,6 +1429,138 @@ mod tests {
         let snap = a.snapshot.clone();
         update(&mut a, Action::Reloaded(Box::new(snap)));
         assert_eq!(a.detail.stack(), ["p"]);
+    }
+
+    fn reloaded(a: &mut App, issues: Vec<fixtures::IssueBuilder>) {
+        let snap = fixtures::snapshot_of(issues);
+        update(a, Action::Reloaded(Box::new(snap)));
+    }
+
+    #[test]
+    fn reload_keeps_the_selection_when_the_item_moves_to_another_column() {
+        use crate::types::Status;
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::Char('g'))); // epic -> status
+        send(&mut a, key(KeyCode::End));
+        assert_eq!(selected(&a), Some("b"));
+        let column = a.grid.selected_column();
+        reloaded(
+            &mut a,
+            vec![
+                fixtures::issue("a", "A").priority(0),
+                fixtures::issue("b", "B")
+                    .priority(1)
+                    .status(Status::InProgress),
+            ],
+        );
+        assert_eq!(selected(&a), Some("b"));
+        assert_ne!(a.grid.selected_column(), column);
+        assert_eq!(a.selection.issues.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn reload_selection_falls_back_when_the_item_disappears() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "A").priority(0),
+            fixtures::issue("b", "B").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::End));
+        assert_eq!(selected(&a), Some("b"));
+        reloaded(&mut a, vec![fixtures::issue("a", "A").priority(0)]);
+        assert_eq!(selected(&a), Some("a"));
+        reloaded(&mut a, vec![]);
+        assert_eq!(selected(&a), None);
+    }
+
+    #[test]
+    fn reload_clears_the_stack_when_an_id_in_it_is_gone() {
+        let mut a = detail_app();
+        tab(&mut a);
+        send(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.detail.stack(), ["p"]);
+        // `p` is deleted; the selection itself survives.
+        reloaded(
+            &mut a,
+            vec![
+                fixtures::issue("me", "Me").priority(0).blocked_by("b"),
+                fixtures::issue("b", "Blocker").priority(2),
+            ],
+        );
+        assert_eq!(selected(&a), Some("me"));
+        assert!(a.detail.stack().is_empty());
+        assert_eq!(displayed(&a), Some("me"));
+    }
+
+    #[test]
+    fn reload_keeps_filters_search_and_grouping() {
+        let mut a = grid_app(vec![
+            fixtures::issue("a", "Alpha").priority(0),
+            fixtures::issue("b", "Beta").priority(1),
+        ]);
+        send(&mut a, key(KeyCode::Char('g')));
+        a.filters.reset();
+        a.search.issues = "alp".into();
+        a.search.triage = "x".into();
+        let (grouping, filters) = (a.grouping, a.filters.clone());
+        reloaded(
+            &mut a,
+            vec![
+                fixtures::issue("a", "Alpha").priority(0),
+                fixtures::issue("b", "Beta").priority(1),
+            ],
+        );
+        assert_eq!(a.grouping, grouping);
+        assert_eq!(a.filters, filters);
+        assert_eq!(a.search.issues, "alp");
+        assert_eq!(a.search.triage, "x");
+        assert_eq!(selected(&a), Some("a"));
+    }
+
+    #[test]
+    fn reload_clamps_the_detail_scroll_when_the_content_shrinks() {
+        let mut a = detail_app();
+        a.detail.set_metrics(40, 10);
+        a.detail.bottom_of_content();
+        assert_eq!(a.detail.scroll(), 30);
+        let snap = a.snapshot.clone();
+        update(&mut a, Action::Reloaded(Box::new(snap)));
+        assert_eq!(a.detail.scroll(), 30, "kept across a reload");
+        // The renderer reports the shrunken content on the next draw.
+        a.detail.set_metrics(15, 10);
+        assert_eq!(a.detail.scroll(), 5);
+    }
+
+    #[test]
+    fn reload_keeps_the_triage_selection_by_filename() {
+        let item = |n: &str| fixtures::triage_item(n, "body");
+        let mut a = App::from_snapshot(
+            ModeArg::Triage,
+            fixtures::snapshot_with(
+                Vec::<crate::types::Issue>::new(),
+                vec![item("a.md"), item("b.md")],
+            ),
+        );
+        send(&mut a, key(KeyCode::End));
+        assert_eq!(a.selection.triage.as_deref(), Some("b.md"));
+        let snap = fixtures::snapshot_with(
+            Vec::<crate::types::Issue>::new(),
+            vec![item("0.md"), item("a.md"), item("b.md")],
+        );
+        update(&mut a, Action::Reloaded(Box::new(snap)));
+        assert_eq!(a.selection.triage.as_deref(), Some("b.md"));
+    }
+
+    #[test]
+    fn reload_with_nothing_selected_leaves_the_full_screen_detail() {
+        let mut a = grid_app(vec![fixtures::issue("a", "A")]);
+        a.full_screen_detail = true;
+        a.sync_contexts();
+        reloaded(&mut a, vec![]);
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.context(), Context::Grid);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 title: 'TUI: background reload with state preservation (focus, 10 s tick, `R`)'
-status: open
+status: closed
 priority: 1
 issue_type: task
 role: agent
@@ -16,7 +16,8 @@ dependencies:
   tazk-8: blocked_by
   tazk-9: blocked_by
 created_at: 2026-11-06T03:28:37.376068461+00:00
-updated_at: 2026-11-06T03:28:37.499072336+00:00
+updated_at: 2026-11-06T21:53:40.894763040+00:00
+closed_at: 2026-11-06T21:53:40.894763040+00:00
 ---
 
 # Description

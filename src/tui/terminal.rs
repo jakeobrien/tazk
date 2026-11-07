@@ -5,6 +5,7 @@
 
 use super::actions::clipboard::{self, SystemClipboard};
 use super::app::{self, Action, App};
+use super::data::Reloader;
 use super::{keymap, ui};
 use anyhow::Result;
 use crossterm::event::{self, DisableFocusChange, EnableFocusChange, Event, KeyEventKind};
@@ -22,6 +23,9 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
 /// Interval between automatic reloads (spec §3.3).
 pub const TICK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How often to check on a running background load.
+const LOAD_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// True while raw mode / the alternate screen are active. Makes [`restore`]
 /// idempotent so the panic hook, `Drop` and normal exit can all call it.
@@ -110,17 +114,17 @@ pub fn handle_event(app: &mut App, event: Event) {
 }
 
 /// Set up the terminal, run the event loop until quit, and restore the terminal.
-pub fn run(mut app: App) -> Result<()> {
+pub fn run(mut app: App, reloader: Reloader) -> Result<()> {
     install_panic_hook();
     enter()?;
     let _guard = Guard;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let size = terminal.size()?;
     app::update(&mut app, Action::Resize(size.width, size.height));
-    event_loop(&mut terminal, &mut app)
+    event_loop(&mut terminal, &mut app, reloader)
 }
 
-fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
+fn event_loop(terminal: &mut Tui, app: &mut App, mut reloader: Reloader) -> Result<()> {
     let mut next_tick = Instant::now() + TICK_INTERVAL;
     let mut clipboard = SystemClipboard;
     while !app.should_quit {
@@ -131,7 +135,11 @@ fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
         let wake = app
             .status_deadline()
             .map_or(next_tick, |d| d.min(next_tick));
-        let timeout = wake.saturating_duration_since(Instant::now());
+        let mut timeout = wake.saturating_duration_since(Instant::now());
+        if reloader.in_flight() {
+            // Come back soon to pick up the finished load.
+            timeout = timeout.min(LOAD_POLL_INTERVAL);
+        }
         if event::poll(timeout)? {
             handle_event(app, event::read()?);
             // After the key press cleared the status, so the result stays visible.
@@ -142,8 +150,23 @@ fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
             app::update(app, Action::Tick);
             next_tick = Instant::now() + TICK_INTERVAL;
         }
+        pump_reloads(app, &mut reloader);
     }
     Ok(())
+}
+
+/// Start a background load if one was requested (`FocusGained`, tick, `R`) and
+/// apply a finished one. Never blocks.
+pub fn pump_reloads(app: &mut App, reloader: &mut Reloader) {
+    if app.take_reload() {
+        reloader.request();
+    }
+    while let Some(result) = reloader.poll() {
+        match result {
+            Ok(snapshot) => app::update(app, Action::Reloaded(Box::new(snapshot))),
+            Err(e) => app.set_status(format!("Reload failed: {e}")),
+        }
+    }
 }
 
 /// Debug builds only: `TAZK_TUI_PANIC=1` panics after the first draw, to

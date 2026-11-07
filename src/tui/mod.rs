@@ -122,5 +122,8 @@ pub fn run(storage: Storage, args: TuiArgs) -> Result<()> {
     // Validate the flags first: bad values must fail before the terminal is touched.
     let filters = args.initial_filters()?;
     let snapshot = data::Snapshot::load(&storage)?;
-    terminal::run(app::App::with_snapshot(&args, filters, snapshot))
+    terminal::run(
+        app::App::with_snapshot(&args, filters, snapshot),
+        data::Reloader::for_storage(storage),
+    )
 }
