@@ -58,6 +58,13 @@ pub enum Action {
     Quit,
     OpenHelp,
     CloseHelp,
+    // Help overlay scrolling
+    HelpLineUp,
+    HelpLineDown,
+    HelpPageUp,
+    HelpPageDown,
+    HelpTop,
+    HelpBottom,
     /// Reload now (`R`).
     Reload,
     /// Cycle mode: Issues <-> Triage.
@@ -202,6 +209,11 @@ pub struct App {
     /// File `o` wants opened in `$EDITOR`; the event loop resolves the path
     /// and runs the editor ([`App::take_editor_request`]).
     pub editor_request: Option<EditorTarget>,
+    /// Scroll offset (first visible line) of the help overlay. May exceed the
+    /// maximum; drawing clamps it.
+    pub help_scroll: usize,
+    /// Visible lines of the help overlay at the last draw (page size).
+    pub help_view_height: usize,
 }
 
 /// What `o` opens: an issue (by ID) or a triage item (by file name).
@@ -261,6 +273,8 @@ impl App {
             size: (0, 0),
             reload_requested: false,
             editor_request: None,
+            help_scroll: 0,
+            help_view_height: 10,
             copy_request: None,
         };
         app.refresh_grid();
@@ -666,6 +680,7 @@ fn apply(app: &mut App, action: Action) {
         Action::OpenHelp => {
             if app.overlay == Overlay::None {
                 app.overlay = Overlay::Help;
+                app.help_scroll = 0;
             }
         }
         Action::CloseHelp => {
@@ -673,6 +688,16 @@ fn apply(app: &mut App, action: Action) {
                 app.overlay = Overlay::None;
             }
         }
+        Action::HelpLineUp => app.help_scroll = app.help_scroll.saturating_sub(1),
+        Action::HelpLineDown => app.help_scroll = app.help_scroll.saturating_add(1),
+        Action::HelpPageUp => {
+            app.help_scroll = app.help_scroll.saturating_sub(app.help_view_height.max(1))
+        }
+        Action::HelpPageDown => {
+            app.help_scroll = app.help_scroll.saturating_add(app.help_view_height.max(1))
+        }
+        Action::HelpTop => app.help_scroll = 0,
+        Action::HelpBottom => app.help_scroll = usize::MAX,
         Action::CycleMode => {
             app.mode = match app.mode {
                 ModeArg::Issues => ModeArg::Triage,

@@ -18,7 +18,7 @@ use ratatui::Frame;
 
 /// Drawn after the query while typing (one cell wide).
 pub const CURSOR: &str = "█";
-const SKIPPED_SYMBOL: &str = "⚠";
+pub const SKIPPED_SYMBOL: &str = "⚠";
 
 fn dim() -> Style {
     Style::new().fg(theme::DIM)

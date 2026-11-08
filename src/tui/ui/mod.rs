@@ -11,7 +11,7 @@ pub mod picker;
 pub mod theme;
 pub mod triage;
 
-use super::app::{App, Focus};
+use super::app::{App, Focus, Overlay};
 use super::ModeArg;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::widgets::Paragraph;
@@ -56,6 +56,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if let (Some(area), Some(picker)) = (grid_area, &app.picker) {
         picker::draw_picker(frame, area, picker);
+    }
+    if app.overlay == Overlay::Help {
+        help::draw_help(frame, areas.main, app);
     }
 }
 

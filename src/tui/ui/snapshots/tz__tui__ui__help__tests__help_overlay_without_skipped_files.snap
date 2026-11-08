@@ -1,0 +1,54 @@
+---
+source: src/tui/ui/help.rs
+expression: "render_app(&mut app, 100, 50)"
+---
+ Issues (1) │ Triage (0)                                                                group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                     1 of 1
+ No epic ──┌ Help ──────────────────────────────────────────────────────────────────────┐
+┏ t-1 ━━━━━│ Global                                                                     │
+┃ Login pag│   q, Ctrl-C    Quit                                                        │
+┃          │   ?            Help                                                        │
+┃          │   R            Reload now                                                  │
+┃          │   m            Cycle mode (Issues / Triage)                                │
+┃ —  open  │   y            Copy ID / filename                                          │
+┗━━━━━━━━━━│   o            Open in $EDITOR                                             │
+           │                                                                            │
+           │ Grid                                                                       │
+           │   ←, h         Move left                                                   │
+           │   ↓, j         Move down                                                   │
+           │   ↑, k         Move up                                                     │
+           │   →, l         Move right                                                  │
+           │   PgUp         Page up in column                                           │
+           │   PgDn         Page down in column                                         │
+           │   Home         Top of column                                               │
+           │   End          Bottom of column                                            │
+           │   Enter        Open detail                                                 │
+           │   /            Search                                                      │
+           │   Esc          Clear search                                                │
+           │   g            Cycle grouping (issues mode)                                │
+           │   r            Role filter (issues mode)                                   │
+           │   s            Status filter (issues mode)                                 │
+           │   t            Type filter (issues mode)                                   │
+           │   p            Priority filter (issues mode)                               │
+           │   e            Effort filter (issues mode)                                 │
+           │   c            Reset filters (issues mode)                                 │
+           │   Ctrl-U       Scroll detail half page up (split view)                     │
+           │   Ctrl-D       Scroll detail half page down (split view)                   │
+           │                                                                            │
+           │ Detail                                                                     │
+           │   ↑, k         Scroll up one line                                          │
+           │   ↓, j         Scroll down one line                                        │
+           │   PgUp         Scroll up one page                                          │
+           │   PgDn, Space  Scroll down one page                                        │
+           │   Ctrl-U       Scroll up half a page                                       │
+           │   Ctrl-D       Scroll down half a page                                     │
+           │   Home         Top                                                         │
+           │   End          Bottom                                                      │
+           │   Tab          Next relationship (issues mode)                             │
+           │   Shift-Tab    Previous relationship (issues mode)                         │
+           │   Enter        Follow relationship (issues mode)                           │
+           │   Esc          Back / close                                                │
+           │                                                                            │
+           │ Search input                                                               │
+           └ ↑↓ scroll · ? / Esc close ───────────────────────────────────── 1-45 of 68 ┘
+ ? close

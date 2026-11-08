@@ -241,14 +241,18 @@ pub const PICKER: &[Binding] = &[
     fixed(&[ESC], Action::PickerCancel, "Esc", "Cancel", When::Always),
 ];
 
-/// The help overlay swallows everything except these (and `Ctrl-C`).
-pub const HELP: &[Binding] = &[fixed(
-    &[ch('?'), ESC],
-    Action::CloseHelp,
-    "?, Esc",
-    "Close help",
-    When::Always,
-)];
+/// The help overlay scrolls and closes; it swallows everything else (except
+/// `Ctrl-C`).
+#[rustfmt::skip]
+pub const HELP: &[Binding] = &[
+    fixed(&[UP, ch('k')], Action::HelpLineUp, "↑, k", "Scroll up one line", When::Always),
+    fixed(&[DOWN, ch('j')], Action::HelpLineDown, "↓, j", "Scroll down one line", When::Always),
+    fixed(&[PGUP], Action::HelpPageUp, "PgUp", "Scroll up one page", When::Always),
+    fixed(&[PGDN, SPACE], Action::HelpPageDown, "PgDn, Space", "Scroll down one page", When::Always),
+    fixed(&[HOME], Action::HelpTop, "Home", "Top", When::Always),
+    fixed(&[END], Action::HelpBottom, "End", "Bottom", When::Always),
+    fixed(&[ch('?'), ESC], Action::CloseHelp, "?, Esc", "Close help", When::Always),
+];
 
 /// The tables the help overlay lists, in order, with their titles (spec §11).
 pub const HELP_SECTIONS: &[(&str, &[Binding])] = &[
@@ -257,6 +261,7 @@ pub const HELP_SECTIONS: &[(&str, &[Binding])] = &[
     ("Detail", DETAIL),
     ("Search input", SEARCH_INPUT),
     ("Picker", PICKER),
+    ("Help", HELP),
 ];
 
 /// The context-specific bindings of `context` (not including [`GLOBAL`]),
@@ -523,8 +528,15 @@ mod tests {
             res(Context::Help, press(KeyCode::Esc, NONE), &a),
             Some(Action::CloseHelp)
         );
-        assert_eq!(res(Context::Help, c('j'), &a), None);
         assert_eq!(res(Context::Help, c('q'), &a), None);
+        assert_eq!(res(Context::Help, c('x'), &a), None);
+        assert_eq!(res(Context::Help, c('R'), &a), None);
+        assert_eq!(res(Context::Help, press(KeyCode::Enter, NONE), &a), None);
+        assert_eq!(
+            res(Context::Help, press(KeyCode::Char('c'), CTRL), &a),
+            Some(Action::Quit)
+        );
+        assert_eq!(res(Context::Help, c('j'), &a), Some(Action::HelpLineDown));
     }
 
     #[test]

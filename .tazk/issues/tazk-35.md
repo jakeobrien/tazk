@@ -1,6 +1,6 @@
 ---
 title: 'TUI: help overlay generated from the keymap, with skipped-file details'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -14,7 +14,8 @@ dependencies:
   tazk-5: child_of
   tazk-8: blocked_by
 created_at: 2026-11-06T03:28:37.379781253+00:00
-updated_at: 2026-11-06T03:28:37.516884920+00:00
+updated_at: 2026-11-08T19:06:51.701754319+00:00
+closed_at: 2026-11-08T19:06:51.701754319+00:00
 ---
 
 # Description
@@ -30,3 +31,7 @@ Spec docs/tui-spec.md §3.2 and §11.
 - Snapshot test of the help overlay with and without skipped files.
 - A test asserts every keymap binding label appears in the rendered help (guards against drift).
 - `?`/`Esc` close it; other keys are swallowed while open (except `Ctrl-C`).
+
+# Notes
+
+Closed 2026-11-08T19:06:51Z: Implemented in src/tui/ui/help.rs
