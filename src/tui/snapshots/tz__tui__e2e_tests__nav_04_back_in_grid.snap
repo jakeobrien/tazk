@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: "screen(&mut app, NARROW)"
+---
+ Issues (10) │ Triage (3)                                                                                   group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
+ No epic ──────────────────── 4  fx-1 Platform ────────────── 2  fx-2 Auth rework ─────────── 2
+╭ fx-1 ────────────────────────╮╭ fx-1 ────────────────────────╮╭ fx-2 ────────────────────────╮
+│ Platform                     ││ Platform                     ││ Auth rework                  │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ —  open  P0  —               ││ —  open  P0  —               ││ —  open  P1  —               │
+╰────────────────────── epic ──╯╰────────────────────── epic ──╯╰────────────────────── epic ──╯
+╭ fx-9 ────────────────────────╮╭ fx-2 ────────────────────────╮╭ fx-4 ────────────────────────╮
+│ Write the docs               ││ Auth rework                  ││ Session cookie dropped       │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ human  open  P2  ●●○○○       ││ —  open  P1  —               ││ —  open  P0  —               │
+╰─────────────────── feature ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯
+╭ fx-8 ───────────────────── ⊘ ╮╭ fx-5 ────────────────────────╮┏ fx-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+│ Standalone chore             ││ Session store                │┃ Login form redirects loop    ┃
+│                              ││                              │┃                              ┃
+│                              ││                              │┃                              ┃
+│                              ││                              │┃                              ┃
+│ —  open  P3  —               ││ —  in_prog  P2  —            │┃ agent  open  P1  ●●●○○       ┃
+╰────────────────────── task ──╯╰────────────────────── task ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
+╭ fx-10 ───────────────────────╮
+│ Orphan task                  │
+│                              │
+│                              │
+│                              │
+│ —  open  P4  —               │
+╰────────────────────── task ──╯
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit

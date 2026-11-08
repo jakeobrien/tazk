@@ -8,6 +8,8 @@
 mod actions;
 mod app;
 mod data;
+#[cfg(test)]
+mod e2e_tests;
 mod keymap;
 mod model;
 mod terminal;

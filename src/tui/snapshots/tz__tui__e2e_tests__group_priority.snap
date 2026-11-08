@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: "screen(&mut app, NARROW)"
+---
+ Issues (10) │ Triage (3)                                                                               group: priority
+ role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
+ P1 ───────────────────────── 2  P2 ───────────────────────── 2  P3 ───────────────────────── 1
+╭ fx-2 ────────────────────────╮╭ fx-5 ────────────────────────╮╭ fx-8 ───────────────────── ⊘ ╮
+│ Auth rework                  ││ Session store                ││ Standalone chore             │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ —  open  P1  —               ││ —  in_prog  P2  —            ││ —  open  P3  —               │
+╰────────────────────── epic ──╯╰────────────────────── task ──╯╰────────────────────── task ──╯
+┏ fx-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓╭ fx-9 ────────────────────────╮
+┃ Login form redirects loop    ┃│ Write the docs               │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┃                              ┃│                              │
+┃ agent  open  P1  ●●●○○       ┃│ human  open  P2  ●●○○○       │
+┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛╰─────────────────── feature ──╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit

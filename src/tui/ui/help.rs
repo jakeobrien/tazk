@@ -199,8 +199,8 @@ mod tests {
     use super::*;
     use crate::storage::SkippedFile;
     use crate::tui::app::{update, Action, Overlay};
-    use crate::tui::keymap;
     use crate::tui::data::Snapshot;
+    use crate::tui::keymap;
     use crate::tui::testing::*;
     use crate::tui::ModeArg;
 

@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: narrow
+---
+ Issues (10) │ Triage (3)                                                                                   group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
+┌ fx-2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Auth rework                                                                                                           │
+│                                                                                                                      │
+│ID           fx-2                                                                                                     │
+│Type         epic                                                                                                     │
+│Status       open                                                                                                     │
+│Priority     P1                                                                                                       │
+│Role         —                                                                                                        │
+│Effort       —                                                                                                        │
+│Assignee     —                                                                                                        │
+│Labels       —                                                                                                        │
+│External ref —                                                                                                        │
+│Created      2025-01-01 00:00                                                                                         │
+│Updated      2025-01-01 00:00                                                                                         │
+│                                                                                                                      │
+│Parent                                                                                                                │
+│  fx-1 open Platform                                                                                                  │
+│                                                                                                                      │
+│Children                                                                                                              │
+│  fx-3 open Login form redirects loop                                                                                 │
+│  fx-4 open Session cookie dropped                                                                                    │
+│                                                                                                                      │
+│(no description)                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ? help  ↑/↓ scroll  Tab/Shift-Tab links  Enter follow  Esc back  q quit  y copy  o edit

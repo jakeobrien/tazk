@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: "screen(&mut app, NARROW)"
+---
+ Issues (10) │ Triage (3)                                                                                 group: status
+ role:all  status:closed  type:all  pri:all  effort:all                                            2 of 10  ⚠ 1 skipped
+ closed ───────────────────── 2
+┏ fx-6 ━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Legacy cleanup               ┃
+┃                              ┃
+┃                              ┃
+┃                              ┃
+┃ —  closed  P3  —             ┃
+┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛
+╭ fx-7 ────────────────────────╮
+│ Old migration                │
+│                              │
+│                              │
+│                              │
+│ —  closed  P3  —             │
+╰────────────────────── task ──╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit

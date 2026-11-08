@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: "screen(&mut app, NARROW)"
+---
+ Issues (10) │ Triage (3)                                                                                   group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
+┌ fx-3 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Login form redirects loop                                                                                             │
+│                                                                                                                      │
+│ID           fx-3                                                                                                     │
+│Type         task                                                                                                     │
+│Status       open  ⊘ open blockers                                                                                    │
+│Priority     P1                                                                                                       │
+│Role         agent                                                                                                    │
+│Effort       ●●●○○                                                                                                    │
+│Assignee     —                                                                                                        │
+│Labels       —                                                                                                        │
+│External ref —                                                                                                        │
+│Created      2025-01-01 00:00                                                                                         │
+│Updated      2025-01-01 00:00                                                                                         │
+│                                                                                                                      │
+│Parent                                                                                                                │
+│  fx-2 open Auth rework                                                                                               │
+│                                                                                                                      │
+│Blocked by                                                                                                            │
+│  fx-5 in_prog Session store                                                                                          │
+│                                                                                                                      │
+│Related                                                                                                               │
+│  fx-4 open Session cookie dropped                                                                                    │
+│                                                                                                                      │
+│# Description                                                                                                         │
+│                                                                                                                      │
+│The login form loops after a timeout.                                                                                 │
+│                                                                                                                      │
+│See also fx-4.                                                                                                        │
+│                                                                                                                      │
+│# Acceptance Criteria                                                                                                 │
+│                                                                                                                      │
+│- works in Safari                                                                                                     │
+│- no loop                                                                                                             │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ? help  ↑/↓ scroll  Tab/Shift-Tab links  Enter follow  Esc back  q quit  y copy  o edit

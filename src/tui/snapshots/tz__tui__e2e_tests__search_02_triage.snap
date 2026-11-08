@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: "screen(&mut app, NARROW)"
+---
+ Issues (10) │ Triage (3)
+ /dark                                                                                              1 of 3  ⚠ 1 skipped
+┏ 2025-01-02 00:00 ━━━━━━━━━━━━┓
+┃ Add dark mode                ┃
+┃                              ┃
+┃                              ┃
+┃                              ┃
+┃                              ┃
+┗━━━ 20250102T000000-bbbb.md ━━┛
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  Esc clear search  m mode  q quit  y copy  o edit

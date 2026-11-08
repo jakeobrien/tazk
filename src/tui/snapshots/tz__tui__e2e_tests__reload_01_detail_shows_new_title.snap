@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: detail
+---
+ Issues (11) │ Triage (4)                                                                                   group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                                        8 of 11
+┌ fx-3 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Login form: fixed title                                                                                               │
+│                                                                                                                      │
+│ID           fx-3                                                                                                     │
+│Type         task                                                                                                     │
+│Status       open  ⊘ open blockers                                                                                    │
+│Priority     P1                                                                                                       │
+│Role         agent                                                                                                    │
+│Effort       ●●●○○                                                                                                    │
+│Assignee     —                                                                                                        │
+│Labels       —                                                                                                        │
+│External ref —                                                                                                        │
+│Created      2025-01-01 00:00                                                                                         │
+│Updated      2025-01-01 00:00                                                                                         │
+│                                                                                                                      │
+│Parent                                                                                                                │
+│  fx-2 open Auth rework                                                                                               │
+│                                                                                                                      │
+│Blocked by                                                                                                            │
+│  fx-5 in_prog Session store                                                                                          │
+│                                                                                                                      │
+│Related                                                                                                               │
+│  fx-4 open Session cookie dropped                                                                                    │
+│                                                                                                                      │
+│(no description)                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ? help  ↑/↓ scroll  Tab/Shift-Tab links  Enter follow  Esc back  q quit  y copy  o edit

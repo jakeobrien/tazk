@@ -1,0 +1,44 @@
+---
+source: src/tui/e2e_tests.rs
+expression: grid
+---
+ Issues (11) │ Triage (4)                                                                                   group: epic
+ role:all  status:!closed  type:all  pri:all  effort:all                                                        8 of 11
+ No epic ──────────────────── 4  fx-1 Platform ────────────── 2  fx-2 Auth rework ─────────── 2
+╭ fx-1 ────────────────────────╮╭ fx-1 ────────────────────────╮╭ fx-2 ────────────────────────╮
+│ Platform                     ││ Platform                     ││ Auth rework                  │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ —  open  P0  —               ││ —  open  P0  —               ││ —  open  P1  —               │
+╰────────────────────── epic ──╯╰────────────────────── epic ──╯╰────────────────────── epic ──╯
+╭ fx-11 ───────────────────────╮╭ fx-2 ────────────────────────╮╭ fx-4 ────────────────────────╮
+│ Brand new issue              ││ Auth rework                  ││ Session cookie dropped       │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ —  open  P0  —               ││ —  open  P1  —               ││ —  open  P0  —               │
+╰────────────────────── task ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯
+╭ fx-bad ──────────────────────╮╭ fx-5 ────────────────────────╮┏ fx-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+│ Repaired file                ││ Session store                │┃ Login form: fixed title      ┃
+│                              ││                              │┃                              ┃
+│                              ││                              │┃                              ┃
+│                              ││                              │┃                              ┃
+│ —  open  P2  —               ││ —  in_prog  P2  —            │┃ agent  open  P1  ●●●○○       ┃
+╰────────────────────── task ──╯╰────────────────────── task ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
+╭ fx-8 ───────────────────── ⊘ ╮
+│ Standalone chore             │
+│                              │
+│                              │
+│                              │
+│ —  open  P3  —               │
+╰────────────────────── task ──╯
+
+
+
+
+
+
+
+
+ ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit
