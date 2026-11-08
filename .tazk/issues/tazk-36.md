@@ -1,6 +1,6 @@
 ---
 title: 'TUI: document `tz tui` in USAGE.md and README'
-status: open
+status: closed
 priority: 3
 issue_type: task
 role: agent
@@ -19,7 +19,8 @@ dependencies:
   tazk-35: blocked_by
   tazk-6: child_of
 created_at: 2026-11-06T03:28:37.381097003+00:00
-updated_at: 2026-11-06T03:28:37.533132795+00:00
+updated_at: 2026-11-08T19:17:07.116724029+00:00
+closed_at: 2026-11-08T19:17:07.116724029+00:00
 ---
 
 # Description
@@ -30,3 +31,7 @@ Add a `tz tui` section to USAGE.md: purpose (read-only browser), flags (§2.1), 
 
 - USAGE.md has a `tz tui` section covering every flag and the items above; README and `src/README.md` reference it.
 - Documented flags/keys match `tz tui --help` and the keymap (spot-check).
+
+# Notes
+
+Closed 2026-11-08T19:17:07Z: Documented tz tui in USAGE.md, README.md and src/README.md

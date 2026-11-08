@@ -12,6 +12,7 @@ tazk (`tz`) is a dependency-aware issue tracker. Issues are stored as markdown f
 - **Dependency tracking**: Issues can block each other, with automatic detection of ready work
 - **Fast**: Rust implementation with coarse-grained file locking
 - **Git-friendly**: Field-aware three-way merge driver for issue and comment files
+- **Terminal UI**: `tz tui` is a read-only, full-screen browser for issues and triage items (see [USAGE.md](USAGE.md#terminal-ui); behind the default-on `tui` cargo feature)
 
 ## Installation
 
@@ -146,7 +147,8 @@ src/
 ├── format.rs    # Markdown serialization/deserialization
 ├── types.rs     # Core data structures (Issue, Status, etc.)
 ├── lock.rs      # Coarse-grained file locking
-└── merge_driver.rs, issue_merge.rs, diff3.rs  # Git merge driver (see src/README.md)
+├── merge_driver.rs, issue_merge.rs, diff3.rs  # Git merge driver (see src/README.md)
+└── tui/         # `tz tui` read-only terminal UI (feature `tui`, see src/README.md)
 
 tests/
 ├── e2e_tests.rs           # Test harness

@@ -21,3 +21,11 @@ The binary composes safe-Rust modules around Markdown issue storage:
 - `diff3.rs` is the line-level three-way merge and conflict-hunk writer under it.
 - `merge_driver.rs` implements `tz merge-driver run|install|show`: git's merge
   driver protocol, path classification, and `git config`/`.gitattributes` setup.
+- `tui/` implements `tz tui`, a read-only ratatui/crossterm browser for issues and
+  triage items, compiled only with the default-on `tui` cargo feature. `app.rs`
+  holds state and key-event updates (no drawing), `model/` builds the pure
+  grouping, filter, search and selection logic, `data.rs` loads snapshots (using the
+  tolerant storage loader that skips bad files) and drives refresh, `keymap.rs`
+  is the single key table behind both input dispatch and the help overlay,
+  `ui/` renders, and `terminal.rs` owns raw mode and the `$EDITOR` hand-off.
+  User docs are in `USAGE.md`; the design is in `docs/tui-spec.md`.
