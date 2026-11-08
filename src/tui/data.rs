@@ -91,7 +91,11 @@ impl Reloader {
 
     /// A reloader that loads from `storage` with [`Snapshot::load`].
     pub fn for_storage(storage: Storage) -> Self {
-        let storage = Arc::new(storage);
+        Self::for_shared(Arc::new(storage))
+    }
+
+    /// Like [`Reloader::for_storage`], for a storage shared with the caller.
+    pub fn for_shared(storage: Arc<Storage>) -> Self {
         Self::new(Arc::new(move || Snapshot::load(&storage)))
     }
 

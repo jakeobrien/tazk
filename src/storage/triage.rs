@@ -105,7 +105,7 @@ impl Storage {
     /// a bare name (`NAME` or `NAME.md`) or a path to a file in the triage
     /// folder, so a tab-completed `.tazk/triage/NAME.md` works too. Fails if the
     /// item does not exist.
-    fn triage_item_path(&self, reference: &str) -> Result<(String, PathBuf)> {
+    pub fn triage_item_path(&self, reference: &str) -> Result<(String, PathBuf)> {
         let dir = self.triage_dir();
         let name = if reference.contains('/') || reference.contains(std::path::MAIN_SEPARATOR) {
             let path = Path::new(reference);

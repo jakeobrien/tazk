@@ -4,9 +4,11 @@
 //! calls [`app::update`] and redraws. All behavior lives in `app.rs`.
 
 use super::actions::clipboard::{self, SystemClipboard};
+use super::actions::editor::{self, TerminalHost};
 use super::app::{self, Action, App};
 use super::data::Reloader;
 use super::{keymap, ui};
+use crate::storage::Storage;
 use anyhow::Result;
 use crossterm::event::{self, DisableFocusChange, EnableFocusChange, Event, KeyEventKind};
 use crossterm::terminal::{
@@ -17,6 +19,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{self, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -90,6 +93,16 @@ pub fn resume(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
+impl TerminalHost for Tui {
+    fn suspend(&mut self) {
+        suspend();
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        resume(self)
+    }
+}
+
 /// Translate a terminal event into an [`Action`]. `None` for events we ignore.
 pub fn translate(event: Event, app: &App) -> Option<Action> {
     match event {
@@ -114,17 +127,22 @@ pub fn handle_event(app: &mut App, event: Event) {
 }
 
 /// Set up the terminal, run the event loop until quit, and restore the terminal.
-pub fn run(mut app: App, reloader: Reloader) -> Result<()> {
+pub fn run(mut app: App, reloader: Reloader, storage: Arc<Storage>) -> Result<()> {
     install_panic_hook();
     enter()?;
     let _guard = Guard;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let size = terminal.size()?;
     app::update(&mut app, Action::Resize(size.width, size.height));
-    event_loop(&mut terminal, &mut app, reloader)
+    event_loop(&mut terminal, &mut app, reloader, &storage)
 }
 
-fn event_loop(terminal: &mut Tui, app: &mut App, mut reloader: Reloader) -> Result<()> {
+fn event_loop(
+    terminal: &mut Tui,
+    app: &mut App,
+    mut reloader: Reloader,
+    storage: &Storage,
+) -> Result<()> {
     let mut next_tick = Instant::now() + TICK_INTERVAL;
     let mut clipboard = SystemClipboard;
     while !app.should_quit {
@@ -144,6 +162,13 @@ fn event_loop(terminal: &mut Tui, app: &mut App, mut reloader: Reloader) -> Resu
             handle_event(app, event::read()?);
             // After the key press cleared the status, so the result stays visible.
             clipboard::perform_pending(app, &mut clipboard);
+            let editor_env = std::env::var("EDITOR").ok();
+            editor::perform_pending(
+                app,
+                &|target| editor::resolve_path(storage, target),
+                terminal,
+                editor_env.as_deref(),
+            )?;
         }
         app.expire_status(Instant::now());
         if Instant::now() >= next_tick {

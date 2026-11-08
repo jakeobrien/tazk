@@ -607,6 +607,12 @@ impl Storage {
         Ok(self.existing_issue_path(id)?.is_some())
     }
 
+    /// Path of the issue's Markdown file in whichever layout it is stored
+    /// (flat or sharded), or `None` if there is no such file.
+    pub fn issue_file_path(&self, id: &str) -> Result<Option<PathBuf>> {
+        self.existing_issue_path(id)
+    }
+
     pub(crate) fn existing_or_configured_issue_path(&self, id: &str) -> Result<PathBuf> {
         match self.existing_issue_path(id)? {
             Some(path) => Ok(path),

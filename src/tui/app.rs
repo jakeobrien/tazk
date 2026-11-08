@@ -199,6 +199,16 @@ pub struct App {
     /// Text `y` wants on the clipboard; the event loop performs the copy
     /// ([`App::take_copy`]) so `update` stays free of side effects.
     pub copy_request: Option<String>,
+    /// File `o` wants opened in `$EDITOR`; the event loop resolves the path
+    /// and runs the editor ([`App::take_editor_request`]).
+    pub editor_request: Option<EditorTarget>,
+}
+
+/// What `o` opens: an issue (by ID) or a triage item (by file name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorTarget {
+    Issue(String),
+    Triage(String),
 }
 
 impl App {
@@ -250,6 +260,7 @@ impl App {
             should_quit: false,
             size: (0, 0),
             reload_requested: false,
+            editor_request: None,
             copy_request: None,
         };
         app.refresh_grid();
@@ -568,6 +579,20 @@ impl App {
         }
     }
 
+    /// What `o` opens: the same item `y` copies (spec §11).
+    pub fn editor_target(&self) -> Option<EditorTarget> {
+        let text = self.copy_text()?;
+        Some(match self.mode {
+            ModeArg::Triage => EditorTarget::Triage(text),
+            ModeArg::Issues => EditorTarget::Issue(text),
+        })
+    }
+
+    /// Returns and clears the pending editor request.
+    pub fn take_editor_request(&mut self) -> Option<EditorTarget> {
+        self.editor_request.take()
+    }
+
     /// Returns and clears the pending clipboard request.
     pub fn take_copy(&mut self) -> Option<String> {
         self.copy_request.take()
@@ -689,11 +714,15 @@ fn apply(app: &mut App, action: Action) {
         | Action::DetailBack => app.detail_action(&action),
 
         // EXTENSION POINTS, each handled by its own issue:
-        // - navigation: OpenEditor
+        // - navigation:
         //   (grid movement: Move, Column* are handled by `App::navigate`)
         Action::CopyId => match app.copy_text() {
             Some(text) => app.copy_request = Some(text),
             None => app.set_status("Nothing to copy"),
+        },
+        Action::OpenEditor => match app.editor_target() {
+            Some(target) => app.editor_request = Some(target),
+            None => app.set_status("Nothing to open"),
         },
         Action::OpenDetail => app.open_detail(),
         Action::OpenPicker(kind) => app.open_picker(kind),
@@ -719,8 +748,7 @@ fn apply(app: &mut App, action: Action) {
         }
         Action::PickerApply => app.apply_picker(),
         Action::PickerCancel => app.close_picker(),
-        Action::OpenEditor
-        | Action::Move(_)
+        Action::Move(_)
         | Action::ColumnPageUp
         | Action::ColumnPageDown
         | Action::ColumnTop
