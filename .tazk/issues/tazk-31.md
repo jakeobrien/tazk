@@ -1,6 +1,6 @@
 ---
 title: 'TUI: triage detail view'
-status: open
+status: closed
 priority: 2
 issue_type: task
 role: agent
@@ -14,7 +14,8 @@ dependencies:
   tazk-30: blocked_by
   tazk-4: child_of
 created_at: 2026-11-06T03:28:37.374700170+00:00
-updated_at: 2026-11-06T03:28:37.488433128+00:00
+updated_at: 2026-11-07T16:21:55.612198540+00:00
+closed_at: 2026-11-07T16:21:55.612198540+00:00
 ---
 
 # Description

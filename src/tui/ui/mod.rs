@@ -208,4 +208,68 @@ mod tests {
         let c = corner(&mut app);
         assert_eq!(c.fg, theme::pane_border_style(true).fg.unwrap());
     }
+
+    // ---- Triage detail (spec §9.5)
+
+    fn triage_app(size: (u16, u16)) -> App {
+        let snap = fixtures::snapshot_with(
+            [fixtures::issue("tz-1", "An issue")],
+            vec![
+                fixtures::triage_item(
+                    "20251104T001800-k3f9.md",
+                    "# Login crashes\n\nThe session cookie is dropped on redirect.\n\n- step one\n- step two\n",
+                ),
+                fixtures::triage_item("hand-dropped-note.md", "Just a *note* with `code`.\n"),
+            ],
+        );
+        let mut app = App::from_snapshot(ModeArg::Triage, snap);
+        update(&mut app, Action::Resize(size.0, size.1));
+        app
+    }
+
+    #[test]
+    fn triage_detail_full_screen_with_standard_name() {
+        let mut app = triage_app((100, 24));
+        assert_eq!(
+            app.selection.triage.as_deref(),
+            Some("20251104T001800-k3f9.md")
+        );
+        update(&mut app, Action::OpenDetail);
+        assert!(app.full_screen_detail);
+        let out = render_app(&mut app, 100, 24);
+        assert!(out.contains("Created      2025-11-04 00:18"), "{out}");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn triage_detail_in_split_view_with_nonstandard_name() {
+        let mut app = triage_app((200, 24));
+        update(&mut app, Action::Move(crate::tui::app::Dir::Right));
+        assert_eq!(
+            app.selection.triage.as_deref(),
+            Some("hand-dropped-note.md")
+        );
+        let out = render_app(&mut app, 200, 24);
+        assert!(!out.contains("Created"), "{out}");
+        assert!(out.contains("hand-dropped-note.md"));
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn triage_detail_follows_the_selection_in_split_view() {
+        let mut app = triage_app((200, 24));
+        let pane = |app: &mut App| {
+            render_app(app, 200, 24)
+                .lines()
+                .map(|l| l.chars().skip(100).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let out = pane(&mut app);
+        assert!(out.contains("Login crashes"));
+        update(&mut app, Action::Move(crate::tui::app::Dir::Right));
+        let out = pane(&mut app);
+        assert!(!out.contains("Login crashes"));
+        assert!(out.contains("Just a note with code."));
+    }
 }

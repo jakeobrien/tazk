@@ -1,0 +1,28 @@
+---
+source: src/tui/ui/mod.rs
+expression: out
+---
+ Issues (1) │ Triage (2)
+                                                                                                                                                                                                 2 of 2
+╭ 2025-11-04 00:18 ────────────╮┏ hand-dropped-note.md ━━━━━━━━┓                                    ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ # Login crashes The session  │┃ Just a *note* with `code`.   ┃                                    │hand-dropped-note.md                                                                              │
+│ cookie is dropped on…        │┃                              ┃                                    │                                                                                                  │
+│                              │┃                              ┃                                    │Just a note with code.                                                                            │
+│                              │┃                              ┃                                    │                                                                                                  │
+│                              │┃                              ┃                                    │                                                                                                  │
+╰─── 20251104T001800-k3f9.md ──╯┗━━━━━━ hand-dropped-note.md ━━┛                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ? help  Enter open  / search  m mode  q quit  y copy  o edit

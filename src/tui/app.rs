@@ -1324,6 +1324,37 @@ mod tests {
         a
     }
 
+    #[test]
+    fn tab_and_enter_in_triage_detail_do_nothing_and_esc_returns_to_grid() {
+        let snap = fixtures::snapshot_with(
+            [fixtures::issue("tz-1", "One")],
+            vec![
+                fixtures::triage_item("20251104T001800-k3f9.md", "first"),
+                fixtures::triage_item("20251104T001900-k3fa.md", "second"),
+            ],
+        );
+        let mut a = App::from_snapshot(ModeArg::Triage, snap);
+        update(&mut a, Action::Resize(120, 40));
+        send(&mut a, key(KeyCode::Enter));
+        assert!(a.full_screen_detail);
+        assert_eq!(a.context(), Context::Detail);
+        a.detail.set_metrics(100, 10);
+        send(&mut a, key(KeyCode::PageDown));
+        let before = (a.detail.clone(), a.selection.clone(), a.full_screen_detail);
+        for code in [KeyCode::Tab, KeyCode::BackTab, KeyCode::Enter] {
+            send(&mut a, key(code));
+            assert_eq!(
+                (a.detail.clone(), a.selection.clone(), a.full_screen_detail),
+                before
+            );
+        }
+        send(&mut a, key(KeyCode::Esc));
+        assert!(!a.full_screen_detail);
+        assert_eq!(a.focus, Focus::Grid);
+        assert_eq!(a.context(), Context::Grid);
+        assert_eq!(a.mode, ModeArg::Triage);
+    }
+
     fn displayed(a: &App) -> Option<&str> {
         a.displayed_issue_id()
     }

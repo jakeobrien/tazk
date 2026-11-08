@@ -30,11 +30,13 @@
 use super::cell::{truncate_with_ellipsis, wrap_title};
 use super::markdown::{issue_markdown, MarkdownCache, Rendered};
 use super::theme;
+use crate::storage::triage::TriageItem;
 use crate::tui::app::App;
 use crate::tui::data::Snapshot;
 use crate::tui::model::blockers::has_open_blockers;
 use crate::tui::model::detail::DetailState;
 use crate::tui::model::relations::{relationships, Entry, Relationships};
+use crate::tui::model::triage::created_label;
 use crate::tui::ModeArg;
 use crate::types::Issue;
 use chrono::{DateTime, Local, TimeZone, Utc};
@@ -120,6 +122,33 @@ impl DetailView {
         }
     }
 
+    /// Compose the detail of a triage item (spec §9.5): the file name, the
+    /// creation time parsed from it when the name is standard, then the full
+    /// text as markdown. No properties or relationships, so no entry rows.
+    pub fn build_triage(item: &TriageItem, width: u16, markdown: &MarkdownCache) -> Self {
+        let width = usize::from(width);
+        let mut head: Vec<Line<'static>> = Vec::new();
+        for line in wrap_title(&item.name, width, usize::MAX) {
+            head.push(Line::styled(line, theme::heading_style()));
+        }
+        if let Some(created) = created_label(&item.name) {
+            head.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<LABEL_WIDTH$} ", "Created"),
+                    theme::label_style(),
+                ),
+                Span::raw(created),
+            ]));
+        }
+        head.push(Line::default());
+        let body = markdown.get(&item.body, body_width(width));
+        Self {
+            head,
+            body,
+            entry_rows: Vec::new(),
+        }
+    }
+
     /// Total rows of the whole composition.
     pub fn height(&self) -> usize {
         self.head.len() + self.body.line_count
@@ -189,22 +218,52 @@ pub fn draw_issue_detail(
     view.render(area, frame.buffer_mut(), state.scroll());
 }
 
+/// Build, sync `state` and draw the detail of a triage item into `area`.
+pub fn draw_triage_detail(
+    frame: &mut Frame,
+    area: Rect,
+    item: &TriageItem,
+    state: &mut DetailState,
+    markdown: &MarkdownCache,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let view = DetailView::build_triage(item, area.width, markdown);
+    view.sync_state(state, area.height);
+    view.render(area, frame.buffer_mut(), state.scroll());
+}
+
 /// Draw the detail pane (split view or full-screen) into `area`: a border
 /// (accented when `focused`) around the displayed issue (spec §8, §9). The
-/// displayed issue is the top of the link stack, else the grid selection.
-/// Triage detail is drawn by its own issue.
+/// displayed issue is the top of the link stack, else the grid selection. In
+/// triage mode it is the selected triage item (spec §9.5).
 pub fn draw_detail_pane(frame: &mut Frame, area: Rect, app: &mut App, focused: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let id = app.displayed_issue_id().map(str::to_string);
+    if app.mode == ModeArg::Triage {
+        let block = Block::bordered().border_style(theme::pane_border_style(focused));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+        let name = app.selection.triage.as_deref();
+        match name.and_then(|n| app.snapshot.triage.iter().find(|i| i.name == n)) {
+            Some(item) => draw_triage_detail(frame, inner, item, &mut app.detail, &app.markdown),
+            None => draw_message(frame, inner, NO_TRIAGE_SELECTION_MESSAGE),
+        }
+        return;
+    }
     let mut block = Block::bordered().border_style(theme::pane_border_style(focused));
     if let Some(id) = &id {
         block = block.title(format!(" {id} "));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    if app.mode != ModeArg::Issues || inner.width == 0 || inner.height == 0 {
+    if inner.width == 0 || inner.height == 0 {
         return;
     }
     match id.as_deref().and_then(|id| app.snapshot.issue(id)) {
@@ -216,24 +275,28 @@ pub fn draw_detail_pane(frame: &mut Frame, area: Rect, app: &mut App, focused: b
             &mut app.detail,
             &app.markdown,
         ),
-        None => {
-            let [_, mid, _] = Layout::vertical([
-                Constraint::Fill(1),
-                Constraint::Length(1),
-                Constraint::Fill(1),
-            ])
-            .areas(inner);
-            frame.render_widget(
-                Paragraph::new(NO_SELECTION_MESSAGE)
-                    .alignment(Alignment::Center)
-                    .style(theme::empty_message_style()),
-                mid,
-            );
-        }
+        None => draw_message(frame, inner, NO_SELECTION_MESSAGE),
     }
 }
 
+/// A dim message centered in `area`.
+fn draw_message(frame: &mut Frame, area: Rect, message: &'static str) {
+    let [_, mid, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(message)
+            .alignment(Alignment::Center)
+            .style(theme::empty_message_style()),
+        mid,
+    );
+}
+
 pub const NO_SELECTION_MESSAGE: &str = "No issue selected";
+pub const NO_TRIAGE_SELECTION_MESSAGE: &str = "No triage item selected";
 
 fn body_width(width: usize) -> u16 {
     width.min(usize::from(u16::MAX)) as u16
