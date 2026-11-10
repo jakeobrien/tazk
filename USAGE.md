@@ -93,7 +93,7 @@ leaves them to git's ordinary line merge.
 
 ### Queries
 
-- `tz ready [--assignee USER] [-r/--role ROLE] [--priority N]` - Find ready work (no blockers; `epic` issues are hidden unless `--type epic`)
+- `tz ready [--assignee USER] [-r/--role ROLE] [--priority N]` - Find ready work (no blockers; `epic` and `spec` issues are hidden unless requested with `--type`)
 - `tz blocked` - Show blocked issues and what blocks them
 - `tz stats` - Show statistics (total, open, blocked, average lead time)
 
