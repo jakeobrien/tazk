@@ -4,10 +4,10 @@ expression: detail
 ---
  Issues (11) │ Triage (4)                                                                                   group: epic
  role:all  status:!closed  type:all  pri:all  effort:all                                                        8 of 11
-┌ fx-3 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+┌ tz-3 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │Login form: fixed title                                                                                               │
 │                                                                                                                      │
-│ID           fx-3                                                                                                     │
+│ID           tz-3                                                                                                     │
 │Type         task                                                                                                     │
 │Status       open  ⊘ open blockers                                                                                    │
 │Priority     P1                                                                                                       │
@@ -20,13 +20,13 @@ expression: detail
 │Updated      2025-01-01 00:00                                                                                         │
 │                                                                                                                      │
 │Parent                                                                                                                │
-│  fx-2 open Auth rework                                                                                               │
+│  tz-2 open Auth rework                                                                                               │
 │                                                                                                                      │
 │Blocked by                                                                                                            │
-│  fx-5 in_prog Session store                                                                                          │
+│  tz-5 in_prog Session store                                                                                          │
 │                                                                                                                      │
 │Related                                                                                                               │
-│  fx-4 open Session cookie dropped                                                                                    │
+│  tz-4 open Session cookie dropped                                                                                    │
 │                                                                                                                      │
 │(no description)                                                                                                      │
 │                                                                                                                      │

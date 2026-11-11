@@ -5,14 +5,14 @@ expression: "screen(&mut app, NARROW)"
  Issues (10) │ Triage (3)                                                                                 group: status
  role:all  status:closed  type:all  pri:all  effort:all                                            2 of 10  ⚠ 1 skipped
  closed ───────────────────── 2
-┏ fx-6 ━━━━━━━━━━━━━━━━━━━━━━━━┓
+┏ tz-6 ━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ Legacy cleanup               ┃
 ┃                              ┃
 ┃                              ┃
 ┃                              ┃
 ┃ —  closed  P3  —             ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛
-╭ fx-7 ────────────────────────╮
+╭ tz-7 ────────────────────────╮
 │ Old migration                │
 │                              │
 │                              │

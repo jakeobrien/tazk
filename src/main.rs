@@ -217,10 +217,6 @@ enum Commands {
         #[arg(long)]
         external_ref: Option<String>,
 
-        /// Explicit issue ID
-        #[arg(long)]
-        id: Option<String>,
-
         /// Dependencies (comma-separated). Formats:
         /// Simple: "tz-1,tz-2" (defaults to 'blocked_by')
         /// Advanced: "blocked_by:tz-1,related_to:tz-2,discovered_from:tz-3"
@@ -1584,7 +1580,6 @@ fn run_triage_command(storage: &Storage, command: TriageCommands, json: bool) ->
                     assignee,
                     labels: all_labels,
                     external_ref,
-                    id: None,
                     deps: parse_deps(deps, parent),
                     role: Some(role),
                     effort,
@@ -1933,7 +1928,6 @@ fn run() -> Result<()> {
             label,
             labels,
             external_ref,
-            id,
             deps,
             parent,
         } => {
@@ -1975,7 +1969,6 @@ fn run() -> Result<()> {
                 assignee,
                 all_labels,
                 external_ref,
-                id,
                 parsed_deps,
                 Some(role),
                 effort,

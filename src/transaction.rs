@@ -236,11 +236,15 @@ mod tests {
 
     #[test]
     fn a_failed_multi_file_commit_restores_every_original() {
-        for failure_index in 0..3 {
+        for failure_index in 0..4 {
             let temp = tempfile::tempdir().unwrap();
             let first = temp.path().join("first.md");
             let second = temp.path().join("second.md");
             let third = temp.path().join("third.md");
+            // A triage item rewritten alongside issues and comments.
+            let triage = temp.path().join("triage/item.md");
+            fs::create_dir_all(triage.parent().unwrap()).unwrap();
+            fs::write(&triage, b"triage original").unwrap();
             let original_mtime =
                 SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
             fs::write(&first, b"first original").unwrap();
@@ -260,6 +264,7 @@ mod tests {
             );
             transaction.remove(second.to_path_buf());
             transaction.write_with_mtime(third.to_path_buf(), b"new file".to_vec(), original_mtime);
+            transaction.write(triage.to_path_buf(), b"triage rewritten".to_vec());
             assert!(transaction
                 .commit_with_hook(|index| {
                     anyhow::ensure!(index != failure_index, "simulated write failure");
@@ -268,6 +273,7 @@ mod tests {
                 .is_err());
             assert_eq!(fs::read(&first).unwrap(), b"first original");
             assert_eq!(fs::read(&second).unwrap(), b"second original");
+            assert_eq!(fs::read(&triage).unwrap(), b"triage original");
             for path in [&first, &second] {
                 assert_eq!(
                     fs::metadata(path).unwrap().modified().unwrap(),

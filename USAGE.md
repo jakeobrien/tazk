@@ -70,7 +70,7 @@ the file in `.tazk/triage/`.
   deleted.
 - `tz triage promote NAME... --title TITLE -r human|agent [OPTIONS]` - Create
   one issue from one or more items and delete the items. Accepts the same
-  options as `tz create` except `--id` (`-p`, `-t`, `-d` /
+  options as `tz create` (`-p`, `-t`, `-d` /
   `--description-file`, `--design`, `--acceptance`, `-a`, `--effort`,
   `-l`/`--labels`, `--external-ref`, `--deps`, `--parent`). Without a
   description flag the description is the items' text, in the order given,
@@ -278,7 +278,7 @@ are emitted using the same names.
 
 | Property | Required | Values | Notes |
 |----------|----------|--------|-------|
-| `id` | yes | `tz-N`, or `tz-<hash>` if the database was initialised with `--tz-hash-ids` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). Commands accept numeric shorthand (`14` expands to `tz-14`). Set explicitly with `tz create --id`. |
+| `id` | yes | `tz-N`, or `tz-<hash>` if the database was initialised with `--tz-hash-ids` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). Commands accept numeric shorthand (`14` expands to `tz-14`). The format is strict: `tz-` plus either a number without leading zeros (`[1-9][0-9]*`) or a lowercase base36 hash with at least one letter. IDs are always allocated by `tz`; JSONL import accepts only this form. An issue file whose name does not match is an invalid file. |
 | `title` | yes | Any text | Settable with `create`, `triage promote --title` and `update --title`. |
 | `status` | yes | See [Status](#status) | Default `open`. |
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |

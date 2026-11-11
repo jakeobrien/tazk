@@ -35,7 +35,7 @@ fn migration_preserves_description_with_indented_code_block() {
         sed -i 's/^# Description$/## User Report/' issue.md\n\n\
         Everything after the indented comment must survive renumbering.";
 
-    storage
+    let victim = storage
         .create_issue(
             "Victim issue".to_string(),
             description.to_string(),
@@ -46,17 +46,17 @@ fn migration_preserves_description_with_indented_code_block() {
             None,
             Vec::new(),
             None,
-            Some("tz-hkj8lo".to_string()),
             Vec::new(),
             None,
             None,
         )
-        .expect("create issue");
+        .expect("create issue")
+        .id;
 
     let (_changes, id_mapping) = storage
         .migrate_to_numeric_ids(false, true)
         .expect("migrate to numeric IDs");
-    let new_id = id_mapping.get("tz-hkj8lo").expect("hash ID was renumbered");
+    let new_id = id_mapping.get(&victim).expect("hash ID was renumbered");
 
     let migrated = storage
         .get_issue(new_id)

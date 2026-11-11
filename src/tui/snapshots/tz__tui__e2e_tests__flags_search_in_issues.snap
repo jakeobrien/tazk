@@ -4,15 +4,15 @@ expression: "screen(&mut app, NARROW)"
 ---
  Issues (10) │ Triage (3)                                                                                   group: epic
  role:all  status:!closed  type:all  pri:all  effort:all  /login                                   1 of 10  ⚠ 1 skipped
- fx-2 Auth rework ─────────── 1
-┏ fx-2 ━━━━━━━━━━━━━━━━━━━━━━━━┓
+ tz-2 Auth rework ─────────── 1
+┏ tz-2 ━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ Auth rework                  ┃
 ┃                              ┃
 ┃                              ┃
 ┃                              ┃
 ┃ —  open  P1  —               ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛
-╭ fx-3 ───────────────────── ⊘ ╮
+╭ tz-3 ───────────────────── ⊘ ╮
 │ Login form redirects loop    │
 │                              │
 │                              │

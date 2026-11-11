@@ -15,16 +15,17 @@
 //! other `*.md` file dropped into the folder by hand is also an item.
 
 use super::{
-    append_paragraph, new_comment, search_replace_text, serialize_comments, skipped_file, Loaded,
-    NewIssue, Storage,
+    append_paragraph, new_comment, replace_issue_ids_in_text, search_replace_text,
+    serialize_comments, skipped_file, Loaded, NewIssue, Storage,
 };
 use crate::format::issue_to_markdown;
-use crate::paths::{ensure_contained, IssueId};
+use crate::paths::{ensure_contained, PortableName};
 use crate::transaction::{atomic_write, FileTransaction};
 use crate::types::{Comment, Issue};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -79,7 +80,9 @@ fn generate_name(now: DateTime<Utc>) -> String {
 
 /// Whether a directory entry name is a triage item file.
 fn is_item_file_name(name: &str) -> bool {
-    name.ends_with(EXTENSION) && !name.starts_with('.') && IssueId::parse(name).is_ok()
+    name.ends_with(EXTENSION)
+        && !name.starts_with('.')
+        && PortableName::parse(name).is_ok_and(|n| n.as_str() == name)
 }
 
 /// Turn a user-supplied item name (with or without `.md`) into a file name.
@@ -193,6 +196,42 @@ impl Storage {
         }
         names.sort();
         Ok(names)
+    }
+
+    /// Triage items whose text mentions an ID in `mapping`, with the rewritten
+    /// body: `(name, path, new_body)`. Items without mentions (and unreadable
+    /// files, which cannot be rewritten as text) are left out. The caller must
+    /// hold the write lock.
+    pub(super) fn triage_id_rewrites(
+        &self,
+        mapping: &HashMap<String, String>,
+    ) -> Result<Vec<(String, PathBuf, String)>> {
+        let dir = self.triage_dir();
+        let mut rewrites = Vec::new();
+        for name in self.triage_names_no_lock()? {
+            let path = dir.join(&name);
+            ensure_contained(&self.tazk_dir, &path)?;
+            let Ok(body) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let updated = replace_issue_ids_in_text(&body, mapping);
+            if updated != body {
+                rewrites.push((name, path, updated));
+            }
+        }
+        Ok(rewrites)
+    }
+
+    /// Dry-run lines for the triage items an ID mapping would rewrite.
+    pub(super) fn triage_rewrite_changes(
+        &self,
+        mapping: &HashMap<String, String>,
+    ) -> Result<Vec<String>> {
+        Ok(self
+            .triage_id_rewrites(mapping)?
+            .into_iter()
+            .map(|(name, _, _)| format!("Update ID mentions in triage item {name}"))
+            .collect())
     }
 
     /// Store a new triage item. `body` is normalized with [`compose_body`] and
@@ -420,7 +459,6 @@ mod tests {
             assignee: None,
             labels: Vec::new(),
             external_ref: None,
-            id: None,
             deps: Vec::new(),
             role: Some(Role::Agent),
             effort: None,
@@ -438,7 +476,6 @@ mod tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 Some(Role::Agent),
@@ -708,12 +745,7 @@ mod tests {
         assert!(storage
             .promote_triage_items(std::slice::from_ref(&item.name), f)
             .is_err());
-        let existing = create_issue(&storage);
-        let mut f = fields("T");
-        f.id = Some(existing);
-        assert!(storage
-            .promote_triage_items(std::slice::from_ref(&item.name), f)
-            .is_err());
+        let _existing = create_issue(&storage);
 
         assert_eq!(triage_files(&storage), vec![item.name]);
         assert_eq!(

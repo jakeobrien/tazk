@@ -4,29 +4,29 @@ expression: wide
 ---
  Issues (10) │ Triage (3)                                                                                                                                                                   group: epic
  role:all  status:!closed  type:all  pri:all  effort:all                                                                                                                           8 of 10  ⚠ 1 skipped
- No epic ──────────────────── 4  fx-1 Platform ────────────── 2  fx-2 Auth rework ─────────── 2     ┌ fx-2 ────────────────────────────────────────────────────────────────────────────────────────────┐
-╭ fx-1 ────────────────────────╮╭ fx-1 ────────────────────────╮╭ fx-2 ────────────────────────╮    │Auth rework                                                                                       │
+ No epic ──────────────────── 4  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2     ┌ tz-2 ────────────────────────────────────────────────────────────────────────────────────────────┐
+╭ tz-1 ────────────────────────╮╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮    │Auth rework                                                                                       │
 │ Platform                     ││ Platform                     ││ Auth rework                  │    │                                                                                                  │
-│                              ││                              ││                              │    │ID           fx-2                                                                                 │
+│                              ││                              ││                              │    │ID           tz-2                                                                                 │
 │                              ││                              ││                              │    │Type         epic                                                                                 │
 │                              ││                              ││                              │    │Status       open                                                                                 │
 │ —  open  P0  —               ││ —  open  P0  —               ││ —  open  P1  —               │    │Priority     P1                                                                                   │
 ╰────────────────────── epic ──╯╰────────────────────── epic ──╯╰────────────────────── epic ──╯    │Role         —                                                                                    │
-╭ fx-9 ────────────────────────╮╭ fx-2 ────────────────────────╮╭ fx-4 ────────────────────────╮    │Effort       —                                                                                    │
+╭ tz-9 ────────────────────────╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮    │Effort       —                                                                                    │
 │ Write the docs               ││ Auth rework                  ││ Session cookie dropped       │    │Assignee     —                                                                                    │
 │                              ││                              ││                              │    │Labels       —                                                                                    │
 │                              ││                              ││                              │    │External ref —                                                                                    │
 │                              ││                              ││                              │    │Created      2025-01-01 00:00                                                                     │
 │ human  open  P2  ●●○○○       ││ —  open  P1  —               ││ —  open  P0  —               │    │Updated      2025-01-01 00:00                                                                     │
 ╰─────────────────── feature ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯    │                                                                                                  │
-╭ fx-8 ───────────────────── ⊘ ╮╭ fx-5 ────────────────────────╮┏ fx-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓    │Parent                                                                                            │
-│ Standalone chore             ││ Session store                │┃ Login form redirects loop    ┃    │  fx-1 open Platform                                                                              │
+╭ tz-8 ───────────────────── ⊘ ╮╭ tz-5 ────────────────────────╮┏ tz-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓    │Parent                                                                                            │
+│ Standalone chore             ││ Session store                │┃ Login form redirects loop    ┃    │  tz-1 open Platform                                                                              │
 │                              ││                              │┃                              ┃    │                                                                                                  │
 │                              ││                              │┃                              ┃    │Children                                                                                          │
-│                              ││                              │┃                              ┃    │  fx-3 open Login form redirects loop                                                             │
-│ —  open  P3  —               ││ —  in_prog  P2  —            │┃ agent  open  P1  ●●●○○       ┃    │  fx-4 open Session cookie dropped                                                                │
+│                              ││                              │┃                              ┃    │  tz-3 open Login form redirects loop                                                             │
+│ —  open  P3  —               ││ —  in_prog  P2  —            │┃ agent  open  P1  ●●●○○       ┃    │  tz-4 open Session cookie dropped                                                                │
 ╰────────────────────── task ──╯╰────────────────────── task ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛    │                                                                                                  │
-╭ fx-10 ───────────────────────╮                                                                    │(no description)                                                                                  │
+╭ tz-10 ───────────────────────╮                                                                    │(no description)                                                                                  │
 │ Orphan task                  │                                                                    │                                                                                                  │
 │                              │                                                                    │                                                                                                  │
 │                              │                                                                    │                                                                                                  │

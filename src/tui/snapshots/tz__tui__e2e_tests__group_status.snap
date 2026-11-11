@@ -5,35 +5,35 @@ expression: "screen(&mut app, NARROW)"
  Issues (10) │ Triage (3)                                                                                 group: status
  role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
  open ─────────────────────── 7  in_progress ──────────────── 1
-╭ fx-1 ────────────────────────╮╭ fx-5 ────────────────────────╮
+╭ tz-1 ────────────────────────╮╭ tz-5 ────────────────────────╮
 │ Platform                     ││ Session store                │
 │                              ││                              │
 │                              ││                              │
 │                              ││                              │
 │ —  open  P0  —               ││ —  in_prog  P2  —            │
 ╰────────────────────── epic ──╯╰────────────────────── task ──╯
-╭ fx-4 ────────────────────────╮
+╭ tz-4 ────────────────────────╮
 │ Session cookie dropped       │
 │                              │
 │                              │
 │                              │
 │ —  open  P0  —               │
 ╰─────────────────────── bug ──╯
-╭ fx-2 ────────────────────────╮
+╭ tz-2 ────────────────────────╮
 │ Auth rework                  │
 │                              │
 │                              │
 │                              │
 │ —  open  P1  —               │
 ╰────────────────────── epic ──╯
-┏ fx-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+┏ tz-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
 ┃ Login form redirects loop    ┃
 ┃                              ┃
 ┃                              ┃
 ┃                              ┃
 ┃ agent  open  P1  ●●●○○       ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
-╭ fx-9 ────────────────────────╮
+╭ tz-9 ────────────────────────╮
 │ Write the docs               │
 │                              │
 │                              │

@@ -26,26 +26,26 @@ fn fixture(layout: IssueStorageLayout) -> (tempfile::TempDir, Storage) {
     (temp, storage)
 }
 
+/// Create an issue with a chosen ID. `tz create` can no longer set IDs, so go
+/// through JSONL import, which accepts canonical IDs only.
 fn create(storage: &Storage, id: &str, title: &str) -> anyhow::Result<Issue> {
-    storage.create_issue(
-        title.into(),
-        String::new(),
-        None,
-        None,
-        2,
-        IssueType::Task,
-        None,
-        Vec::new(),
-        None,
-        Some(id.into()),
-        Vec::new(),
-        None,
-        None,
-    )
+    let issue = Issue::new(id.into(), title.into(), 2, IssueType::Task);
+    let input = storage
+        .get_tazk_dir()
+        .parent()
+        .expect("database has a parent")
+        .join("create.jsonl");
+    fs::write(&input, serde_json::to_string(&issue)?)?;
+    let (imported, skipped, errors) = storage.import_from_jsonl(&input, false)?;
+    anyhow::ensure!(
+        imported == 1 && skipped == 0 && errors.is_empty(),
+        "import of {id:?} failed: skipped {skipped}, errors {errors:?}"
+    );
+    Ok(storage.get_issue(id)?.expect("imported issue exists"))
 }
 
 #[test]
-fn unsafe_ids_cannot_create_rename_read_or_write_comments() {
+fn unsafe_ids_are_rejected_by_the_format_check() {
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         let (_temp, storage) = fixture(layout);
         create(&storage, "tz-1", "Keep me").unwrap();
@@ -64,10 +64,16 @@ fn unsafe_ids_cannot_create_rename_read_or_write_comments() {
             "NUL.txt",
             "tz-2.",
             "tz-2 ",
+            "tz-0",
+            "tz-01",
+            "TZ-3",
+            "tz-A",
+            "tz-a-b",
+            "tazk-3",
         ] {
             assert!(
                 create(&storage, id, "Bad").is_err(),
-                "create accepted {id:?}"
+                "import accepted {id:?}"
             );
             assert!(
                 storage.rename_issue("tz-1", id, false).is_err(),
@@ -96,7 +102,12 @@ fn hostile_jsonl_does_not_overwrite_a_file_outside_the_database() {
     );
     let input = temp.path().join("input.jsonl");
     fs::write(&input, serde_json::to_string(&issue).unwrap()).unwrap();
-    assert!(storage.import_from_jsonl(&input, true).is_err());
+    let (imported, _, errors) = storage.import_from_jsonl(&input, true).unwrap();
+    assert_eq!(imported, 0);
+    assert!(
+        errors.iter().any(|e| e.contains("../../outside")),
+        "{errors:?}"
+    );
     assert!(tazk::sync::load_jsonl_issues(&input).is_err());
     let output = Command::new(env!("CARGO_BIN_EXE_tz"))
         .args(["--tz-no-cmd-logging", "--json", "--tz-dir"])
@@ -800,5 +811,185 @@ fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
     assert_eq!(
         fs::read_to_string(&journal).unwrap(),
         "pending recovery sentinel"
+    );
+}
+
+#[test]
+fn issue_file_outside_the_id_format_is_invalid_not_a_crash() {
+    for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
+        let (_temp, storage) = fixture(layout);
+        create(&storage, "tz-1", "good").unwrap();
+        let good = fs::read_to_string(storage.issue_file_path("tz-1").unwrap().unwrap()).unwrap();
+        fs::write(storage.get_tazk_dir().join("issues/tz-01.md"), &good).unwrap();
+
+        // Default validation: an error that names the file; no panic.
+        let error = storage
+            .list_issues(None, None, None, None, None)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("tz-01"), "{error:#}");
+
+        // Tolerant loaders skip it and keep the valid issue.
+        let loaded = storage.list_all_issues_tolerant().unwrap();
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.skipped.len(), 1);
+        assert!(loaded.skipped[0].path.ends_with("tz-01.md"));
+
+        // Numbering ignores the invalid name.
+        let next = storage
+            .create_issue(
+                "next".into(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                Vec::new(),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(next.id, "tz-2");
+    }
+}
+
+#[test]
+fn migrate_to_numeric_renumbers_exactly_the_hash_ids() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    // A hash ID that looks numeric-ish, and numeric IDs with a big gap.
+    import_fixture_issues(&storage, &["tz-1", "tz-5000", "tz-1e5", "tz-a3f9"]);
+    let (_, mapping) = storage.migrate_to_numeric_ids(false, true).unwrap();
+    let mut old: Vec<_> = mapping.keys().cloned().collect();
+    old.sort();
+    assert_eq!(old, ["tz-1e5", "tz-a3f9"]);
+    let mut new: Vec<_> = mapping.values().cloned().collect();
+    new.sort();
+    assert_eq!(new, ["tz-5001", "tz-5002"]);
+    assert!(storage.get_issue("tz-5000").unwrap().is_some());
+}
+
+#[test]
+fn jsonl_import_rejects_non_canonical_ids_naming_the_record() {
+    let (temp, storage) = fixture(IssueStorageLayout::Flat);
+    let lines = ["tz-0", "tz-ok-1", "TZ-7", "tz-3"]
+        .iter()
+        .map(|id| {
+            let issue = Issue::new((*id).into(), "t".into(), 2, IssueType::Task);
+            serde_json::to_string(&issue).unwrap()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let input = temp.path().join("in.jsonl");
+    fs::write(&input, lines).unwrap();
+    let (imported, _, errors) = storage.import_from_jsonl(&input, true).unwrap();
+    assert_eq!(imported, 1);
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    for (error, id) in errors.iter().zip(["tz-0", "tz-ok-1", "TZ-7"]) {
+        assert!(error.contains(id), "{error}");
+    }
+    assert!(storage.get_issue("tz-3").unwrap().is_some());
+    let error = tazk::sync::load_jsonl_issues(&input).unwrap_err();
+    assert!(format!("{error:#}").contains("tz-0"), "{error:#}");
+}
+
+/// Add a triage item with exact text (so tests can compare bytes).
+fn triage_item(storage: &Storage, text: &str) -> tazk::storage::triage::TriageItem {
+    storage.add_triage_item(text).unwrap()
+}
+
+#[test]
+fn rename_updates_triage_mentions_and_leaves_other_items_untouched() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    create(&storage, "tz-1", "one").unwrap();
+    create(&storage, "tz-12", "twelve").unwrap();
+    let mentions = triage_item(&storage, "Found while on tz-1 (not tz-12).");
+    let plain = triage_item(&storage, "Nothing to see here.");
+    let triage_dir = storage.get_tazk_dir().join("triage");
+    let plain_path = triage_dir.join(&plain.name);
+    let plain_before = fs::read(&plain_path).unwrap();
+    let plain_mtime = fs::metadata(&plain_path).unwrap().modified().unwrap();
+
+    let changes = storage.rename_issue("tz-1", "tz-7", true).unwrap();
+    assert!(
+        changes.iter().any(|c| c.contains(&mentions.name)),
+        "{changes:?}"
+    );
+    assert!(
+        !changes.iter().any(|c| c.contains(&plain.name)),
+        "{changes:?}"
+    );
+    assert_eq!(
+        storage.get_triage_item(&mentions.name).unwrap().body,
+        mentions.body,
+        "dry run must not write"
+    );
+
+    storage.rename_issue("tz-1", "tz-7", false).unwrap();
+    let updated = storage.get_triage_item(&mentions.name).unwrap();
+    assert_eq!(updated.body, "Found while on tz-7 (not tz-12).\n");
+    assert_eq!(fs::read(&plain_path).unwrap(), plain_before);
+    assert_eq!(
+        fs::metadata(&plain_path).unwrap().modified().unwrap(),
+        plain_mtime
+    );
+    // Names (creation timestamps) are kept.
+    let names: Vec<_> = storage
+        .list_triage_items()
+        .unwrap()
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    assert!(names.contains(&mentions.name) && names.contains(&plain.name));
+}
+
+#[test]
+fn migrate_to_hash_updates_triage_mentions() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    import_fixture_issues(&storage, &["tz-2", "tz-5"]);
+    let item = triage_item(&storage, "See tz-5, and tz-2.");
+    let plain = triage_item(&storage, "No mentions");
+
+    let (changes, _) = storage.migrate_to_hash_ids(true, true).unwrap();
+    assert!(
+        changes.iter().any(|c| c.contains(&item.name)),
+        "{changes:?}"
+    );
+    assert!(
+        !changes.iter().any(|c| c.contains(&plain.name)),
+        "{changes:?}"
+    );
+    assert_eq!(storage.get_triage_item(&item.name).unwrap().body, item.body);
+
+    let (_, mapping) = storage.migrate_to_hash_ids(false, true).unwrap();
+    assert_eq!(
+        storage.get_triage_item(&item.name).unwrap().body,
+        format!("See {}, and {}.\n", mapping["tz-5"], mapping["tz-2"])
+    );
+    assert_eq!(
+        storage.get_triage_item(&plain.name).unwrap().body,
+        plain.body
+    );
+
+    // And back to numeric: the hash mentions follow the renumbering.
+    let (_, mapping) = storage.migrate_to_numeric_ids(false, true).unwrap();
+    let body = storage.get_triage_item(&item.name).unwrap().body;
+    assert!(
+        mapping.values().all(|new_id| body.contains(new_id)),
+        "{body}"
+    );
+}
+
+#[test]
+fn repack_rewrites_triage_mentions_in_one_pass() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    import_fixture_issues(&storage, &["tz-2", "tz-5"]);
+    let item = triage_item(&storage, "See tz-5, and tz-2.");
+    // tz-2 -> tz-1 and tz-5 -> tz-2: a sequential rewrite would collapse both.
+    storage.repack_numeric_ids(false, None).unwrap();
+    assert_eq!(
+        storage.get_triage_item(&item.name).unwrap().body,
+        "See tz-2, and tz-1.\n"
     );
 }

@@ -338,28 +338,28 @@ mod tests {
         let directory = repository(&[
             (
                 "src/code with spaces.rs",
-                "first\r\n// r[1]-1: track this\r\nr[1]-10 untouched\r\n",
+                "first\r\n// tz-1: track this\r\ntz-10 untouched\r\n",
             ),
-            (".tazk/issues/r[1]-1.md", "r[1]-1"),
-            ("nested/.tazk/notes", "r[1]-1"),
+            (".tazk/issues/tz-1.md", "tz-1"),
+            ("nested/.tazk/notes", "tz-1"),
         ]);
-        let references = find_code_references_in(&directory.path().join("src"), "r[1]-1").unwrap();
+        let references = find_code_references_in(&directory.path().join("src"), "tz-1").unwrap();
         assert_eq!(references.total_matches, 1);
         assert_eq!(
             references.matches["src/code with spaces.rs"][0],
-            (2, "// r[1]-1: track this".into())
+            (2, "// tz-1: track this".into())
         );
-        assert_eq!(patch_code_files("r[1]-1", "r-$1", &references).unwrap(), 1);
+        assert_eq!(patch_code_files("tz-1", "tz-9", &references).unwrap(), 1);
         assert_eq!(
             fs::read(directory.path().join("src/code with spaces.rs")).unwrap(),
-            b"first\r\n// r-$1: track this\r\nr[1]-10 untouched\r\n"
+            b"first\r\n// tz-9: track this\r\ntz-10 untouched\r\n"
         );
         assert_eq!(
-            fs::read_to_string(directory.path().join(".tazk/issues/r[1]-1.md")).unwrap(),
-            "r[1]-1"
+            fs::read_to_string(directory.path().join(".tazk/issues/tz-1.md")).unwrap(),
+            "tz-1"
         );
         assert_eq!(
-            find_code_references_in(directory.path(), "missing-42")
+            find_code_references_in(directory.path(), "tz-42")
                 .unwrap()
                 .total_matches,
             0
@@ -368,45 +368,27 @@ mod tests {
 
     #[test]
     fn migration_swaps_ids_once_and_preserves_word_boundaries() {
-        let directory = repository(&[("code.txt", "r-1 r-2 r-10 pre_r-1 r-1tail\n")]);
-        let references = find_code_references_in(directory.path(), "r-1").unwrap();
-        let mapping = HashMap::from([("r-1".into(), "r-2".into()), ("r-2".into(), "r-1".into())]);
+        let directory = repository(&[("code.txt", "tz-1 tz-2 tz-10 pre_tz-1 tz-1tail\n")]);
+        let references = find_code_references_in(directory.path(), "tz-1").unwrap();
+        let mapping = HashMap::from([
+            ("tz-1".into(), "tz-2".into()),
+            ("tz-2".into(), "tz-1".into()),
+        ]);
         assert_eq!(patch_code_mappings(&mapping, &references).unwrap(), 1);
         assert_eq!(
             fs::read_to_string(directory.path().join("code.txt")).unwrap(),
-            "r-2 r-1 r-10 pre_r-1 r-1tail\n"
+            "tz-2 tz-1 tz-10 pre_tz-1 tz-1tail\n"
         );
-    }
-
-    #[test]
-    fn patches_punctuation_ended_ids_only_at_git_word_boundaries() {
-        for (old_id, original, expected) in [
-            (
-                "r-1+",
-                "r-1+ r-1+tail pre_r-1+\n",
-                "r-2 r-1+tail pre_r-1+\n",
-            ),
-            (".r-1", ".r-1 x.r-1 .r-10\n", "r-2 x.r-1 .r-10\n"),
-        ] {
-            let directory = repository(&[("code.txt", original)]);
-            let references = find_code_references_in(directory.path(), old_id).unwrap();
-            assert_eq!(references.total_matches, 1);
-            assert_eq!(patch_code_files(old_id, "r-2", &references).unwrap(), 1);
-            assert_eq!(
-                fs::read_to_string(directory.path().join("code.txt")).unwrap(),
-                expected
-            );
-        }
     }
 
     #[test]
     fn migration_cycles_span_files_and_preserve_mixed_line_endings() {
         let directory = repository(&[
-            ("first.txt", "r-1\r\nr-2\nr-3"),
-            ("second.txt", "r-3\rr-1\r\n"),
+            ("first.txt", "tz-1\r\ntz-2\ntz-3"),
+            ("second.txt", "tz-3\rtz-1\r\n"),
         ]);
-        let mut references = find_code_references_in(directory.path(), "r-1").unwrap();
-        for old_id in ["r-2", "r-3"] {
+        let mut references = find_code_references_in(directory.path(), "tz-1").unwrap();
+        for old_id in ["tz-2", "tz-3"] {
             let additional = find_code_references_in(directory.path(), old_id).unwrap();
             references.total_matches += additional.total_matches;
             for (file, matches) in additional.matches {
@@ -414,18 +396,18 @@ mod tests {
             }
         }
         let mapping = HashMap::from([
-            ("r-1".into(), "r-2".into()),
-            ("r-2".into(), "r-3".into()),
-            ("r-3".into(), "r-1".into()),
+            ("tz-1".into(), "tz-2".into()),
+            ("tz-2".into(), "tz-3".into()),
+            ("tz-3".into(), "tz-1".into()),
         ]);
         assert_eq!(patch_code_mappings(&mapping, &references).unwrap(), 2);
         assert_eq!(
             fs::read(directory.path().join("first.txt")).unwrap(),
-            b"r-2\r\nr-3\nr-1"
+            b"tz-2\r\ntz-3\ntz-1"
         );
         assert_eq!(
             fs::read(directory.path().join("second.txt")).unwrap(),
-            b"r-1\rr-2\r\n"
+            b"tz-1\rtz-2\r\n"
         );
     }
 
@@ -434,29 +416,29 @@ mod tests {
     fn code_patching_preserves_executable_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = repository(&[("script.sh", "#!/bin/sh\n# r-1")]);
+        let directory = repository(&[("script.sh", "#!/bin/sh\n# tz-1")]);
         let path = directory.path().join("script.sh");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o751)).unwrap();
-        let references = find_code_references_in(directory.path(), "r-1").unwrap();
-        patch_code_files("r-1", "r-2", &references).unwrap();
+        let references = find_code_references_in(directory.path(), "tz-1").unwrap();
+        patch_code_files("tz-1", "tz-2", &references).unwrap();
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o751
         );
-        assert_eq!(fs::read(path).unwrap(), b"#!/bin/sh\n# r-2");
+        assert_eq!(fs::read(path).unwrap(), b"#!/bin/sh\n# tz-2");
     }
 
     #[cfg(unix)]
     #[test]
     fn nul_output_preserves_colons_and_newlines_in_filenames() {
         let name = "src/colon:and\nnewline.txt";
-        let directory = repository(&[(name, "r-1\n")]);
-        let references = find_code_references_in(directory.path(), "r-1").unwrap();
+        let directory = repository(&[(name, "tz-1\n")]);
+        let references = find_code_references_in(directory.path(), "tz-1").unwrap();
         assert!(references.matches.contains_key(name));
-        patch_code_files("r-1", "r-2", &references).unwrap();
+        patch_code_files("tz-1", "tz-2", &references).unwrap();
         assert_eq!(
             fs::read_to_string(directory.path().join(name)).unwrap(),
-            "r-2\n"
+            "tz-2\n"
         );
     }
 }

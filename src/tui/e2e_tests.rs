@@ -9,16 +9,16 @@
 //! The fixture (all timestamps fixed, so output is deterministic):
 //!
 //! ```text
-//! fx-1  epic   Platform                      (top-level epic)
-//!  ├ fx-2 epic Auth rework                   (nested epic)
-//!  │  ├ fx-3 Login form       blocked by fx-5 (open blocker)
-//!  │  └ fx-4 Session cookie   also child of fx-6 (closed epic), blocked by fx-7 (closed)
-//!  └ fx-5 Session store       in progress
-//! fx-6  epic   Legacy cleanup                (closed epic)
-//! fx-7  task   Old migration                 (closed)
-//! fx-8  task   Standalone chore              blocked by fx-404 (missing)
-//! fx-9  feature Docs                         (human)
-//! fx-10 task   Orphan                        child of fx-404 (missing parent)
+//! tz-1  epic   Platform                      (top-level epic)
+//!  ├ tz-2 epic Auth rework                   (nested epic)
+//!  │  ├ tz-3 Login form       blocked by tz-5 (open blocker)
+//!  │  └ tz-4 Session cookie   also child of tz-6 (closed epic), blocked by tz-7 (closed)
+//!  └ tz-5 Session store       in progress
+//! tz-6  epic   Legacy cleanup                (closed epic)
+//! tz-7  task   Old migration                 (closed)
+//! tz-8  task   Standalone chore              blocked by tz-404 (missing)
+//! tz-9  feature Docs                         (human)
+//! tz-10 task   Orphan                        child of tz-404 (missing parent)
 //! + 3 triage items and one unparsable issue file (skipped).
 //! ```
 
@@ -48,48 +48,48 @@ struct Cli {
 
 fn fixture_issues() -> Vec<fixtures::IssueBuilder> {
     vec![
-        fixtures::epic("fx-1", "Platform")
+        fixtures::epic("tz-1", "Platform")
             .priority(0)
             .description("Everything that makes up the platform."),
-        fixtures::epic("fx-2", "Auth rework")
+        fixtures::epic("tz-2", "Auth rework")
             .priority(1)
-            .child_of("fx-1"),
-        fixtures::issue("fx-3", "Login form redirects loop")
+            .child_of("tz-1"),
+        fixtures::issue("tz-3", "Login form redirects loop")
             .priority(1)
             .role(Role::Agent)
             .effort(3)
-            .child_of("fx-2")
-            .blocked_by("fx-5")
-            .description("The **login** form loops after a timeout.\n\nSee also fx-4.")
+            .child_of("tz-2")
+            .blocked_by("tz-5")
+            .description("The **login** form loops after a timeout.\n\nSee also tz-4.")
             .acceptance("- works in Safari\n- no loop"),
-        fixtures::issue("fx-4", "Session cookie dropped")
+        fixtures::issue("tz-4", "Session cookie dropped")
             .ty(crate::types::IssueType::Bug)
             .priority(0)
-            .child_of("fx-2")
-            .child_of("fx-6")
-            .blocked_by("fx-7")
-            .related_to("fx-3"),
-        fixtures::issue("fx-5", "Session store")
+            .child_of("tz-2")
+            .child_of("tz-6")
+            .blocked_by("tz-7")
+            .related_to("tz-3"),
+        fixtures::issue("tz-5", "Session store")
             .priority(2)
             .status(Status::InProgress)
-            .child_of("fx-1"),
-        fixtures::epic("fx-6", "Legacy cleanup")
+            .child_of("tz-1"),
+        fixtures::epic("tz-6", "Legacy cleanup")
             .priority(3)
             .closed(),
-        fixtures::issue("fx-7", "Old migration")
+        fixtures::issue("tz-7", "Old migration")
             .priority(3)
             .closed(),
-        fixtures::issue("fx-8", "Standalone chore")
+        fixtures::issue("tz-8", "Standalone chore")
             .priority(3)
-            .blocked_by("fx-404"),
-        fixtures::issue("fx-9", "Write the docs")
+            .blocked_by("tz-404"),
+        fixtures::issue("tz-9", "Write the docs")
             .ty(crate::types::IssueType::Feature)
             .priority(2)
             .role(Role::Human)
             .effort(2),
-        fixtures::issue("fx-10", "Orphan task")
+        fixtures::issue("tz-10", "Orphan task")
             .priority(4)
-            .child_of("fx-404"),
+            .child_of("tz-404"),
     ]
 }
 
@@ -116,7 +116,7 @@ impl Fixture {
         for issue in fixture_issues() {
             write_issue(&tazk_dir, issue);
         }
-        fs::write(tazk_dir.join("issues/fx-bad.md"), "not a valid issue\n").unwrap();
+        fs::write(tazk_dir.join("issues/tz-bad.md"), "not a valid issue\n").unwrap();
         let triage = tazk_dir.join("triage");
         fs::create_dir_all(&triage).unwrap();
         for (name, body) in TRIAGE {
@@ -197,13 +197,13 @@ fn reload(app: &mut App, reloader: &mut Reloader) {
     }
 }
 
-/// Move to the Auth rework column and select fx-3 (the cell with an open
+/// Move to the Auth rework column and select tz-3 (the cell with an open
 /// blocker): No epic -> Platform -> Auth rework, then down past the header
-/// and fx-4.
+/// and tz-4.
 fn select_login_form(app: &mut App) {
     keys(app, "ll");
     keys(app, "jj");
-    assert_eq!(selected(app), Some("fx-3"));
+    assert_eq!(selected(app), Some("tz-3"));
 }
 
 fn displayed(app: &App) -> Option<&str> {
@@ -224,7 +224,7 @@ fn launch_shows_the_grid_at_both_sizes() {
     // Closed issues are hidden by default; the bad file is counted.
     assert_eq!(app.counts(), (8, 10));
     assert_eq!(app.snapshot.skipped.len(), 1);
-    assert_eq!(selected(&app), Some("fx-1"));
+    assert_eq!(selected(&app), Some("tz-1"));
     let narrow = screen(&mut app, NARROW);
     assert!(narrow.contains("⚠ 1 skipped"));
     snap!("launch_120x40", narrow);
@@ -240,14 +240,14 @@ fn navigate_open_detail_follow_a_link_and_go_back() {
 
     press(&mut app, KeyCode::Enter);
     assert!(app.full_screen_detail);
-    assert_eq!(displayed(&app), Some("fx-3"));
+    assert_eq!(displayed(&app), Some("tz-3"));
     snap!("nav_02_detail", screen(&mut app, NARROW));
 
     // Tab highlights the first relationship; Enter follows it.
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Enter);
     let first = displayed(&app).unwrap().to_string();
-    assert_ne!(first, "fx-3", "followed a link");
+    assert_ne!(first, "tz-3", "followed a link");
     snap!("nav_03_followed", screen(&mut app, NARROW));
 
     // Follow on to another relationship, then unwind one step at a time.
@@ -257,13 +257,13 @@ fn navigate_open_detail_follow_a_link_and_go_back() {
     press(&mut app, KeyCode::Esc);
     assert_eq!(displayed(&app), Some(first.as_str()), "back from {second}");
     press(&mut app, KeyCode::Esc);
-    assert_eq!(displayed(&app), Some("fx-3"));
+    assert_eq!(displayed(&app), Some("tz-3"));
     assert!(app.full_screen_detail);
     press(&mut app, KeyCode::Esc);
     assert!(!app.full_screen_detail);
     assert_eq!(
         selected(&app),
-        Some("fx-3"),
+        Some("tz-3"),
         "the grid selection never moved"
     );
     snap!("nav_04_back_in_grid", screen(&mut app, NARROW));
@@ -317,7 +317,7 @@ fn search_in_both_modes_with_separate_queries() {
     assert_eq!(app.query(), "login");
     assert_eq!(app.counts().0, 1);
     // The match is shown under its (dimmed) epic header, which is selected first.
-    assert_eq!(selected(&app), Some("fx-2"));
+    assert_eq!(selected(&app), Some("tz-2"));
     snap!("search_01_issues", screen(&mut app, NARROW));
 
     // Triage mode has its own query.
@@ -355,11 +355,11 @@ fn mode_switch_keeps_each_selection_and_targets_the_right_file() {
     select_login_form(&mut app);
 
     keys(&mut app, "y");
-    assert_eq!(app.take_copy().as_deref(), Some("fx-3"));
+    assert_eq!(app.take_copy().as_deref(), Some("tz-3"));
     keys(&mut app, "o");
     assert_eq!(
         app.take_editor_request(),
-        Some(super::app::EditorTarget::Issue("fx-3".into()))
+        Some(super::app::EditorTarget::Issue("tz-3".into()))
     );
 
     keys(&mut app, "m");
@@ -383,7 +383,7 @@ fn mode_switch_keeps_each_selection_and_targets_the_right_file() {
 
     keys(&mut app, "m");
     assert_eq!(app.mode, ModeArg::Issues);
-    assert_eq!(selected(&app), Some("fx-3"));
+    assert_eq!(selected(&app), Some("tz-3"));
 }
 
 #[test]
@@ -393,7 +393,7 @@ fn cycling_through_every_grouping_keeps_the_selection() {
     select_login_form(&mut app);
     for name in ["status", "role", "type", "priority", "epic"] {
         keys(&mut app, "g");
-        assert_eq!(selected(&app), Some("fx-3"), "after grouping by {name}");
+        assert_eq!(selected(&app), Some("tz-3"), "after grouping by {name}");
         snap!(format!("group_{name}"), screen(&mut app, NARROW));
     }
     assert_eq!(app.grouping, super::GroupByArg::Epic);
@@ -432,10 +432,10 @@ fn resizing_across_160_columns_with_the_detail_open() {
 
     // Esc unwinds the stack and the detail; the grid selection is unchanged.
     press(&mut app, KeyCode::Esc);
-    assert_eq!(displayed(&app), Some("fx-3"));
+    assert_eq!(displayed(&app), Some("tz-3"));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.focus, Focus::Grid);
-    assert_eq!(selected(&app), Some("fx-3"));
+    assert_eq!(selected(&app), Some("tz-3"));
 }
 
 #[test]
@@ -452,26 +452,26 @@ fn reload_after_editing_files_on_disk_preserves_the_selection() {
     let dir = fx.dir();
     write_issue(
         &dir,
-        fixtures::issue("fx-3", "Login form: fixed title")
+        fixtures::issue("tz-3", "Login form: fixed title")
             .priority(1)
             .role(Role::Agent)
             .effort(3)
-            .child_of("fx-2")
-            .blocked_by("fx-5"),
+            .child_of("tz-2")
+            .blocked_by("tz-5"),
     );
-    write_issue(&dir, fixtures::issue("fx-9", "Write the docs").closed());
+    write_issue(&dir, fixtures::issue("tz-9", "Write the docs").closed());
     write_issue(
         &dir,
-        fixtures::issue("fx-11", "Brand new issue").priority(0),
+        fixtures::issue("tz-11", "Brand new issue").priority(0),
     );
-    fs::remove_file(dir.join("issues/fx-10.md")).unwrap();
-    write_issue(&dir, fixtures::issue("fx-bad", "Repaired file"));
+    fs::remove_file(dir.join("issues/tz-10.md")).unwrap();
+    write_issue(&dir, fixtures::issue("tz-bad", "Repaired file"));
     fs::write(dir.join("triage/20250103T000000-cccc.md"), "Fresh report\n").unwrap();
 
     reload(&mut app, &mut reloader);
     assert_eq!(app.snapshot.skipped.len(), 0, "the repaired file loads");
-    assert_eq!(selected(&app), Some("fx-3"), "selection kept by ID");
-    assert_eq!(displayed(&app), Some("fx-3"));
+    assert_eq!(selected(&app), Some("tz-3"), "selection kept by ID");
+    assert_eq!(displayed(&app), Some("tz-3"));
     assert!(app.full_screen_detail, "the open detail stays open");
     let detail = screen(&mut app, NARROW);
     assert!(detail.contains("Login form: fixed title"));
@@ -482,7 +482,7 @@ fn reload_after_editing_files_on_disk_preserves_the_selection() {
     let grid = screen(&mut app, NARROW);
     assert!(grid.contains("Brand new issue"));
     assert!(!grid.contains("Orphan task"));
-    assert!(!grid.contains("Write the docs"), "fx-9 is closed now");
+    assert!(!grid.contains("Write the docs"), "tz-9 is closed now");
     snap!("reload_02_grid", grid);
 
     // Triage items are reloaded too.
@@ -491,10 +491,10 @@ fn reload_after_editing_files_on_disk_preserves_the_selection() {
 
     // Deleting the selected issue moves the selection somewhere valid.
     keys(&mut app, "m");
-    fs::remove_file(dir.join("issues/fx-3.md")).unwrap();
+    fs::remove_file(dir.join("issues/tz-3.md")).unwrap();
     reload(&mut app, &mut reloader);
     let now = selected(&app).map(str::to_string);
-    assert!(now.is_some() && now.as_deref() != Some("fx-3"), "{now:?}");
+    assert!(now.is_some() && now.as_deref() != Some("tz-3"), "{now:?}");
 }
 
 #[test]
@@ -504,7 +504,7 @@ fn help_overlay_lists_the_skipped_file_and_swallows_keys() {
     keys(&mut app, "?");
     let help = screen(&mut app, NARROW);
     assert!(help.contains("1 file skipped"), "{help}");
-    assert!(help.contains("fx-bad.md"));
+    assert!(help.contains("tz-bad.md"));
     // Swallowed while open.
     keys(&mut app, "mgs");
     assert_eq!(app.mode, ModeArg::Issues);

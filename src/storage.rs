@@ -1,7 +1,7 @@
 use crate::format::{issue_to_markdown, markdown_to_issue};
 use crate::hash;
 use crate::lock::Lock;
-use crate::paths::{ensure_contained, IssueId};
+use crate::paths::{ensure_contained, numeric_id_suffix, IdKind, IssueId};
 use crate::transaction::{atomic_write, FileTransaction};
 use crate::types::{
     parse_effort, validate_effort, BlockedIssue, Comment, DependencyType, EditField, Issue,
@@ -59,7 +59,6 @@ pub struct NewIssue {
     pub assignee: Option<String>,
     pub labels: Vec<String>,
     pub external_ref: Option<String>,
-    pub id: Option<String>,
     pub deps: Vec<(String, DependencyType)>,
     pub role: Option<Role>,
     pub effort: Option<u8>,
@@ -78,14 +77,6 @@ pub struct Storage {
 /// This prevents matching IDs that are embedded in longer strings.
 ///
 /// Uses a HashMap for O(1) lookup of replacement mappings.
-/// Extract the trailing numeric component of an issue ID (the part after the
-/// last hyphen) if it is a plain integer, e.g. `tazk-42` -> `Some(42)`.
-/// Hash-based IDs like `tazk-a3f9` return `None`.
-fn numeric_id_suffix(id: &str) -> Option<u32> {
-    let suffix = id.rsplit_once('-').map(|(_, s)| s).unwrap_or(id);
-    suffix.parse::<u32>().ok()
-}
-
 /// Ordering for `list`: numeric IDs first (ascending, so the most recent
 /// appear last), then hash-based IDs ordered by creation date (oldest first).
 fn compare_for_list(a: &Issue, b: &Issue) -> std::cmp::Ordering {
@@ -123,10 +114,6 @@ impl IssueStorageLayout {
     }
 }
 
-fn issue_suffix(id: &str) -> &str {
-    id.rsplit_once('-').map(|(_, suffix)| suffix).unwrap_or(id)
-}
-
 fn shard_char(c: Option<char>) -> String {
     match c {
         Some(c) if c.is_ascii_alphanumeric() => c.to_ascii_lowercase().to_string(),
@@ -134,25 +121,28 @@ fn shard_char(c: Option<char>) -> String {
     }
 }
 
-fn sharded_relative_path(id: &str) -> PathBuf {
-    let suffix = issue_suffix(id);
+fn sharded_relative_path(id: IssueId<'_>) -> PathBuf {
+    let suffix = id.suffix();
 
     let mut path = PathBuf::new();
-    if suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty() {
-        let mut chars = suffix.chars().rev();
-        let ones = chars.next();
-        let tens = chars.next().or(Some('0'));
-        path.push("n");
-        path.push(shard_char(tens).as_str());
-        path.push(shard_char(ones).as_str());
-    } else {
-        let mut chars = suffix.chars();
-        path.push("h");
-        path.push(shard_char(chars.next()).as_str());
-        path.push(shard_char(chars.next()).as_str());
+    match id.kind() {
+        IdKind::Numeric => {
+            let mut chars = suffix.chars().rev();
+            let ones = chars.next();
+            let tens = chars.next().or(Some('0'));
+            path.push("n");
+            path.push(shard_char(tens).as_str());
+            path.push(shard_char(ones).as_str());
+        }
+        IdKind::Hash => {
+            let mut chars = suffix.chars();
+            path.push("h");
+            path.push(shard_char(chars.next()).as_str());
+            path.push(shard_char(chars.next()).as_str());
+        }
     }
 
-    path.push(format!("{}.md", id));
+    path.push(format!("{}.md", id.as_str()));
     path
 }
 
@@ -290,6 +280,12 @@ impl Storage {
                     serde_json::to_vec_pretty(&comments)?,
                 );
             }
+        }
+
+        // Triage items often name the issue they were found during. Rewrite
+        // only the items whose text changes; names are kept.
+        for (_, path, body) in self.triage_id_rewrites(mapping)? {
+            transaction.write(path, body.into_bytes());
         }
 
         // Keep the default JSONL store from resurrecting old IDs at the next
@@ -505,15 +501,15 @@ impl Storage {
         }
     }
 
-    fn flat_issue_path(&self, id: &str) -> PathBuf {
-        self.issues_dir.join(format!("{}.md", id))
+    fn flat_issue_path(&self, id: IssueId<'_>) -> PathBuf {
+        self.issues_dir.join(format!("{}.md", id.as_str()))
     }
 
-    fn sharded_issue_path(&self, id: &str) -> PathBuf {
+    fn sharded_issue_path(&self, id: IssueId<'_>) -> PathBuf {
         self.issues_dir.join(sharded_relative_path(id))
     }
 
-    fn issue_path_for_layout(&self, id: &str, layout: IssueStorageLayout) -> PathBuf {
+    fn issue_path_for_layout(&self, id: IssueId<'_>, layout: IssueStorageLayout) -> PathBuf {
         match layout {
             IssueStorageLayout::Flat => self.flat_issue_path(id),
             IssueStorageLayout::Sharded => self.sharded_issue_path(id),
@@ -522,7 +518,7 @@ impl Storage {
 
     fn configured_issue_path(&self, id: &str) -> Result<PathBuf> {
         let id = IssueId::parse(id)?;
-        let path = self.issue_path_for_layout(id.as_str(), self.issue_storage_layout()?);
+        let path = self.issue_path_for_layout(id, self.issue_storage_layout()?);
         ensure_contained(&self.tazk_dir, &path)?;
         Ok(path)
     }
@@ -533,6 +529,7 @@ impl Storage {
             return Ok(Some(configured_path));
         }
 
+        let id = IssueId::parse(id)?;
         let flat_path = self.flat_issue_path(id);
         if flat_path.exists() {
             ensure_contained(&self.tazk_dir, &flat_path)?;
@@ -615,12 +612,14 @@ impl Storage {
     fn get_next_number(&self) -> Result<u32> {
         let mut max_num = 0;
         for (issue_id, _) in self.issue_file_paths()? {
-            if let Ok(num) = id_suffix(&issue_id).parse::<u32>() {
+            if let Some(num) = numeric_id_suffix(&issue_id) {
                 max_num = max_num.max(num);
             }
         }
 
-        Ok(max_num + 1)
+        max_num
+            .checked_add(1)
+            .context("Numeric issue IDs are exhausted")
     }
 
     /// Generate a hash-based ID with adaptive length and collision handling
@@ -655,7 +654,6 @@ impl Storage {
         assignee: Option<String>,
         labels: Vec<String>,
         external_ref: Option<String>,
-        id: Option<String>,
         deps: Vec<(String, DependencyType)>,
         role: Option<Role>,
         effort: Option<u8>,
@@ -670,7 +668,6 @@ impl Storage {
             assignee,
             labels,
             external_ref,
-            id,
             deps,
             role,
             effort,
@@ -686,7 +683,7 @@ impl Storage {
         Ok(issue)
     }
 
-    /// Allocate an ID (unless one is given) and build the issue, without
+    /// Allocate an ID and build the issue, without
     /// writing it. The caller must hold the write lock, so the allocated ID
     /// stays free until the caller writes the file.
     fn build_new_issue_no_lock(&self, fields: NewIssue) -> Result<Issue> {
@@ -700,7 +697,6 @@ impl Storage {
             assignee,
             labels,
             external_ref,
-            id,
             deps,
             role,
             effort,
@@ -709,20 +705,13 @@ impl Storage {
             validate_effort(effort)?;
         }
 
-        // Generate ID if not provided
-        let issue_id = if let Some(id) = id {
-            id
+        let issue_id = if self.use_hash_ids()? {
+            // Use hash-based ID generation
+            self.generate_hash_id(&title, &description)?
         } else {
-            let use_hash_ids = self.use_hash_ids()?;
-
-            if use_hash_ids {
-                // Use hash-based ID generation
-                self.generate_hash_id(&title, &description)?
-            } else {
-                // Use sequential numbering
-                let num = self.get_next_number()?;
-                format!("{ID_PREFIX}{num}")
-            }
+            // Use sequential numbering
+            let num = self.get_next_number()?;
+            format!("{ID_PREFIX}{num}")
         };
 
         // Create issue
@@ -856,7 +845,7 @@ impl Storage {
         let mut issues = Vec::new();
         for (issue_id, path) in self.issue_file_paths()? {
             let content = fs::read_to_string(path)?;
-            let issue = markdown_to_issue(&issue_id, &content)?;
+            let issue = parse_issue_file(&issue_id, &content)?;
             issues.push(issue);
         }
 
@@ -883,7 +872,7 @@ impl Storage {
         for (id, path, content) in raw {
             let parsed = content
                 .map_err(anyhow::Error::from)
-                .and_then(|c| markdown_to_issue(&id, &c));
+                .and_then(|c| parse_issue_file(&id, &c));
             match parsed {
                 Ok(issue) => items.push(issue),
                 Err(err) => skipped.push(skipped_file(path, &err)),
@@ -1320,6 +1309,7 @@ impl Storage {
             }
         }
         changes.push("Preserve comments and update synchronization ownership".to_owned());
+        changes.extend(self.triage_rewrite_changes(&mapping)?);
         if !dry_run {
             self.apply_id_mapping(all_issues, &mapping, &[])?;
         }
@@ -1798,7 +1788,7 @@ impl Storage {
         let mut issues = Vec::new();
         for (issue_id, path) in self.issue_file_paths()? {
             let content = fs::read_to_string(path)?;
-            let issue = markdown_to_issue(&issue_id, &content)?;
+            let issue = parse_issue_file(&issue_id, &content)?;
 
             // Apply filters
             if let Some(s) = status {
@@ -2077,6 +2067,18 @@ impl Storage {
                 }
             };
 
+            // Only canonical IDs can be imported; anything else is an error
+            // for this record.
+            if let Err(e) = IssueId::parse(&issue.id) {
+                errors.push(format!(
+                    "Line {}: Issue {:?}: {}",
+                    line_num + 1,
+                    issue.id,
+                    e
+                ));
+                continue;
+            }
+
             // Check if markdown file already exists
             let issue_path = self.existing_or_configured_issue_path(&issue.id)?;
             if issue_path.exists() && !overwrite {
@@ -2139,7 +2141,7 @@ impl Storage {
         let mut moves = Vec::new();
 
         for (issue_id, old_path) in issue_paths {
-            let new_path = self.issue_path_for_layout(&issue_id, target_layout);
+            let new_path = self.issue_path_for_layout(IssueId::parse(&issue_id)?, target_layout);
             if old_path == new_path {
                 continue;
             }
@@ -2280,7 +2282,7 @@ impl Storage {
         let mut id_mapping = HashMap::new();
         for issue in &all_issues {
             // Only migrate numeric IDs
-            if id_suffix(&issue.id).parse::<u32>().is_ok() {
+            if numeric_id_suffix(&issue.id).is_some() {
                 // Generate hash-based ID
                 let hash_id = self.generate_hash_id(&issue.title, &issue.description)?;
 
@@ -2331,6 +2333,8 @@ impl Storage {
             }
         }
 
+        changes.extend(self.triage_rewrite_changes(&id_mapping)?);
+
         // If dry-run, return changes without applying (return empty mapping for dry-run)
         if dry_run {
             return Ok((changes, HashMap::new()));
@@ -2366,43 +2370,14 @@ impl Storage {
         // Load all issues
         let all_issues = self.list_all_issues_no_dependents()?;
 
-        // Identify hash-based IDs and collect for migration using gap-based heuristic
-        const MAX_GAP: u32 = 100; // Gap size to distinguish numeric vs hash IDs
-
+        // Classify by pattern: numeric IDs stay, hash IDs get renumbered.
         let mut hash_issues = Vec::new();
-        let mut numeric_ids = Vec::new();
-        let mut numeric_id_to_issue: HashMap<u32, Issue> = HashMap::new();
-
-        // First pass: collect all numeric IDs
+        let mut max_numeric_id = 0;
         for issue in &all_issues {
-            // Check if it's numeric
-            if let Ok(num) = id_suffix(&issue.id).parse::<u32>() {
-                numeric_ids.push(num);
-                numeric_id_to_issue.insert(num, issue.clone());
-            } else {
-                // Non-numeric suffix = hash-based ID
-                hash_issues.push(issue.clone());
+            match numeric_id_suffix(&issue.id) {
+                Some(num) => max_numeric_id = max_numeric_id.max(num),
+                None => hash_issues.push(issue.clone()),
             }
-        }
-
-        // Use gap-based heuristic to find true max numeric ID and identify hash IDs
-        let (max_numeric_id, ids_above_gap) = find_max_numeric_id_before_gap(&numeric_ids, MAX_GAP);
-
-        // Add numeric IDs above the gap to hash_issues (these are likely hash IDs with all-numeric hashes)
-        if !ids_above_gap.is_empty() {
-            eprintln!("Warning: Found {} numeric ID(s) above a gap of {} (likely hash IDs with all-numeric hashes)",
-                      ids_above_gap.len(), MAX_GAP);
-            eprintln!("         These will be treated as hash IDs and renumbered:");
-            for id_num in &ids_above_gap {
-                if let Some(issue) = numeric_id_to_issue.get(id_num) {
-                    eprintln!("         - {}", issue.id);
-                    hash_issues.push(issue.clone());
-                }
-            }
-            eprintln!(
-                "         True max numeric ID before gap: {}",
-                max_numeric_id
-            );
         }
 
         if hash_issues.is_empty() {
@@ -2460,6 +2435,8 @@ impl Storage {
             }
         }
 
+        changes.extend(self.triage_rewrite_changes(&id_mapping)?);
+
         // If dry-run, return changes without applying (return empty mapping for dry-run)
         if dry_run {
             return Ok((changes, HashMap::new()));
@@ -2505,7 +2482,7 @@ impl Storage {
         // Collect all numeric IDs
         let mut numeric_issues = Vec::new();
         for issue in &all_issues {
-            if id_suffix(&issue.id).parse::<u32>().is_ok() {
+            if numeric_id_suffix(&issue.id).is_some() {
                 numeric_issues.push(issue.clone());
             }
         }
@@ -2615,6 +2592,8 @@ impl Storage {
             }
         }
 
+        changes.extend(self.triage_rewrite_changes(&id_mapping)?);
+
         // If dry-run, return changes without applying (return empty mapping for dry-run)
         if dry_run {
             return Ok((changes, HashMap::new()));
@@ -2624,6 +2603,14 @@ impl Storage {
 
         Ok((changes, id_mapping))
     }
+}
+
+/// Parse the contents of an issue file named `<issue_id>.md`. A name outside
+/// the canonical ID format makes the file an invalid issue, like any other
+/// file that fails to parse.
+fn parse_issue_file(issue_id: &str, content: &str) -> Result<Issue> {
+    IssueId::parse(issue_id).context("Invalid issue filename")?;
+    markdown_to_issue(issue_id, content)
 }
 
 /// Recursively walk `issues_dir` (flat or sharded layout) and return every
@@ -2672,11 +2659,6 @@ pub(crate) fn issue_file_paths_in(issues_dir: &Path) -> Result<Vec<(String, Path
 
     paths.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(paths)
-}
-
-/// The part of an issue ID after the last `-`.
-fn id_suffix(id: &str) -> &str {
-    id.rsplit('-').next().unwrap_or(id)
 }
 
 /// Legacy file that used to hold the tazk options before they moved into config.yaml.
@@ -2807,7 +2789,7 @@ fn ensure_gitignore(tazk_dir: &Path) -> Result<()> {
     let required_entries = [
         "tazk.lock",
         "command_history.log",
-        "tazk-transaction.json",
+        "tz-transaction.json",
         ".tz-write-*",
         "sync_ancestors/",
     ];
@@ -2892,55 +2874,6 @@ pub fn get_file_mtime(file_path: &Path) -> Result<chrono::DateTime<chrono::Utc>>
     Ok(datetime)
 }
 
-/// Find the true maximum numeric ID before a large gap
-///
-/// This function implements a gap-based heuristic to distinguish legitimate numeric IDs
-/// from hash IDs that happen to be all-numeric. It counts sequentially from 1 until it
-/// finds MAX_GAP (default 100) consecutive missing IDs, then treats everything before
-/// that gap as legitimate numeric IDs and everything after as hash IDs.
-///
-/// Returns: (max_numeric_id, ids_above_gap)
-/// - max_numeric_id: The highest numeric ID before the gap (or 0 if none found)
-/// - ids_above_gap: Numeric IDs that appear after the gap (likely hash IDs)
-fn find_max_numeric_id_before_gap(numeric_ids: &[u32], max_gap: u32) -> (u32, Vec<u32>) {
-    if numeric_ids.is_empty() {
-        return (0, Vec::new());
-    }
-
-    // Sort the numeric IDs
-    let mut sorted_ids = numeric_ids.to_vec();
-    sorted_ids.sort_unstable();
-
-    // Find the first gap of size >= MAX_GAP
-    let mut max_before_gap = sorted_ids[0];
-    let mut gap_start = 0;
-    let mut found_gap = false;
-
-    for i in 0..sorted_ids.len() - 1 {
-        let current = sorted_ids[i];
-        let next = sorted_ids[i + 1];
-        let gap_size = next - current;
-
-        if gap_size >= max_gap {
-            max_before_gap = current;
-            gap_start = i + 1;
-            found_gap = true;
-            break;
-        }
-    }
-
-    // If no gap found, use the highest ID
-    if !found_gap {
-        max_before_gap = *sorted_ids.last().unwrap();
-        return (max_before_gap, Vec::new());
-    }
-
-    // Collect IDs above the gap (these are likely hash IDs with numeric-only hashes)
-    let ids_above_gap = sorted_ids[gap_start..].to_vec();
-
-    (max_before_gap, ids_above_gap)
-}
-
 fn upsert_yaml_key_value(file_path: &Path, key: &str, new_value: &str) -> Result<()> {
     use std::io::{BufRead, BufReader};
 
@@ -2992,7 +2925,7 @@ mod create_integrity_tests {
     use super::*;
 
     #[test]
-    fn duplicate_create_id_fails_without_overwriting_existing_issue() {
+    fn writing_a_new_issue_never_replaces_an_existing_file() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
         let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Flat).unwrap();
@@ -3008,33 +2941,25 @@ mod create_integrity_tests {
                 None,
                 Vec::new(),
                 None,
-                Some("tz-2".to_string()),
                 Vec::new(),
                 None,
                 None,
             )
             .unwrap();
-        let original_markdown = fs::read_to_string(tazk_dir.join("issues/tz-2.md")).unwrap();
+        let path = tazk_dir.join(format!("issues/{}.md", original.id));
+        let original_markdown = fs::read_to_string(&path).unwrap();
 
-        let result = storage.create_issue(
+        let replacement = Issue::new(
+            original.id.clone(),
             "Accidental replacement".to_string(),
-            String::new(),
-            None,
-            None,
             2,
             IssueType::Task,
-            None,
-            Vec::new(),
-            None,
-            Some(original.id.clone()),
-            Vec::new(),
-            None,
-            None,
         );
+        let result = storage.write_new_issue_to_path(&path, &replacement);
 
         assert!(result.is_err(), "duplicate creation must fail loudly");
         assert_eq!(
-            fs::read_to_string(tazk_dir.join("issues/tz-2.md")).unwrap(),
+            fs::read_to_string(&path).unwrap(),
             original_markdown,
             "a failed create must preserve the existing issue"
         );
@@ -3055,29 +2980,26 @@ mod list_order_tests {
 
     #[test]
     fn numeric_suffix_parsing() {
-        assert_eq!(numeric_id_suffix("tazk-42"), Some(42));
-        assert_eq!(numeric_id_suffix("tazk-1"), Some(1));
-        assert_eq!(numeric_id_suffix("tazk-a3f9"), None);
-        assert_eq!(numeric_id_suffix("foo-bar-7"), Some(7));
+        assert_eq!(numeric_id_suffix("tz-42"), Some(42));
+        assert_eq!(numeric_id_suffix("tz-1"), Some(1));
+        assert_eq!(numeric_id_suffix("tz-a3f9"), None);
+        assert_eq!(numeric_id_suffix("tz-01"), None);
     }
 
     #[test]
     fn numeric_cluster_first_then_hash() {
         let base = chrono::Utc::now();
         let mut issues = [
-            issue_at("tazk-a3f9", base + Duration::seconds(1)),
-            issue_at("tazk-10", base + Duration::seconds(2)),
-            issue_at("tazk-2", base + Duration::seconds(3)),
-            issue_at("tazk-b001", base),
-            issue_at("tazk-1", base + Duration::seconds(4)),
+            issue_at("tz-a3f9", base + Duration::seconds(1)),
+            issue_at("tz-10", base + Duration::seconds(2)),
+            issue_at("tz-2", base + Duration::seconds(3)),
+            issue_at("tz-b001", base),
+            issue_at("tz-1", base + Duration::seconds(4)),
         ];
         issues.sort_by(compare_for_list);
         let order: Vec<&str> = issues.iter().map(|i| i.id.as_str()).collect();
         // Numeric ascending first (1, 2, 10), then hash-based by creation date.
-        assert_eq!(
-            order,
-            vec!["tazk-1", "tazk-2", "tazk-10", "tazk-b001", "tazk-a3f9",]
-        );
+        assert_eq!(order, vec!["tz-1", "tz-2", "tz-10", "tz-b001", "tz-a3f9",]);
     }
 }
 
@@ -3101,7 +3023,6 @@ mod ready_tests {
                     IssueType::Task,
                     None,
                     Vec::new(),
-                    None,
                     None,
                     Vec::new(),
                     None,
@@ -3259,7 +3180,6 @@ mod config_tests {
                 None,
                 vec![],
                 None,
-                None,
                 vec![],
                 Some(Role::Agent),
                 None,
@@ -3277,19 +3197,19 @@ mod issue_layout_tests {
     #[test]
     fn sharded_paths_use_numeric_suffix_or_hash_prefix() {
         assert_eq!(
-            sharded_relative_path("tz-1"),
+            sharded_relative_path(IssueId::parse("tz-1").unwrap()),
             PathBuf::from("n").join("0").join("1").join("tz-1.md")
         );
         assert_eq!(
-            sharded_relative_path("tz-12"),
+            sharded_relative_path(IssueId::parse("tz-12").unwrap()),
             PathBuf::from("n").join("1").join("2").join("tz-12.md")
         );
         assert_eq!(
-            sharded_relative_path("tz-123"),
+            sharded_relative_path(IssueId::parse("tz-123").unwrap()),
             PathBuf::from("n").join("2").join("3").join("tz-123.md")
         );
         assert_eq!(
-            sharded_relative_path("tz-a3f9c2"),
+            sharded_relative_path(IssueId::parse("tz-a3f9c2").unwrap()),
             PathBuf::from("h").join("a").join("3").join("tz-a3f9c2.md")
         );
     }
@@ -3310,7 +3230,6 @@ mod issue_layout_tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -3341,7 +3260,6 @@ mod issue_layout_tests {
                 None,
                 Vec::new(),
                 None,
-                None,
                 Vec::new(),
                 None,
                 None,
@@ -3357,7 +3275,6 @@ mod issue_layout_tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -3389,7 +3306,6 @@ mod issue_layout_tests {
                 None,
                 Vec::new(),
                 None,
-                None,
                 Vec::new(),
                 None,
                 None,
@@ -3420,7 +3336,6 @@ mod claim_tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -3540,7 +3455,6 @@ mod reopen_tests {
                 None,
                 Vec::new(),
                 None,
-                None,
                 Vec::new(),
                 role,
                 None,
@@ -3599,7 +3513,6 @@ mod role_effort_tests {
             IssueType::Task,
             None,
             Vec::new(),
-            None,
             None,
             Vec::new(),
             role,
@@ -3683,7 +3596,6 @@ mod comment_tests {
                 None,
                 Vec::new(),
                 None,
-                None,
                 Vec::new(),
                 None,
                 None,
@@ -3719,7 +3631,6 @@ mod comment_tests {
                 None,
                 Vec::new(),
                 None,
-                None,
                 Vec::new(),
                 None,
                 None,
@@ -3750,7 +3661,6 @@ mod comment_tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -3791,7 +3701,6 @@ mod search_replace_tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -4036,7 +3945,6 @@ mod hold_tests {
                 None,
                 Vec::new(),
                 None,
-                None,
                 Vec::new(),
                 None,
                 None,
@@ -4106,7 +4014,6 @@ mod close_reason_tests {
                 IssueType::Task,
                 None,
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 Some(Role::Agent),

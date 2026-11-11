@@ -4,10 +4,10 @@ expression: narrow
 ---
  Issues (10) │ Triage (3)                                                                                   group: epic
  role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
-┌ fx-2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+┌ tz-2 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │Auth rework                                                                                                           │
 │                                                                                                                      │
-│ID           fx-2                                                                                                     │
+│ID           tz-2                                                                                                     │
 │Type         epic                                                                                                     │
 │Status       open                                                                                                     │
 │Priority     P1                                                                                                       │
@@ -20,11 +20,11 @@ expression: narrow
 │Updated      2025-01-01 00:00                                                                                         │
 │                                                                                                                      │
 │Parent                                                                                                                │
-│  fx-1 open Platform                                                                                                  │
+│  tz-1 open Platform                                                                                                  │
 │                                                                                                                      │
 │Children                                                                                                              │
-│  fx-3 open Login form redirects loop                                                                                 │
-│  fx-4 open Session cookie dropped                                                                                    │
+│  tz-3 open Login form redirects loop                                                                                 │
+│  tz-4 open Session cookie dropped                                                                                    │
 │                                                                                                                      │
 │(no description)                                                                                                      │
 │                                                                                                                      │
