@@ -727,6 +727,7 @@ impl Storage {
 
         // Add dependencies (with validation)
         for (dep_id, dep_type) in deps {
+            ensure_single_parent(&issue.id, &issue.depends_on, &dep_id, dep_type)?;
             // Validate dependency target exists (warn if not)
             self.validate_dependency_exists(&dep_id);
             issue.depends_on.insert(dep_id, dep_type);
@@ -1453,6 +1454,7 @@ impl Storage {
         let mut issue = markdown_to_issue(from_id, &content)?;
 
         // Add dependency
+        ensure_single_parent(from_id, &issue.depends_on, to_id, dep_type)?;
         issue.depends_on.insert(to_id.to_string(), dep_type);
         issue.updated_at = chrono::Utc::now();
 
@@ -2655,6 +2657,31 @@ impl Storage {
 
         Ok((changes, id_mapping))
     }
+}
+
+/// An issue has at most one parent (`child_of` dependency). Fail if adding
+/// `new_type` on `new_target` would give `issue_id` a second one. Re-adding
+/// the existing parent, or retyping a dependency on the target, is fine.
+pub(crate) fn ensure_single_parent(
+    issue_id: &str,
+    depends_on: &HashMap<String, DependencyType>,
+    new_target: &str,
+    new_type: DependencyType,
+) -> Result<()> {
+    if new_type != DependencyType::ChildOf {
+        return Ok(());
+    }
+    if let Some(existing) = depends_on
+        .iter()
+        .find(|(id, t)| **t == DependencyType::ChildOf && id.as_str() != new_target)
+        .map(|(id, _)| id)
+    {
+        anyhow::bail!(
+            "{issue_id} already has a parent ({existing}); an issue can have only one. \
+             Remove it first with `tz dep remove {issue_id} --target {existing}`"
+        );
+    }
+    Ok(())
 }
 
 /// Parse the contents of an issue file named `<issue_id>.md`. A name outside
@@ -4196,5 +4223,103 @@ mod tolerant_loader_tests {
         let ro = Storage::open_readonly(storage.get_tazk_dir()).unwrap();
         assert_eq!(ro.list_all_issues_tolerant().unwrap().items.len(), 1);
         assert!(!storage.get_tazk_dir().join("tazk.lock").exists());
+    }
+}
+
+#[cfg(test)]
+mod single_parent_tests {
+    use super::*;
+
+    fn storage_with(count: usize) -> (tempfile::TempDir, Storage, Vec<String>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
+        let ids = (0..count)
+            .map(|i| {
+                storage
+                    .create_issue(
+                        format!("issue {i}"),
+                        String::new(),
+                        None,
+                        None,
+                        2,
+                        IssueType::Task,
+                        None,
+                        Vec::new(),
+                        None,
+                        Vec::new(),
+                        Some(Role::Agent),
+                        None,
+                    )
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        (tmp, storage, ids)
+    }
+
+    #[test]
+    fn dep_add_rejects_a_second_parent() {
+        let (_tmp, storage, ids) = storage_with(3);
+        storage
+            .add_dependency(&ids[0], &ids[1], DependencyType::ChildOf)
+            .unwrap();
+        // Re-adding the same parent is fine.
+        storage
+            .add_dependency(&ids[0], &ids[1], DependencyType::ChildOf)
+            .unwrap();
+        let err = storage
+            .add_dependency(&ids[0], &ids[2], DependencyType::ChildOf)
+            .unwrap_err();
+        assert!(err.to_string().contains("already has a parent"), "{err}");
+        // Other dependency types are unaffected.
+        storage
+            .add_dependency(&ids[0], &ids[2], DependencyType::BlockedBy)
+            .unwrap();
+        let issue = storage.get_issue(&ids[0]).unwrap().unwrap();
+        assert_eq!(issue.depends_on[&ids[1]], DependencyType::ChildOf);
+        assert_eq!(issue.depends_on[&ids[2]], DependencyType::BlockedBy);
+    }
+
+    #[test]
+    fn retyping_the_parent_then_adding_another_is_allowed() {
+        let (_tmp, storage, ids) = storage_with(3);
+        storage
+            .add_dependency(&ids[0], &ids[1], DependencyType::ChildOf)
+            .unwrap();
+        storage
+            .add_dependency(&ids[0], &ids[1], DependencyType::BlockedBy)
+            .unwrap();
+        storage
+            .add_dependency(&ids[0], &ids[2], DependencyType::ChildOf)
+            .unwrap();
+    }
+
+    #[test]
+    fn create_rejects_two_parents_and_writes_nothing() {
+        let (_tmp, storage, ids) = storage_with(2);
+        let before = storage.list_all_issues_tolerant().unwrap().items.len();
+        let result = storage.create_issue(
+            "child".into(),
+            String::new(),
+            None,
+            None,
+            2,
+            IssueType::Task,
+            None,
+            Vec::new(),
+            None,
+            vec![
+                (ids[0].clone(), DependencyType::ChildOf),
+                (ids[1].clone(), DependencyType::ChildOf),
+            ],
+            Some(Role::Agent),
+            None,
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            storage.list_all_issues_tolerant().unwrap().items.len(),
+            before
+        );
     }
 }

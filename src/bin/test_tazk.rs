@@ -923,6 +923,7 @@ fn is_critical_failure(result: &tazk::action_generator::ExecutionResult) -> bool
         "Invalid status",
         "Invalid priority",
         "already has dependency",
+        "already has a parent",
         "cannot depend on itself",
     ];
 

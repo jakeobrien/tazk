@@ -388,7 +388,7 @@ depends on B.
 |-------|---------|
 | `blocked_by` | Default. The issue is not ready until the target is closed. The only type that affects `tz ready` and `tz blocked`. |
 | `related_to` | Informational link. |
-| `child_of` | The issue is a child of the target (e.g. an epic). |
+| `child_of` | The issue is a child of the target (e.g. an epic). An issue has at most one parent; adding a second is an error (remove the first with `tz dep remove`). |
 | `discovered_from` | The issue was discovered while working on the target. |
 | `tracks` | The issue tracks the target. |
 

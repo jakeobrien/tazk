@@ -776,7 +776,15 @@ impl ReferenceInterpreter {
                 dep_type,
             } => {
                 if let Some(issue) = self.issues.get_mut(issue_id) {
-                    issue.depends_on.insert(depends_on.clone(), *dep_type);
+                    // Mirror the single-parent rule: a second parent is rejected.
+                    let second_parent = *dep_type == DependencyType::ChildOf
+                        && issue
+                            .depends_on
+                            .iter()
+                            .any(|(id, t)| *t == DependencyType::ChildOf && id != depends_on);
+                    if !second_parent {
+                        issue.depends_on.insert(depends_on.clone(), *dep_type);
+                    }
                 }
                 Ok(())
             }

@@ -3604,7 +3604,7 @@ MANAGING DEPENDENCIES
 DEPENDENCY TYPES
   blocked_by  This task can't start until the target task is complete
   related_to  Soft connection, doesn't block progress
-  child_of  This task is a subtask of the target (epic)
+  child_of  This task is a subtask of the target (epic); at most one per issue
   discovered_from  Auto-created when AI discovers related work
   tracks  Tracks the target task
 
