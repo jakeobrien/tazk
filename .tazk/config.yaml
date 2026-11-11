@@ -1,7 +1,7 @@
 # Tazk configuration
 
 # Prefix for issue IDs (e.g. prefix-1 or prefix-a1b2c3)
-issue-prefix: tazk
+issue-prefix: tz
 
 # Use hash-based issue IDs instead of sequential numbers
 # When true, issues are named like: prefix-a1b2c3 (based on content hash)
