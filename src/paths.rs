@@ -72,6 +72,24 @@ impl<'a> IssueId<'a> {
     }
 }
 
+/// Shorthand parser for ID arguments (no store access): lowercase the
+/// input; keep a full canonical ID; otherwise treat a canonical suffix as
+/// `tz-<suffix>`.
+#[allow(dead_code)] // used by the binary crate, which compiles this module separately
+pub(crate) fn normalize_issue_id(input: &str) -> Result<String> {
+    let lower = input.to_ascii_lowercase();
+    if IssueId::parse(&lower).is_ok() {
+        return Ok(lower);
+    }
+    if IssueId::classify(&lower).is_some() {
+        return Ok(format!("{ID_PREFIX}{lower}"));
+    }
+    anyhow::bail!(
+        "Invalid issue ID {input:?}: expected {ID_PREFIX}<n> or {ID_PREFIX}<hash> \
+         (or just <n> / <hash>)"
+    )
+}
+
 /// The number of a numeric ID string; `None` for hash IDs and non-canonical
 /// strings.
 pub(crate) fn numeric_id_suffix(id: &str) -> Option<u32> {
@@ -150,6 +168,27 @@ pub(crate) fn ensure_contained(root: &Path, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_expands_shorthand() {
+        for (input, expected) in [
+            ("12", "tz-12"),
+            ("tz-12", "tz-12"),
+            ("TZ-12", "tz-12"),
+            ("a1b", "tz-a1b"),
+            ("A1B", "tz-a1b"),
+            ("tz-a1b", "tz-a1b"),
+        ] {
+            assert_eq!(normalize_issue_id(input).unwrap(), expected, "{input}");
+        }
+        for input in ["0", "01", "tz-", "x-1", "a-b", "", "tz-0", "a b"] {
+            let error = normalize_issue_id(input).unwrap_err().to_string();
+            assert!(
+                error.contains("expected tz-<n> or tz-<hash> (or just <n> / <hash>)"),
+                "{input}: {error}"
+            );
+        }
+    }
 
     #[test]
     fn parse_accepts_canonical_ids() {

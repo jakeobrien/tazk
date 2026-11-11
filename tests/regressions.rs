@@ -76,8 +76,8 @@ fn unsafe_ids_are_rejected_by_the_format_check() {
                 "import accepted {id:?}"
             );
             assert!(
-                storage.rename_issue("tz-1", id, false).is_err(),
-                "rename accepted {id:?}"
+                storage.renumber_issue("tz-1", Some(id), false).is_err(),
+                "renumber accepted {id:?}"
             );
             assert!(storage.get_issue(id).is_err(), "read accepted {id:?}");
             assert!(
@@ -204,7 +204,7 @@ fn repacking_swaps_and_cycles_preserves_all_issues_dependencies_and_comments() {
 
 #[test]
 fn every_id_migration_preserves_comment_ownership_and_jsonl_ids() {
-    for mode in ["rename", "hash", "numeric", "repack"] {
+    for mode in ["renumber", "hash", "numeric", "repack"] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
         let old_id = if mode == "numeric" { "tz-abcd" } else { "tz-2" };
         let originals = import_fixture_issues(&storage, &[old_id]);
@@ -217,8 +217,8 @@ fn every_id_migration_preserves_comment_ownership_and_jsonl_ids() {
         )
         .unwrap();
         let new_id = match mode {
-            "rename" => {
-                storage.rename_issue(old_id, "tz-9", false).unwrap();
+            "renumber" => {
+                storage.renumber_issue(old_id, Some("tz-9"), false).unwrap();
                 "tz-9".to_owned()
             }
             "hash" => storage.migrate_to_hash_ids(false, true).unwrap().1[old_id].clone(),
@@ -331,7 +331,7 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
     use tazk::sync::{load_jsonl_issues, load_markdown_issues, SyncEngine};
 
     enum Migration {
-        Rename,
+        Renumber,
         Hash,
         Numeric,
         Repack,
@@ -339,7 +339,7 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
 
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         for migration in [
-            Migration::Rename,
+            Migration::Renumber,
             Migration::Hash,
             Migration::Numeric,
             Migration::Repack,
@@ -373,8 +373,8 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
             fs::write(&jsonl_path, serde_json::to_vec(&independent).unwrap()).unwrap();
 
             match migration {
-                Migration::Rename => {
-                    storage.rename_issue(old_id, "tz-9", false).unwrap();
+                Migration::Renumber => {
+                    storage.renumber_issue(old_id, Some("tz-9"), false).unwrap();
                 }
                 Migration::Hash => {
                     storage.migrate_to_hash_ids(false, true).unwrap();
@@ -711,7 +711,8 @@ fn readonly_rejects_modifications_before_opening_storage() {
         vec!["triage", "promote", "x", "--title", "t", "-r", "agent"],
         vec!["triage", "attach", "x", "--to", "tz-1", "--author", "a"],
         vec!["close", "tz-1"],
-        vec!["rename", "tz-1", "tz-2"],
+        vec!["renumber", "tz-1", "--to", "9"],
+        vec!["repair"],
         vec!["config", "set", "tz-hash-ids", "true"],
         vec!["comments", "add", "tz-1", "--body", "new", "--author", "a"],
         vec!["label", "add", "tz-1", "new"],
@@ -900,7 +901,7 @@ fn triage_item(storage: &Storage, text: &str) -> tazk::storage::triage::TriageIt
 }
 
 #[test]
-fn rename_updates_triage_mentions_and_leaves_other_items_untouched() {
+fn renumber_updates_triage_mentions_and_leaves_other_items_untouched() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
     create(&storage, "tz-1", "one").unwrap();
     create(&storage, "tz-12", "twelve").unwrap();
@@ -911,7 +912,10 @@ fn rename_updates_triage_mentions_and_leaves_other_items_untouched() {
     let plain_before = fs::read(&plain_path).unwrap();
     let plain_mtime = fs::metadata(&plain_path).unwrap().modified().unwrap();
 
-    let changes = storage.rename_issue("tz-1", "tz-7", true).unwrap();
+    let changes = storage
+        .renumber_issue("tz-1", Some("tz-7"), true)
+        .unwrap()
+        .1;
     assert!(
         changes.iter().any(|c| c.contains(&mentions.name)),
         "{changes:?}"
@@ -926,7 +930,7 @@ fn rename_updates_triage_mentions_and_leaves_other_items_untouched() {
         "dry run must not write"
     );
 
-    storage.rename_issue("tz-1", "tz-7", false).unwrap();
+    storage.renumber_issue("tz-1", Some("tz-7"), false).unwrap();
     let updated = storage.get_triage_item(&mentions.name).unwrap();
     assert_eq!(updated.body, "Found while on tz-7 (not tz-12).\n");
     assert_eq!(fs::read(&plain_path).unwrap(), plain_before);
@@ -992,4 +996,134 @@ fn repack_rewrites_triage_mentions_in_one_pass() {
         storage.get_triage_item(&item.name).unwrap().body,
         "See tz-2, and tz-1.\n"
     );
+}
+
+fn hash_fixture() -> (tempfile::TempDir, Storage) {
+    let (temp, storage) = fixture(IssueStorageLayout::Flat);
+    storage.set_config_value("tz-hash-ids", "true").unwrap();
+    (temp, storage)
+}
+
+#[test]
+fn renumber_numeric_defaults_to_the_next_free_number_and_rewrites_references() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    for id in ["tz-3", "tz-5", "tz-7"] {
+        create(&storage, id, id).unwrap();
+    }
+    storage
+        .add_dependency("tz-5", "tz-3", tazk::types::DependencyType::BlockedBy)
+        .unwrap();
+    storage
+        .add_dependency("tz-7", "tz-3", tazk::types::DependencyType::ChildOf)
+        .unwrap();
+    storage
+        .update_issue(
+            "tz-5",
+            [("description".to_owned(), "see tz-3 and tz-30".to_owned())].into(),
+        )
+        .unwrap();
+    storage.add_comment("tz-5", "me", "re tz-3").unwrap();
+    let item = triage_item(&storage, "found during tz-3");
+
+    let (new_id, _) = storage.renumber_issue("tz-3", None, false).unwrap();
+    assert_eq!(new_id, "tz-8");
+    assert!(storage.get_issue("tz-3").unwrap().is_none());
+    assert!(storage.get_issue("tz-8").unwrap().is_some());
+    let five = storage.get_issue("tz-5").unwrap().unwrap();
+    assert!(five.depends_on.contains_key("tz-8") && !five.depends_on.contains_key("tz-3"));
+    assert_eq!(five.description, "see tz-8 and tz-30");
+    assert!(storage
+        .get_issue("tz-7")
+        .unwrap()
+        .unwrap()
+        .depends_on
+        .contains_key("tz-8"));
+    assert_eq!(storage.list_comments("tz-5").unwrap()[0].body, "re tz-8");
+    assert_eq!(
+        storage.get_triage_item(&item.name).unwrap().body,
+        "found during tz-8\n"
+    );
+}
+
+#[test]
+fn renumber_numeric_to_checks_the_target() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    for id in ["tz-3", "tz-5"] {
+        create(&storage, id, id).unwrap();
+    }
+    assert!(storage.renumber_issue("tz-3", Some("tz-5"), false).is_err());
+    assert!(storage
+        .renumber_issue("tz-3", Some("tz-a1b"), false)
+        .is_err());
+    assert!(storage
+        .renumber_issue("tz-9", Some("tz-10"), false)
+        .is_err());
+    assert!(storage.renumber_issue("tz-3", Some("tz-3"), false).is_err());
+    assert!(storage.get_issue("tz-3").unwrap().is_some());
+    let (new_id, _) = storage
+        .renumber_issue("tz-3", Some("tz-20"), false)
+        .unwrap();
+    assert_eq!(new_id, "tz-20");
+    assert!(storage.get_issue("tz-20").unwrap().is_some());
+}
+
+#[test]
+fn renumber_hash_mode_generates_or_accepts_hash_ids() {
+    let (_temp, storage) = hash_fixture();
+    for id in ["tz-a1b", "tz-c2d"] {
+        create(&storage, id, id).unwrap();
+    }
+    assert!(storage
+        .renumber_issue("tz-a1b", Some("tz-c2d"), false)
+        .is_err());
+    assert!(storage
+        .renumber_issue("tz-a1b", Some("tz-5"), false)
+        .is_err());
+    let (new_id, _) = storage
+        .renumber_issue("tz-a1b", Some("tz-zzz"), false)
+        .unwrap();
+    assert_eq!(new_id, "tz-zzz");
+    let (generated, _) = storage.renumber_issue("tz-zzz", None, false).unwrap();
+    assert_ne!(generated, "tz-zzz");
+    assert!(tazk::sync::load_markdown_issues(&storage.get_tazk_dir())
+        .unwrap()
+        .contains_key(&generated));
+    assert!(generated
+        .strip_prefix("tz-")
+        .unwrap()
+        .bytes()
+        .any(|b| b.is_ascii_lowercase()));
+}
+
+#[test]
+fn renumber_dry_run_changes_nothing() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    create(&storage, "tz-1", "one").unwrap();
+    let item = triage_item(&storage, "on tz-1");
+    let (new_id, changes) = storage.renumber_issue("tz-1", None, true).unwrap();
+    assert_eq!(new_id, "tz-2");
+    assert!(
+        changes.iter().any(|c| c.contains(&item.name)),
+        "{changes:?}"
+    );
+    assert!(storage.get_issue("tz-1").unwrap().is_some());
+    assert!(storage.get_issue("tz-2").unwrap().is_none());
+}
+
+#[test]
+fn renumber_and_repair_cli() {
+    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
+    create(&storage, "tz-3", "three").unwrap();
+    let output = run_cli(&storage, &["renumber", "3", "--to", "12"]);
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["new_id"], "tz-12");
+    assert!(storage.get_issue("tz-12").unwrap().is_some());
+    assert!(!run_cli(&storage, &["renumber", "12", "--to", "a1b"])
+        .status
+        .success());
+    assert!(run_cli(&storage, &["repair", "--dry-run"]).status.success());
+    let output = run_cli(&storage, &["rename", "tz-12", "tz-13"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
 }

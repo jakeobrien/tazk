@@ -30,6 +30,12 @@ overview, see the [README](README.md).
 - `tz defer ISSUE_ID... [--release] [--reason TEXT]` - Same as `tz block`, for `deferred` (`Deferred ...` / `Undeferred ...` notes)
 - `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue. A reason is appended to Notes as `Closed <UTC timestamp>: <reason>`
 - `tz reopen ISSUE_ID... [--role human|agent] [--reason REASON]` - Reopen closed issues. A reason is appended to Notes as `Reopened <UTC timestamp>: <reason>`. An issue with no role is refused until you resubmit with `--role`
+- `tz renumber ISSUE_ID [--to SUFFIX_OR_ID] [--dry-run] [--tz-patch-code]` - Give an issue a new ID, for fixing duplicate IDs (see [Duplicate IDs](#duplicate-ids-after-a-merge)). The ID is always canonical and in the store's format:
+  - Numeric store (default): without `--to`, the next free number (highest + 1); `--to` must be a free numeric ID (`--to 20` or `--to tz-20`).
+  - Hash store (`tz-hash-ids: true`): without `--to`, a freshly generated hash; `--to` must be a free hash ID.
+  - `--to` in the other format, or naming an existing issue, is an error.
+  - Dependencies and parents in all issues, ID mentions in issue text, comments and triage items are rewritten in one transaction. `--dry-run` lists the changes without making them. `--tz-patch-code` also offers to patch references in code (interactive TTY only).
+- `tz repair [--dry-run]` - Remove references (dependencies, parents) to issues that no longer exist
 - `tz comments add ISSUE_ID --body TEXT --author NAME` - Add a local issue comment
 - `tz comments list ISSUE_ID` - List local issue comments
 - `tz comments delete ISSUE_ID COMMENT_ID...` - Delete local issue comment(s) by ID
@@ -260,6 +266,27 @@ unchanged; fenced code is stored as it is.)
 `tz merge-driver run BASE OURS THEIRS --path REPO/PATH --stdout` previews a
 merge without writing any file.
 
+#### Duplicate IDs after a merge
+
+Two branches that each ran `tz create` can hand out the same numeric ID (say
+both made `tz-39`). With no merge base the driver cannot combine the two files,
+so give one of them a new ID before merging. On the incoming branch, before
+merging:
+
+```bash
+git checkout feature
+tz renumber 39 --to <n>   # <n> above the target branch's highest ID
+git add -A && git commit -m "Renumber tz-39 to tz-<n>"
+git checkout main && git merge feature
+```
+
+`renumber` rewrites that branch's own references to the issue (dependencies,
+parents, text mentions, comments, triage items). Without `--to` it picks the
+next number after the highest ID on the *current* branch, which may still
+collide with the target branch, so choose `<n>` from the target branch's
+highest ID. In a hash store collisions are very unlikely; if one happens,
+`tz renumber <id>` generates a fresh hash.
+
 ### Options
 
 - `--tz-dir PATH` - Path to .tazk directory
@@ -274,11 +301,29 @@ properties below; the free-text sections live in the markdown body (see
 [Storage Format](README.md#storage-format)). With `--json`, the same properties
 are emitted using the same names.
 
+### Issue IDs
+
+An ID is `tz-` plus either a number without leading zeros (`[1-9][0-9]*`) or
+a lowercase base36 hash with at least one letter. IDs are always allocated by
+`tz`; JSONL import and issue files accept only this canonical form. Output
+always prints the full `tz-…` form.
+
+**Shorthand:** every command argument that names an issue accepts the bare
+suffix: `tz show 12`, `tz close a1b`, `tz create --parent 3`,
+`--deps blocked_by:4,5`, `tz list --id 4,5`, `tz dep add 2 --target 1`. Input is
+lowercased, so `TZ-12` and `A1B` work too. This covers `show`, `update`,
+`claim`, `block`, `defer`, `close`, `reopen`, `children`, `renumber`,
+`dep add/remove/list/tree`, `label add/remove/list`, `comments add/list/delete`,
+`create` and `triage promote` (`--parent`, `--deps`), `list` and `ready`
+(`--id`, `--parent`) and `triage attach --to`. Anything else is rejected with
+`Invalid issue ID "<input>": expected tz-<n> or tz-<hash> (or just <n> / <hash>)`.
+Triage item names are not IDs and are unaffected.
+
 ### Frontmatter properties
 
 | Property | Required | Values | Notes |
 |----------|----------|--------|-------|
-| `id` | yes | `tz-N`, or `tz-<hash>` if the database was initialised with `--tz-hash-ids` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). Commands accept numeric shorthand (`14` expands to `tz-14`). The format is strict: `tz-` plus either a number without leading zeros (`[1-9][0-9]*`) or a lowercase base36 hash with at least one letter. IDs are always allocated by `tz`; JSONL import accepts only this form. An issue file whose name does not match is an invalid file. |
+| `id` | yes | `tz-N`, or `tz-<hash>` if the database was initialised with `--tz-hash-ids` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). See [Issue IDs](#issue-ids) for the format and the shorthand commands accept. An issue file whose name does not match is an invalid file. |
 | `title` | yes | Any text | Settable with `create`, `triage promote --title` and `update --title`. |
 | `status` | yes | See [Status](#status) | Default `open`. |
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |

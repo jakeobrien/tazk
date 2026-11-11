@@ -220,11 +220,12 @@ enum Commands {
         /// Dependencies (comma-separated). Formats:
         /// Simple: "tz-1,tz-2" (defaults to 'blocked_by')
         /// Advanced: "blocked_by:tz-1,related_to:tz-2,discovered_from:tz-3"
-        #[arg(long)]
+        /// IDs take the shorthand: "blocked_by:12,13"
+        #[arg(long, value_parser = deps_arg)]
         deps: Option<String>,
 
-        /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9')
-        #[arg(long)]
+        /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9'; shorthand accepted)
+        #[arg(long, value_parser = issue_id_arg)]
         parent: Option<String>,
     },
 
@@ -268,16 +269,16 @@ enum Commands {
         #[arg(short = 'l', long = "label")]
         labels: Vec<String>,
 
-        /// Filter by specific issue IDs (comma-separated)
-        #[arg(long)]
+        /// Filter by specific issue IDs (comma-separated; shorthand accepted)
+        #[arg(long, value_parser = issue_id_list_arg)]
         id: Option<String>,
 
         /// Filter by title substring (case-insensitive)
         #[arg(long)]
         title: Option<String>,
 
-        /// Filter to direct children of a parent issue
-        #[arg(long)]
+        /// Filter to direct children of a parent issue (shorthand accepted)
+        #[arg(long, value_parser = issue_id_arg)]
         parent: Option<String>,
 
         /// Maximum number of issues to return
@@ -291,19 +292,22 @@ enum Commands {
 
     /// Show issue details
     Show {
-        /// Issue IDs (supports shorthand: "14" expands to "tz-14")
+        /// Issue IDs (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
     },
 
     /// List direct child issues
     Children {
-        /// Parent issue ID
+        /// Parent issue ID (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         parent_id: String,
     },
 
     /// Update one or more issues
     Update {
-        /// Issue IDs to update
+        /// Issue IDs to update (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// New priority
@@ -428,7 +432,8 @@ enum Commands {
     /// machines by committing and pushing the change: a losing push is
     /// rejected, so the loser pulls and sees the issue is already taken.
     Claim {
-        /// Issue IDs to claim (or release with --release)
+        /// Issue IDs to claim (or release with --release) (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// Claim identity (assignee value), e.g. a worker or agent name
@@ -454,7 +459,8 @@ enum Commands {
     /// Sets status to blocked (or back to open with --release). With --reason,
     /// the text is appended to the issue's Notes as "Blocked <timestamp>: <reason>".
     Block {
-        /// Issue IDs to block (or unblock with --release)
+        /// Issue IDs to block (or unblock with --release) (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// Unblock the issue (status returns to open)
@@ -471,7 +477,8 @@ enum Commands {
     /// Sets status to deferred (or back to open with --release). With --reason,
     /// the text is appended to the issue's Notes as "Deferred <timestamp>: <reason>".
     Defer {
-        /// Issue IDs to defer (or undefer with --release)
+        /// Issue IDs to defer (or undefer with --release) (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// Undefer the issue (status returns to open)
@@ -488,7 +495,8 @@ enum Commands {
     /// With --reason, the text is appended to the issue's Notes as
     /// "Closed <timestamp>: <reason>".
     Close {
-        /// Issue IDs to close
+        /// Issue IDs to close (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// Reason for closing, appended to Notes with a timestamp
@@ -501,7 +509,8 @@ enum Commands {
     /// With --reason, the text is appended to the issue's Notes as
     /// "Reopened <timestamp>: <reason>".
     Reopen {
-        /// Issue IDs to reopen
+        /// Issue IDs to reopen (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// Reason for reopening, appended to Notes with a timestamp
@@ -515,25 +524,34 @@ enum Commands {
         role: Option<Role>,
     },
 
-    /// Rename an issue ID
-    Rename {
-        /// Current issue ID
-        old_id: String,
+    /// Give an issue a new ID (to fix duplicate IDs created on two branches)
+    ///
+    /// Numeric stores: the next free number, or --to <n>. Hash stores: a
+    /// fresh hash, or --to <hash>. Dependencies, parents, text mentions,
+    /// comments and triage items are updated.
+    Renumber {
+        /// Issue ID to change (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
+        id: String,
 
-        /// New issue ID
-        new_id: String,
+        /// New ID (must be free and in the store's ID format; shorthand accepted)
+        #[arg(long, value_parser = issue_id_arg)]
+        to: Option<String>,
 
         /// Preview changes without applying them
         #[arg(long)]
         dry_run: bool,
 
-        /// Repair broken references (scan all issues and fix stale references)
-        #[arg(long)]
-        repair: bool,
-
         /// Also patch code references (requires interactive TTY)
         #[arg(long = "tz-patch-code")]
         tz_patch_code: bool,
+    },
+
+    /// Repair broken references (scan all issues and remove stale references)
+    Repair {
+        /// Preview changes without applying them
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Manage dependencies
@@ -635,16 +653,16 @@ enum Commands {
         #[arg(short = 'l', long = "label")]
         labels: Vec<String>,
 
-        /// Filter by specific issue IDs (comma-separated)
-        #[arg(long)]
+        /// Filter by specific issue IDs (comma-separated; shorthand accepted)
+        #[arg(long, value_parser = issue_id_list_arg)]
         id: Option<String>,
 
         /// Filter by title substring (case-insensitive)
         #[arg(long)]
         title: Option<String>,
 
-        /// Filter to direct children of a parent issue
-        #[arg(long)]
+        /// Filter to direct children of a parent issue (shorthand accepted)
+        #[arg(long, value_parser = issue_id_arg)]
         parent: Option<String>,
 
         /// Maximum number of issues to return (default: unlimited)
@@ -758,7 +776,8 @@ impl Commands {
             | Self::Defer { .. }
             | Self::Close { .. }
             | Self::Reopen { .. }
-            | Self::Rename { .. }
+            | Self::Renumber { .. }
+            | Self::Repair { .. }
             | Self::Sync { .. }
             | Self::Migrate { .. }
             | Self::MergeDriver { .. } => false,
@@ -809,11 +828,12 @@ enum MergeDriverCommands {
 enum DepCommands {
     /// Add a dependency
     Add {
-        /// Issue that has the dependency
+        /// Issue that has the dependency (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_id: String,
 
-        /// Issue that issue_id has the dependency on
-        #[arg(long = "target", value_name = "DEPENDENCY_ID")]
+        /// Issue that issue_id has the dependency on (shorthand accepted)
+        #[arg(long = "target", value_name = "DEPENDENCY_ID", value_parser = issue_id_arg)]
         dependency_id: String,
 
         /// Dependency type: blocked_by, related_to, child_of, discovered_from, tracks
@@ -823,17 +843,19 @@ enum DepCommands {
 
     /// Remove a dependency
     Remove {
-        /// Issue that has the dependency
+        /// Issue that has the dependency (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_id: String,
 
-        /// Dependency to remove from issue_id
-        #[arg(long = "target", value_name = "DEPENDENCY_ID")]
+        /// Dependency to remove from issue_id (shorthand accepted)
+        #[arg(long = "target", value_name = "DEPENDENCY_ID", value_parser = issue_id_arg)]
         dependency_id: String,
     },
 
     /// List dependencies or dependents
     List {
-        /// Issue IDs to inspect
+        /// Issue IDs to inspect (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_ids: Vec<String>,
 
         /// Direction: down (dependencies) or up (dependents)
@@ -847,7 +869,8 @@ enum DepCommands {
 
     /// Show dependency tree
     Tree {
-        /// Issue ID to show tree for (supports shorthand: "14" expands to "tz-14")
+        /// Issue ID to show tree for (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_id: String,
 
         /// Maximum tree depth to display (safety limit)
@@ -867,20 +890,24 @@ enum DepCommands {
 enum LabelCommands {
     /// Add a label to one or more issues
     Add {
-        /// Issue IDs followed by the label to add
+        /// Issue IDs (shorthand accepted) followed by the label to add
         #[arg(required = true, num_args = 2..)]
         args: Vec<String>,
     },
 
     /// Remove a label from one or more issues
     Remove {
-        /// Issue IDs followed by the label to remove
+        /// Issue IDs (shorthand accepted) followed by the label to remove
         #[arg(required = true, num_args = 2..)]
         args: Vec<String>,
     },
 
     /// List labels for an issue
-    List { issue_id: String },
+    List {
+        /// Issue ID (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
+        issue_id: String,
+    },
 
     /// List all unique labels
     ListAll,
@@ -1051,11 +1078,11 @@ enum TriageCommands {
         external_ref: Option<String>,
 
         /// Dependencies (comma-separated). Same formats as `tz create --deps`.
-        #[arg(long)]
+        #[arg(long, value_parser = deps_arg)]
         deps: Option<String>,
 
-        /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9')
-        #[arg(long)]
+        /// Parent issue ID for hierarchical child (e.g., 'tz-a3f8e9'; shorthand accepted)
+        #[arg(long, value_parser = issue_id_arg)]
         parent: Option<String>,
     },
 
@@ -1069,8 +1096,8 @@ enum TriageCommands {
         #[arg(required = true)]
         names: Vec<String>,
 
-        /// Issue to comment on
-        #[arg(long, required = true)]
+        /// Issue to comment on (shorthand accepted)
+        #[arg(long, required = true, value_parser = issue_id_arg)]
         to: String,
 
         /// Comment author
@@ -1083,6 +1110,8 @@ enum TriageCommands {
 enum CommentCommands {
     /// Add a comment to an issue
     Add {
+        /// Issue ID (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_id: String,
 
         /// Comment body
@@ -1095,10 +1124,16 @@ enum CommentCommands {
     },
 
     /// List comments for an issue
-    List { issue_id: String },
+    List {
+        /// Issue ID (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
+        issue_id: String,
+    },
 
     /// Delete one or more comments from an issue by comment ID
     Delete {
+        /// Issue ID (shorthand accepted)
+        #[arg(value_parser = issue_id_arg)]
         issue_id: String,
 
         /// Comment ID(s) to delete, as shown by `tz comments list`
@@ -1291,6 +1326,34 @@ fn split_label_csv(labels: &str) -> Vec<String> {
         .collect()
 }
 
+/// clap `value_parser` for one issue ID argument: accepts `tz-12`, `12` or a
+/// bare hash and yields the full lowercase ID.
+fn issue_id_arg(value: &str) -> Result<String, String> {
+    paths::normalize_issue_id(value).map_err(|e| e.to_string())
+}
+
+/// `value_parser` for comma-separated issue IDs (`list --id 1,tz-2`).
+fn issue_id_list_arg(value: &str) -> Result<String, String> {
+    let ids = value
+        .split(',')
+        .map(|id| issue_id_arg(id.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids.join(","))
+}
+
+/// `value_parser` for `--deps`: normalizes the ID of each entry (after the
+/// optional `type:` is split off) and leaves the type text for `parse_deps`.
+fn deps_arg(value: &str) -> Result<String, String> {
+    let mut entries = Vec::new();
+    for entry in value.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        entries.push(match entry.split_once(':') {
+            Some((dep_type, id)) => format!("{dep_type}:{}", issue_id_arg(id.trim())?),
+            None => issue_id_arg(entry)?,
+        });
+    }
+    Ok(entries.join(","))
+}
+
 fn split_label_command_args(mut args: Vec<String>) -> Result<(Vec<String>, String)> {
     let label = args
         .pop()
@@ -1298,6 +1361,10 @@ fn split_label_command_args(mut args: Vec<String>) -> Result<(Vec<String>, Strin
     if args.is_empty() {
         anyhow::bail!("Label command requires at least one issue ID");
     }
+    let args = args
+        .iter()
+        .map(|id| paths::normalize_issue_id(id))
+        .collect::<Result<Vec<_>>>()?;
     Ok((args, label))
 }
 
@@ -2077,17 +2144,10 @@ fn run() -> Result<()> {
 
             let mut issues = Vec::new();
 
-            // Normalize issue IDs (expand numeric shorthand like "14" -> "tz-14")
-            for id_str in &issue_ids {
-                let normalized_id = if id_str.parse::<u32>().is_ok() {
-                    format!("{}{}", types::ID_PREFIX, id_str)
-                } else {
-                    id_str.clone()
-                };
-
+            for issue_id in &issue_ids {
                 let issue = storage
-                    .get_issue(&normalized_id)?
-                    .ok_or_else(|| anyhow::anyhow!("Issue not found: {}", normalized_id))?;
+                    .get_issue(issue_id)?
+                    .ok_or_else(|| anyhow::anyhow!("Issue not found: {}", issue_id))?;
                 issues.push(issue);
             }
 
@@ -2456,13 +2516,13 @@ fn run() -> Result<()> {
             Ok(())
         }
 
-        Commands::Rename {
-            old_id,
-            new_id,
+        Commands::Renumber {
+            id,
+            to,
             dry_run,
-            repair,
             tz_patch_code,
         } => {
+            let old_id = id;
             let storage = get_storage(tz_dir, readonly)?;
 
             // Log command after storage is validated
@@ -2470,48 +2530,62 @@ fn run() -> Result<()> {
                 let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
-            if repair {
-                // Repair mode: scan all issues and fix broken references
-                let changes = storage.repair_references(dry_run)?;
+            let (new_id, changes) = storage.renumber_issue(&old_id, to.as_deref(), dry_run)?;
 
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&changes)?);
-                } else if dry_run {
-                    println!("Dry run - would make the following changes:");
-                    for change in &changes {
-                        println!("  {}", change);
-                    }
-                } else if changes.len() == 1 && changes[0] == "No broken references found" {
-                    println!("No broken references found");
-                } else {
-                    println!("Repaired {} broken reference(s)", changes.len());
-                    for change in &changes {
-                        println!("  {}", change);
-                    }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "old_id": old_id,
+                        "new_id": new_id,
+                        "dry_run": dry_run,
+                        "changes": changes,
+                    }))?
+                );
+            } else if dry_run {
+                println!("Dry run - would renumber {} to {}:", old_id, new_id);
+                for change in &changes {
+                    println!("  {}", change);
                 }
             } else {
-                // Rename mode
-                let changes = storage.rename_issue(&old_id, &new_id, dry_run)?;
+                println!("Successfully renumbered {} to {}", old_id, new_id);
+                if changes.len() > 2 {
+                    println!("Updated {} file(s) with references", changes.len() - 2);
+                }
 
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&changes)?);
-                } else if dry_run {
-                    println!("Dry run - would make the following changes:");
-                    for change in &changes {
-                        println!("  {}", change);
+                // Patch code references if requested
+                if tz_patch_code {
+                    if let Err(e) = code_patch::patch_code_for_rename(&old_id, &new_id) {
+                        eprintln!("Warning: Code patching failed: {}", e);
                     }
-                } else {
-                    println!("Successfully renamed {} to {}", old_id, new_id);
-                    if changes.len() > 2 {
-                        println!("Updated {} file(s) with references", changes.len() - 2);
-                    }
+                }
+            }
+            Ok(())
+        }
 
-                    // Patch code references if requested
-                    if tz_patch_code {
-                        if let Err(e) = code_patch::patch_code_for_rename(&old_id, &new_id) {
-                            eprintln!("Warning: Code patching failed: {}", e);
-                        }
-                    }
+        Commands::Repair { dry_run } => {
+            let storage = get_storage(tz_dir, readonly)?;
+
+            // Log command after storage is validated
+            if !tz_no_cmd_logging {
+                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
+            }
+
+            let changes = storage.repair_references(dry_run)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&changes)?);
+            } else if dry_run {
+                println!("Dry run - would make the following changes:");
+                for change in &changes {
+                    println!("  {}", change);
+                }
+            } else if changes.len() == 1 && changes[0] == "No broken references found" {
+                println!("No broken references found");
+            } else {
+                println!("Repaired {} broken reference(s)", changes.len());
+                for change in &changes {
+                    println!("  {}", change);
                 }
             }
             Ok(())
@@ -3653,5 +3727,62 @@ mod body_input_tests {
         .unwrap()
         .unwrap();
         assert_eq!(got, "from file");
+    }
+}
+
+#[cfg(test)]
+mod id_arg_tests {
+    use super::*;
+
+    #[test]
+    fn single_and_list_arguments_are_normalized() {
+        assert_eq!(issue_id_arg("12").unwrap(), "tz-12");
+        assert_eq!(
+            issue_id_list_arg("4, TZ-5,a1b").unwrap(),
+            "tz-4,tz-5,tz-a1b"
+        );
+        assert!(issue_id_list_arg("4,x-1").is_err());
+        assert!(issue_id_list_arg("4,,5").is_err());
+    }
+
+    #[test]
+    fn deps_split_the_type_before_normalizing() {
+        assert_eq!(
+            deps_arg("blocked_by:12, related_to:A1B,7").unwrap(),
+            "blocked_by:tz-12,related_to:tz-a1b,tz-7"
+        );
+        assert_eq!(deps_arg("").unwrap(), "");
+        assert!(deps_arg("blocked_by:x-1").is_err());
+        assert!(deps_arg("blocked_by:").is_err());
+    }
+
+    #[test]
+    fn commands_parse_shorthand_everywhere() {
+        let cli = Cli::try_parse_from([
+            "tz",
+            "dep",
+            "add",
+            "2",
+            "--target",
+            "A1B",
+            "-t",
+            "related_to",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Dep {
+                command:
+                    DepCommands::Add {
+                        issue_id,
+                        dependency_id,
+                        ..
+                    },
+            } => assert_eq!(
+                (issue_id.as_str(), dependency_id.as_str()),
+                ("tz-2", "tz-a1b")
+            ),
+            _ => panic!("wrong command"),
+        }
+        assert!(Cli::try_parse_from(["tz", "show", "x-1"]).is_err());
     }
 }

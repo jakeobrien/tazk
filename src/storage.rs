@@ -1279,16 +1279,68 @@ impl Storage {
         Ok(issue)
     }
 
-    /// Rename an issue ID
+    /// Give an issue a new canonical ID (see `tz renumber`).
     ///
-    /// This operation:
-    /// - Renames the markdown file
-    /// - Updates the ID in the issue frontmatter
-    /// - Updates all references in other issues' dependencies
-    /// - Updates all text mentions of the old ID in all issues (title, description, design, notes, acceptance_criteria)
+    /// `new_id` must be a free ID in the store's current format (numeric or
+    /// hash); without it the next free number (numeric mode) or a freshly
+    /// generated hash (hash mode) is used. Returns the new ID and the list
+    /// of changes (applied unless `dry_run`).
+    ///
+    /// The rewrite:
+    /// - Renames the markdown file and updates the ID in its frontmatter
+    /// - Updates all dependency references in other issues
+    /// - Updates text mentions in issues, comments and triage items
     /// - Is atomic (all updates succeed or none)
-    pub fn rename_issue(&self, old_id: &str, new_id: &str, dry_run: bool) -> Result<Vec<String>> {
+    pub fn renumber_issue(
+        &self,
+        old_id: &str,
+        new_id: Option<&str>,
+        dry_run: bool,
+    ) -> Result<(String, Vec<String>)> {
         let _lock = self.lock_for_write()?;
+        IssueId::parse(old_id)?;
+        let path = self
+            .existing_issue_path(old_id)?
+            .with_context(|| format!("Issue not found: {old_id}"))?;
+        let issue = markdown_to_issue(
+            old_id,
+            &fs::read_to_string(&path).context("Failed to read issue file")?,
+        )?;
+        let hash_mode = self.use_hash_ids()?;
+        let new_id = match new_id {
+            Some(new_id) => {
+                let parsed = IssueId::parse(new_id)?;
+                match (hash_mode, parsed.kind()) {
+                    (false, IdKind::Numeric) => anyhow::ensure!(
+                        parsed.numeric_suffix().is_some(),
+                        "Numeric issue ID is too large: {new_id}"
+                    ),
+                    (true, IdKind::Hash) => {}
+                    (false, IdKind::Hash) => anyhow::bail!(
+                        "Cannot renumber to {new_id}: this store uses numeric IDs (tz-<n>)"
+                    ),
+                    (true, IdKind::Numeric) => anyhow::bail!(
+                        "Cannot renumber to {new_id}: this store uses hash IDs (tz-<hash>)"
+                    ),
+                }
+                new_id.to_owned()
+            }
+            None if hash_mode => self.generate_hash_id(&issue.title, &issue.description)?,
+            None => format!("{ID_PREFIX}{}", self.get_next_number()?),
+        };
+        anyhow::ensure!(old_id != new_id, "{old_id} already has that ID");
+        let changes = self.rename_issue_no_lock(old_id, &new_id, dry_run)?;
+        Ok((new_id, changes))
+    }
+
+    /// Rewrite `old_id` to `new_id` everywhere. The caller holds the write
+    /// lock and has validated `new_id`'s format.
+    fn rename_issue_no_lock(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        dry_run: bool,
+    ) -> Result<Vec<String>> {
         anyhow::ensure!(
             self.issue_exists_any_layout(old_id)?,
             "Issue not found: {old_id}"
