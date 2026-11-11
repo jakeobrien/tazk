@@ -46,6 +46,20 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    local haystack="$1"
+    local needle="$2"
+    local message="${3:-Assertion failed}"
+
+    if grep -qF -- "$needle" <<<"$haystack"; then
+        fail "$message (did not expect: '$needle' in output)"
+        return 1
+    else
+        success "$message"
+    fi
+}
+
 echo "=========================================="
 echo "Running E2E Test: $TEST_NAME"
 echo "=========================================="
@@ -83,7 +97,8 @@ assert_contains "$OUTPUT" "Tazk" "tz help subcommand should work"
 echo -e "\n${YELLOW}Test 4: tz init --help${NC}"
 OUTPUT=$("$TZ_BIN" init --help 2>&1)
 assert_contains "$OUTPUT" "Initialize tazk in current directory" "Init help should show description"
-assert_contains "$OUTPUT" "--prefix" "Init help should show --prefix flag"
+assert_contains "$OUTPUT" "--tz-hash-ids" "Init help should show --tz-hash-ids flag"
+assert_not_contains "$OUTPUT" "--prefix" "Init help should not show --prefix flag"
 
 # Test 5: tz create --help
 echo -e "\n${YELLOW}Test 5: tz create --help${NC}"

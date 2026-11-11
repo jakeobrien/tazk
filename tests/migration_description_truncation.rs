@@ -22,13 +22,12 @@ fn migration_preserves_description_with_indented_code_block() {
 
     let storage = Storage::init(
         scratch.join(".tazk"),
-        Some("ds".to_string()),
         true, // hash IDs, as in a parallel-safe agent workspace
         IssueStorageLayout::Flat,
     )
     .expect("init storage");
 
-    // Shape taken from the real victim (ds-hkj8lo -> ds-5976): an indented
+    // Shape taken from the real victim (tz-hkj8lo -> tz-5976): an indented
     // code block whose first line is a "# ..." comment, followed by more
     // content that must survive.
     let description = "Repro steps:\n\n    \
@@ -47,7 +46,7 @@ fn migration_preserves_description_with_indented_code_block() {
             None,
             Vec::new(),
             None,
-            Some("ds-hkj8lo".to_string()),
+            Some("tz-hkj8lo".to_string()),
             Vec::new(),
             None,
             None,
@@ -57,7 +56,7 @@ fn migration_preserves_description_with_indented_code_block() {
     let (_changes, id_mapping) = storage
         .migrate_to_numeric_ids(false, true)
         .expect("migrate to numeric IDs");
-    let new_id = id_mapping.get("ds-hkj8lo").expect("hash ID was renumbered");
+    let new_id = id_mapping.get("tz-hkj8lo").expect("hash ID was renumbered");
 
     let migrated = storage
         .get_issue(new_id)

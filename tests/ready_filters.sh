@@ -88,7 +88,7 @@ echo "Creating test directory: $TEST_DIR"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
-"$TZ_BIN" init --prefix test >/dev/null 2>&1
+"$TZ_BIN" init >/dev/null 2>&1
 
 # Fixture issues covering the various filter dimensions.
 "$TZ_BIN" create "Fix login bug" -r agent -t bug -p 1 -l backend -l urgent >/dev/null
@@ -96,70 +96,70 @@ cd "$TEST_DIR"
 "$TZ_BIN" create "Write docs" -r agent -t task -p 3 -l docs >/dev/null
 "$TZ_BIN" create "Refactor auth" -r agent -t task -p 1 -l backend >/dev/null
 
-# test-4 becomes a child of test-1; test-3 becomes blocked by test-1.
-"$TZ_BIN" dep add test-4 --target test-1 -t child_of >/dev/null
-"$TZ_BIN" dep add test-3 --target test-1 -t blocked_by >/dev/null
+# tz-4 becomes a child of tz-1; tz-3 becomes blocked by tz-1.
+"$TZ_BIN" dep add tz-4 --target tz-1 -t child_of >/dev/null
+"$TZ_BIN" dep add tz-3 --target tz-1 -t blocked_by >/dev/null
 
 # Ready still excludes blocked issues.
 echo -e "\n${YELLOW}Blocked issues stay out of ready${NC}"
 OUTPUT=$("$TZ_BIN" ready 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "test-1 is ready"
-assert_not_contains "$OUTPUT" "test-3: Write docs" "test-3 is blocked, not ready"
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "tz-1 is ready"
+assert_not_contains "$OUTPUT" "tz-3: Write docs" "tz-3 is blocked, not ready"
 
 # --label (must have ALL specified labels).
 echo -e "\n${YELLOW}--label filter${NC}"
 OUTPUT=$("$TZ_BIN" ready --label backend 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "backend label includes test-1"
-assert_contains "$OUTPUT" "test-4: Refactor auth" "backend label includes test-4"
-assert_not_contains "$OUTPUT" "test-2: Add dark mode" "frontend issue excluded by backend label"
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "backend label includes tz-1"
+assert_contains "$OUTPUT" "tz-4: Refactor auth" "backend label includes tz-4"
+assert_not_contains "$OUTPUT" "tz-2: Add dark mode" "frontend issue excluded by backend label"
 
 OUTPUT=$("$TZ_BIN" ready --label backend --label urgent 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "ALL labels: test-1 has backend+urgent"
-assert_not_contains "$OUTPUT" "test-4: Refactor auth" "ALL labels: test-4 lacks urgent"
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "ALL labels: tz-1 has backend+urgent"
+assert_not_contains "$OUTPUT" "tz-4: Refactor auth" "ALL labels: tz-4 lacks urgent"
 
 # --type filter.
 echo -e "\n${YELLOW}--type filter${NC}"
 OUTPUT=$("$TZ_BIN" ready --type feature 2>&1)
-assert_contains "$OUTPUT" "test-2: Add dark mode" "type feature includes test-2"
-assert_not_contains "$OUTPUT" "test-1: Fix login bug" "type feature excludes bug"
+assert_contains "$OUTPUT" "tz-2: Add dark mode" "type feature includes tz-2"
+assert_not_contains "$OUTPUT" "tz-1: Fix login bug" "type feature excludes bug"
 
 # --priority as comma-separated list.
 echo -e "\n${YELLOW}--priority comma-separated list${NC}"
 OUTPUT=$("$TZ_BIN" ready --priority 1,2 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "priority 1,2 includes p1"
-assert_contains "$OUTPUT" "test-2: Add dark mode" "priority 1,2 includes p2"
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "priority 1,2 includes p1"
+assert_contains "$OUTPUT" "tz-2: Add dark mode" "priority 1,2 includes p2"
 
 # --priority repeated (must union with comma-separated behaviour).
 echo -e "\n${YELLOW}--priority repeated flag${NC}"
 OUTPUT=$("$TZ_BIN" ready -p 1 -p 2 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "-p 1 -p 2 includes p1"
-assert_contains "$OUTPUT" "test-2: Add dark mode" "-p 1 -p 2 includes p2"
-assert_not_contains "$OUTPUT" "test-3: Write docs" "-p 1 -p 2 excludes p3 (also blocked)"
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "-p 1 -p 2 includes p1"
+assert_contains "$OUTPUT" "tz-2: Add dark mode" "-p 1 -p 2 includes p2"
+assert_not_contains "$OUTPUT" "tz-3: Write docs" "-p 1 -p 2 excludes p3 (also blocked)"
 
 # --title substring (case-insensitive).
 echo -e "\n${YELLOW}--title filter${NC}"
 OUTPUT=$("$TZ_BIN" ready --title DARK 2>&1)
-assert_contains "$OUTPUT" "test-2: Add dark mode" "title DARK matches case-insensitively"
-assert_not_contains "$OUTPUT" "test-1: Fix login bug" "title DARK excludes others"
+assert_contains "$OUTPUT" "tz-2: Add dark mode" "title DARK matches case-insensitively"
+assert_not_contains "$OUTPUT" "tz-1: Fix login bug" "title DARK excludes others"
 
 # --id (comma-separated exact IDs).
 echo -e "\n${YELLOW}--id filter${NC}"
-OUTPUT=$("$TZ_BIN" ready --id test-1,test-2 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "id filter includes test-1"
-assert_contains "$OUTPUT" "test-2: Add dark mode" "id filter includes test-2"
-assert_not_contains "$OUTPUT" "test-4: Refactor auth" "id filter excludes test-4"
+OUTPUT=$("$TZ_BIN" ready --id tz-1,tz-2 2>&1)
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "id filter includes tz-1"
+assert_contains "$OUTPUT" "tz-2: Add dark mode" "id filter includes tz-2"
+assert_not_contains "$OUTPUT" "tz-4: Refactor auth" "id filter excludes tz-4"
 
 # --parent (direct children only).
 echo -e "\n${YELLOW}--parent filter${NC}"
-OUTPUT=$("$TZ_BIN" ready --parent test-1 2>&1)
-assert_contains "$OUTPUT" "test-4: Refactor auth" "parent test-1 includes child test-4"
-assert_not_contains "$OUTPUT" "test-1: Fix login bug" "parent test-1 excludes the parent itself"
+OUTPUT=$("$TZ_BIN" ready --parent tz-1 2>&1)
+assert_contains "$OUTPUT" "tz-4: Refactor auth" "parent tz-1 includes child tz-4"
+assert_not_contains "$OUTPUT" "tz-1: Fix login bug" "parent tz-1 excludes the parent itself"
 
-# --limit applies after filtering (test-1 and test-4 both match backend).
+# --limit applies after filtering (tz-1 and tz-4 both match backend).
 echo -e "\n${YELLOW}--limit filter${NC}"
 TESTS_RUN=$((TESTS_RUN + 1))
 OUTPUT=$("$TZ_BIN" ready --label backend --limit 1 2>&1)
-LINES=$(echo "$OUTPUT" | grep -c "^test-" || true)
+LINES=$(echo "$OUTPUT" | grep -c "^tz-" || true)
 if [ "$LINES" = "1" ]; then
     success "limit truncates filtered results to 1"
 else
@@ -175,8 +175,8 @@ assert_contains "$OUTPUT" "Priority 2" "group-priority prints a Priority 2 heade
 # --sort random preserves the full ready set (just reorders it).
 echo -e "\n${YELLOW}--sort random preserves the set${NC}"
 TESTS_RUN=$((TESTS_RUN + 1))
-COUNT=$("$TZ_BIN" ready --sort random 2>&1 | grep -c "^test-" || true)
-# Ready set is test-1, test-2, test-4 (test-3 is blocked).
+COUNT=$("$TZ_BIN" ready --sort random 2>&1 | grep -c "^tz-" || true)
+# Ready set is tz-1, tz-2, tz-4 (tz-3 is blocked).
 if [ "$COUNT" = "3" ]; then
     success "random sort returns all 3 ready issues"
 else
@@ -184,7 +184,7 @@ else
 fi
 
 # --sort random with -n 1 picks from the whole filtered set, not just its head.
-# test-1 and test-4 are the two ready priority-1 issues; over many draws we
+# tz-1 and tz-4 are the two ready priority-1 issues; over many draws we
 # should observe both (P(all-same) over 40 draws is ~2^-39).
 echo -e "\n${YELLOW}--sort random -n 1 picks uniformly${NC}"
 TESTS_RUN=$((TESTS_RUN + 1))
@@ -200,8 +200,8 @@ fi
 # Combined filters compose.
 echo -e "\n${YELLOW}Combined filters${NC}"
 OUTPUT=$("$TZ_BIN" ready --label backend --priority 1 2>&1)
-assert_contains "$OUTPUT" "test-1: Fix login bug" "combined: backend + p1 includes test-1"
-assert_contains "$OUTPUT" "test-4: Refactor auth" "combined: backend + p1 includes test-4"
+assert_contains "$OUTPUT" "tz-1: Fix login bug" "combined: backend + p1 includes tz-1"
+assert_contains "$OUTPUT" "tz-4: Refactor auth" "combined: backend + p1 includes tz-4"
 
 echo ""
 echo "=========================================="

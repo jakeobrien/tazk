@@ -1,3 +1,4 @@
+use crate::types::ID_PREFIX;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
@@ -78,7 +79,6 @@ fn is_all_digit_suffix(id: &str) -> bool {
 /// before escalating to longer hash lengths.
 ///
 /// # Arguments
-/// * `prefix` - The issue prefix (e.g., "tazk")
 /// * `title` - Issue title
 /// * `description` - Issue description
 /// * `timestamp` - Creation timestamp for deterministic hashing
@@ -89,7 +89,6 @@ fn is_all_digit_suffix(id: &str) -> bool {
 /// A unique hash-based ID like "tazk-4f1" or "tazk-b127a5" (the hash always
 /// contains at least one letter)
 pub fn generate_hash_id_with_collision_check<F>(
-    prefix: &str,
     title: &str,
     description: &str,
     timestamp: DateTime<Utc>,
@@ -119,15 +118,7 @@ where
     // Try adaptive lengths starting from initial_length, checking for collisions
     for length in initial_length..=8 {
         for nonce in 0..10 {
-            let candidate = generate_hash_id(
-                prefix,
-                title,
-                description,
-                creator,
-                timestamp,
-                length,
-                nonce,
-            );
+            let candidate = generate_hash_id(title, description, creator, timestamp, length, nonce);
 
             // An all-digit suffix would be indistinguishable from a numeric ID,
             // so treat it like a collision and move on to the next nonce/length.
@@ -154,7 +145,6 @@ where
 /// The hash is base36 encoded.
 ///
 /// # Arguments
-/// * `prefix` - The issue prefix (e.g., "tazk")
 /// * `title` - Issue title
 /// * `description` - Issue description
 /// * `creator` - Issue creator (typically "user" or system user)
@@ -167,7 +157,6 @@ where
 /// need a valid hash ID must use `generate_hash_id_with_collision_check`.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_hash_id(
-    prefix: &str,
     title: &str,
     description: &str,
     creator: &str,
@@ -204,7 +193,7 @@ pub fn generate_hash_id(
     };
     let short_hash = encode_base36(&hash_result[..num_bytes], length);
 
-    format!("{}-{}", prefix, short_hash)
+    format!("{ID_PREFIX}{short_hash}")
 }
 
 #[cfg(test)]
@@ -215,22 +204,14 @@ mod tests {
     #[test]
     fn test_generate_hash_id_basic() {
         let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
-        let id = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-        );
+        let id = generate_hash_id("First issue", "Test description", "user", timestamp, 4, 0);
 
         // Should be format: prefix-hash
-        assert!(id.starts_with("test-"));
-        assert_eq!(id.len(), "test-".len() + 4); // prefix + dash + 4 base36 chars
+        assert!(id.starts_with(ID_PREFIX));
+        assert_eq!(id.len(), ID_PREFIX.len() + 4); // prefix + dash + 4 base36 chars
 
         // Verify it's base36 (only contains 0-9, a-z)
-        let hash_part = &id["test-".len()..];
+        let hash_part = &id[ID_PREFIX.len()..];
         assert!(hash_part
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
@@ -240,25 +221,9 @@ mod tests {
     fn test_generate_hash_id_deterministic() {
         let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
 
-        let id1 = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-        );
+        let id1 = generate_hash_id("First issue", "Test description", "user", timestamp, 4, 0);
 
-        let id2 = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-        );
+        let id2 = generate_hash_id("First issue", "Test description", "user", timestamp, 4, 0);
 
         // Same inputs should produce same hash
         assert_eq!(id1, id2);
@@ -268,25 +233,9 @@ mod tests {
     fn test_generate_hash_id_different_nonce() {
         let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
 
-        let id1 = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-        );
+        let id1 = generate_hash_id("First issue", "Test description", "user", timestamp, 4, 0);
 
-        let id2 = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            1,
-        );
+        let id2 = generate_hash_id("First issue", "Test description", "user", timestamp, 4, 1);
 
         // Different nonce should produce different hash
         assert_ne!(id1, id2);
@@ -299,7 +248,6 @@ mod tests {
         // Base36 encoding supports lengths from 3-8
         for length in 3..=8 {
             let id = generate_hash_id(
-                "test",
                 "First issue",
                 "Test description",
                 "user",
@@ -308,11 +256,11 @@ mod tests {
                 0,
             );
 
-            assert!(id.starts_with("test-"));
-            assert_eq!(id.len(), "test-".len() + length);
+            assert!(id.starts_with(ID_PREFIX));
+            assert_eq!(id.len(), ID_PREFIX.len() + length);
 
             // Verify it's base36 (only contains 0-9, a-z)
-            let hash_part = &id["test-".len()..];
+            let hash_part = &id[ID_PREFIX.len()..];
             assert!(hash_part
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
@@ -323,18 +271,9 @@ mod tests {
     fn test_generate_hash_id_different_inputs() {
         let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
 
-        let id1 = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-        );
+        let id1 = generate_hash_id("First issue", "Test description", "user", timestamp, 4, 0);
 
         let id2 = generate_hash_id(
-            "test",
             "Second issue", // Different title
             "Test description",
             "user",
@@ -352,9 +291,7 @@ mod tests {
         (0..100_000)
             .map(|i| format!("title {i}"))
             .find(|title| {
-                is_all_digit_suffix(&generate_hash_id(
-                    "t", title, "d", "user", timestamp, length, 0,
-                ))
+                is_all_digit_suffix(&generate_hash_id(title, "d", "user", timestamp, length, 0))
             })
             .expect("an all-digit candidate exists within the search range")
     }
@@ -363,10 +300,10 @@ mod tests {
     fn all_digit_candidate_is_skipped() {
         let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
         let title = find_all_digit_title(timestamp, 3);
-        let bad = generate_hash_id("t", &title, "d", "user", timestamp, 3, 0);
+        let bad = generate_hash_id(&title, "d", "user", timestamp, 3, 0);
 
         let mut seen = Vec::new();
-        let id = generate_hash_id_with_collision_check("t", &title, "d", timestamp, 0, |c| {
+        let id = generate_hash_id_with_collision_check(&title, "d", timestamp, 0, |c| {
             seen.push(c.to_string());
             false
         })
@@ -385,7 +322,6 @@ mod tests {
         for size in [0usize, 10, 100, 1000, 10_000, 100_000] {
             for i in 0..1700 {
                 let id = generate_hash_id_with_collision_check(
-                    "t",
                     &format!("issue {i}"),
                     "desc",
                     timestamp,
@@ -393,7 +329,7 @@ mod tests {
                     |_| false,
                 )
                 .unwrap();
-                let suffix = &id["t-".len()..];
+                let suffix = &id[ID_PREFIX.len()..];
                 assert!(
                     suffix.bytes().any(|b| b.is_ascii_lowercase()),
                     "all-digit suffix: {id}"

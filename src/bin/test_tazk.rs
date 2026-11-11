@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tazk::action_generator::{ActionExecutor, ActionGenerator, ReferenceInterpreter, TazkAction};
+use tazk::types::ID_PREFIX;
 
 /// Verbosity level for logging
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +282,7 @@ async fn run_migration_test(
     println!("{}", "=".repeat(70));
 
     let mut generator = ActionGenerator::new_with_mode(base_seed, false); // numeric mode
-    let mut reference = ReferenceInterpreter::new("test".to_string());
+    let mut reference = ReferenceInterpreter::new();
 
     let executor = ActionExecutor::new(tazk_binary.to_str().unwrap(), work_dir.to_str().unwrap());
 
@@ -379,7 +380,6 @@ async fn run_migration_test(
     // Verify all IDs are now hash-based and use base36 encoding
     let mut invalid_ids = Vec::new();
     let mut extended_base36_count = 0;
-    let prefix = "test"; // Migration test uses "test" prefix
 
     for line in list_text.lines() {
         if let Some(id) = line.split(':').next() {
@@ -388,19 +388,12 @@ async fn run_migration_test(
                 continue;
             }
 
-            // Check if ID is valid base36
-            if !is_base36_hash_id(id, prefix) {
-                // Check if it's an all-digit ID (also valid)
-                let id_suffix = id.strip_prefix(&format!("{}-", prefix)).unwrap_or(id);
-                if !id_suffix.chars().all(|c| c.is_ascii_digit()) {
-                    invalid_ids.push(id.to_string());
-                }
-            } else {
+            // Check if ID is a valid base36 hash ID (always contains a letter)
+            if !is_base36_hash_id(id) {
+                invalid_ids.push(id.to_string());
+            } else if hash_suffix(id).chars().any(|c| matches!(c, 'g'..='z')) {
                 // Count IDs with extended base36 chars (g-z) as confirmation
-                let id_suffix = id.strip_prefix(&format!("{}-", prefix)).unwrap_or(id);
-                if id_suffix.chars().any(|c| matches!(c, 'g'..='z')) {
-                    extended_base36_count += 1;
-                }
+                extended_base36_count += 1;
             }
         }
     }
@@ -806,8 +799,8 @@ fn run_test(
 
     // Create reference interpreter to maintain golden state
     let mut reference = match ids {
-        IdMode::Numeric => ReferenceInterpreter::new("test".to_string()),
-        IdMode::Hash => ReferenceInterpreter::new_with_hash_ids("test".to_string()),
+        IdMode::Numeric => ReferenceInterpreter::new(),
+        IdMode::Hash => ReferenceInterpreter::new_with_hash_ids(),
     };
 
     // Execute actions
@@ -943,7 +936,7 @@ fn is_critical_failure(result: &tazk::action_generator::ExecutionResult) -> bool
     result.exit_code.unwrap_or(1) != 0
 }
 
-/// Check if an ID is a valid base36 hash ID (contains only 0-9, a-z after prefix)
+/// Check if an ID is a valid base36 hash ID (prefix followed by 0-9, a-z with at least one letter)
 ///
 /// Base36 encoding uses characters [0-9a-z].
 ///
@@ -955,25 +948,23 @@ fn is_critical_failure(result: &tazk::action_generator::ExecutionResult) -> bool
 /// Examples of invalid (uppercase or non-base36 characters):
 /// - "test-ABCD" (uppercase not allowed)
 /// - "test-xyz!" (! is not base36)
-fn is_base36_hash_id(id: &str, prefix: &str) -> bool {
-    // Must start with prefix-
-    let expected_prefix = format!("{}-", prefix);
-    if !id.starts_with(&expected_prefix) {
+fn is_base36_hash_id(id: &str) -> bool {
+    // Must start with the ID prefix, then the hash part
+    let Some(hash_part) = id.strip_prefix(ID_PREFIX) else {
         return false;
-    }
+    };
 
-    // Extract the hash part after prefix-
-    let hash_part = &id[expected_prefix.len()..];
+    // Hash part must contain at least one letter, and only base36 characters
+    // (0-9, a-z lowercase only)
+    hash_part.chars().any(|c| c.is_ascii_lowercase())
+        && hash_part
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
 
-    // Hash must not be empty
-    if hash_part.is_empty() {
-        return false;
-    }
-
-    // All characters in hash part must be base36 (0-9, a-z lowercase only)
-    hash_part
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+/// The part of an ID after the fixed prefix (the whole ID if it has none).
+fn hash_suffix(id: &str) -> &str {
+    id.strip_prefix(ID_PREFIX).unwrap_or(id)
 }
 
 /// Validate that all hash IDs in a collection use base36 encoding
@@ -981,7 +972,6 @@ fn is_base36_hash_id(id: &str, prefix: &str) -> bool {
 /// Returns Ok if all IDs use valid base36 characters (0-9, a-z).
 fn validate_hash_ids_are_base36(
     issues: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
-    prefix: &str,
     logger: &Logger,
 ) -> Result<()> {
     let mut non_base36_ids = Vec::new();
@@ -989,12 +979,12 @@ fn validate_hash_ids_are_base36(
 
     for id in issues.keys() {
         // Skip if it's a numeric ID (doesn't contain alphabetic chars)
-        let id_suffix = id.strip_prefix(&format!("{}-", prefix)).unwrap_or(id);
+        let id_suffix = hash_suffix(id);
         if id_suffix.chars().all(|c| c.is_ascii_digit()) {
             continue; // Numeric ID, skip validation
         }
 
-        if !is_base36_hash_id(id, prefix) {
+        if !is_base36_hash_id(id) {
             non_base36_ids.push(id.clone());
         } else if id_suffix.chars().any(|c| matches!(c, 'g'..='z')) {
             extended_base36_ids.push(id.clone());
@@ -1029,10 +1019,9 @@ fn validate_hash_ids_are_base36(
 /// Detect if we're in hash ID mode by checking if any ID contains non-numeric characters
 fn is_hash_id_mode(
     issues: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
-    prefix: &str,
 ) -> bool {
     for id in issues.keys() {
-        let id_suffix = id.strip_prefix(&format!("{}-", prefix)).unwrap_or(id);
+        let id_suffix = hash_suffix(id);
         // If any ID has alphabetic characters, we're in hash mode
         if id_suffix.chars().any(|c| c.is_alphabetic()) {
             return true;
@@ -1071,8 +1060,8 @@ fn verify_consistency(
         total_size
     ));
 
-    // Step 2: Verify config.yaml and compare prefix
-    verify_config(&tazk_dir, reference, logger)?;
+    // Step 2: Verify config.yaml is loadable
+    verify_config(&tazk_dir, logger)?;
 
     // Step 3: Compare actual issues with reference state
     verify_tazk_state(&tazk_dir, reference, logger)?;
@@ -1127,30 +1116,12 @@ fn walk_tazk_directory(
 }
 
 /// Parse and verify config.yaml using shared Storage code
-fn verify_config(
-    tazk_dir: &std::path::Path,
-    reference: &mut ReferenceInterpreter,
-    logger: &Logger,
-) -> Result<()> {
+fn verify_config(tazk_dir: &std::path::Path, logger: &Logger) -> Result<()> {
     use tazk::storage::Storage;
 
-    // Use Storage::get_prefix() to read config - this is the single source of truth
-    let storage = Storage::open(tazk_dir.to_path_buf())?;
-    let expected_prefix = reference.get_prefix().to_string(); // Clone to avoid borrow issues
-
-    let actual_prefix = storage.get_prefix()?;
-
-    if actual_prefix != expected_prefix {
-        return Err(anyhow::anyhow!(
-            "Prefix mismatch: expected '{}', got '{}'",
-            expected_prefix,
-            actual_prefix
-        ));
-    }
-    logger.verbose(format!(
-        "   ✓ config.yaml: prefix matches ('{}')",
-        actual_prefix
-    ));
+    // Opening the store validates config.yaml (including rejecting removed keys)
+    Storage::open(tazk_dir.to_path_buf())?;
+    logger.verbose("   ✓ config.yaml: store opens".to_string());
 
     Ok(())
 }
@@ -1194,9 +1165,9 @@ fn verify_tazk_state(
     }
 
     // Validate hash ID encoding if in hash mode
-    if !actual_issues.is_empty() && is_hash_id_mode(&actual_issues, reference.get_prefix()) {
+    if !actual_issues.is_empty() && is_hash_id_mode(&actual_issues) {
         logger.verbose("   Validating hash ID encoding format...".to_string());
-        validate_hash_ids_are_base36(&actual_issues, reference.get_prefix(), logger)?;
+        validate_hash_ids_are_base36(&actual_issues, logger)?;
     }
 
     // Compare with reference

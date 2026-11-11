@@ -112,40 +112,54 @@ cd "$TEST_DIR"
 
 # Test 1: Initialize tazk database
 echo -e "\n${YELLOW}Test 1: Initialize database${NC}"
-OUTPUT=$("$TZ_BIN" init --prefix test 2>&1)
-assert_contains "$OUTPUT" "Initialized tazk database with prefix: test" "Initialize should report prefix"
+OUTPUT=$("$TZ_BIN" init 2>&1)
+assert_contains "$OUTPUT" "Initialized tazk database" "Initialize should succeed"
 assert_equals "true" "$([ -d .tazk/issues ] && echo true || echo false)" "Issues directory should exist"
 assert_equals "true" "$([ -f .tazk/config.yaml ] && echo true || echo false)" "Config file should exist"
+assert_equals "0" "$(grep -c 'issue-prefix\|hash-encoding' .tazk/config.yaml)" "Config file should not have removed keys"
+
+# Test 1b: The prefix is fixed; its old knobs are gone
+echo -e "\n${YELLOW}Test 1b: No configurable prefix${NC}"
+assert_fails "init --prefix should be unknown" "$TZ_BIN" init --prefix other
+assert_fails "rename-prefix should be unknown" "$TZ_BIN" rename-prefix other
+assert_fails "config set issue-prefix should be rejected" "$TZ_BIN" config set issue-prefix other
+OUTPUT=$("$TZ_BIN" config set issue-prefix other 2>&1 || true)
+assert_contains "$OUTPUT" "'issue-prefix' is no longer supported" "Rejection should explain why"
+cp .tazk/config.yaml .tazk/config.yaml.bak
+echo "issue-prefix: other" >> .tazk/config.yaml
+OUTPUT=$("$TZ_BIN" list 2>&1 || true)
+assert_contains "$OUTPUT" "'issue-prefix' is no longer supported" "Opening with issue-prefix should fail"
+mv .tazk/config.yaml.bak .tazk/config.yaml
 
 # Test 2: Create an issue
 echo -e "\n${YELLOW}Test 2: Create an issue${NC}"
 OUTPUT=$("$TZ_BIN" create "Test issue 1" -r agent -p 1 -t task -d "Test description" 2>&1)
-assert_contains "$OUTPUT" "Created issue: test-1" "Should create test-1"
-assert_equals "true" "$([ -f .tazk/issues/test-1.md ] && echo true || echo false)" "Issue file should exist"
+assert_contains "$OUTPUT" "Created issue: tz-1" "Should create tz-1"
+assert_equals "true" "$([ -f .tazk/issues/tz-1.md ] && echo true || echo false)" "Issue file should exist"
 
 # Test 3: Create another issue with dependency
 echo -e "\n${YELLOW}Test 3: Create issue with dependency${NC}"
-OUTPUT=$("$TZ_BIN" create "Test issue 2" -r agent -p 2 -t bug --deps test-1 2>&1)
-assert_contains "$OUTPUT" "Created issue: test-2" "Should create test-2"
+OUTPUT=$("$TZ_BIN" create "Test issue 2" -r agent -p 2 -t bug --deps tz-1 2>&1)
+assert_contains "$OUTPUT" "Created issue: tz-2" "Should create tz-2"
 
 # Verify dependency in file
-DEP_COUNT=$(grep -c "test-1: blocked_by" .tazk/issues/test-2.md || true)
+DEP_COUNT=$(grep -c "tz-1: blocked_by" .tazk/issues/tz-2.md || true)
 assert_equals "1" "$DEP_COUNT" "Dependency should be recorded"
 
 # Test 4: List issues
 echo -e "\n${YELLOW}Test 4: List issues${NC}"
 OUTPUT=$("$TZ_BIN" list 2>&1)
-assert_contains "$OUTPUT" "test-1: Test issue 1" "Should list test-1"
-assert_contains "$OUTPUT" "test-2: Test issue 2" "Should list test-2"
+assert_contains "$OUTPUT" "tz-1: Test issue 1" "Should list tz-1"
+assert_contains "$OUTPUT" "tz-2: Test issue 2" "Should list tz-2"
 
 # Test 5: Show issue details
 echo -e "\n${YELLOW}Test 5: Show issue details${NC}"
-OUTPUT=$("$TZ_BIN" update test-1 --notes "Test notes" 2>&1)
-assert_contains "$OUTPUT" "Updated issue: test-1" "Should add notes before show"
-OUTPUT=$("$TZ_BIN" comments add test-1 --body "Test comment" --author tester 2>&1)
+OUTPUT=$("$TZ_BIN" update tz-1 --notes "Test notes" 2>&1)
+assert_contains "$OUTPUT" "Updated issue: tz-1" "Should add notes before show"
+OUTPUT=$("$TZ_BIN" comments add tz-1 --body "Test comment" --author tester 2>&1)
 assert_contains "$OUTPUT" "Added comment:" "Should add comment before show"
-OUTPUT=$("$TZ_BIN" show test-1 2>&1)
-assert_contains "$OUTPUT" "ID: test-1" "Should show issue ID"
+OUTPUT=$("$TZ_BIN" show tz-1 2>&1)
+assert_contains "$OUTPUT" "ID: tz-1" "Should show issue ID"
 assert_contains "$OUTPUT" "Title: Test issue 1" "Should show title"
 assert_contains "$OUTPUT" "Description" "Should show description section"
 assert_contains "$OUTPUT" "===========" "Should show markdown heading underline"
@@ -154,7 +168,7 @@ assert_contains "$OUTPUT" "Notes" "Should show notes section"
 assert_contains "$OUTPUT" "Test notes" "Should show notes content"
 assert_contains "$OUTPUT" "Comments" "Should show comments section"
 assert_contains "$OUTPUT" "Test comment" "Should show comment content"
-OUTPUT=$("$TZ_BIN" show test-1 --json 2>&1)
+OUTPUT=$("$TZ_BIN" show tz-1 --json 2>&1)
 JSON_COMMENT_RESULT=$(JSON_OUTPUT="$OUTPUT" python3 - <<'PY'
 import json
 import os
@@ -166,8 +180,8 @@ comments = issues[0]["comments"]
 assert isinstance(comments, list), "comments should be a list"
 comment = comments[0]
 parse_time = lambda value: datetime.fromisoformat(value.replace("Z", "+00:00"))
-assert comment["issue_id"] == "test-1"
-assert comment["id"].startswith("test-1-c")
+assert comment["issue_id"] == "tz-1"
+assert comment["id"].startswith("tz-1-c")
 assert comment["author"]
 assert parse_time(comment["timestamp"]) == parse_time(comment["created_at"])
 assert comment["updated_at"]
@@ -180,24 +194,24 @@ assert_equals "ok" "$JSON_COMMENT_RESULT" "JSON show should include structured c
 # Test 5b: Delete a comment by ID
 echo -e "\n${YELLOW}Test 5b: Delete a comment${NC}"
 # Add a second comment so we can confirm delete is targeted, not wholesale.
-SECOND_ID=$("$TZ_BIN" comments add test-1 --body "Second comment" --author tester --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
-FIRST_ID=$("$TZ_BIN" comments list test-1 --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
-OUTPUT=$("$TZ_BIN" comments delete test-1 "$FIRST_ID" 2>&1)
+SECOND_ID=$("$TZ_BIN" comments add tz-1 --body "Second comment" --author tester --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+FIRST_ID=$("$TZ_BIN" comments list tz-1 --json 2>&1 | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
+OUTPUT=$("$TZ_BIN" comments delete tz-1 "$FIRST_ID" 2>&1)
 assert_contains "$OUTPUT" "Deleted comment: $FIRST_ID" "Should confirm deletion"
-REMAINING=$("$TZ_BIN" comments list test-1 --json 2>&1 | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d), d[0]["id"] if d else "")')
+REMAINING=$("$TZ_BIN" comments list tz-1 --json 2>&1 | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d), d[0]["id"] if d else "")')
 assert_equals "1 $SECOND_ID" "$REMAINING" "Only the targeted comment should be removed"
 # Deleting a non-existent comment fails and does not touch the survivor.
-assert_fails "Deleting an unknown comment ID should fail" "$TZ_BIN" comments delete test-1 no-such-comment
-assert_equals "1" "$("$TZ_BIN" comments list test-1 --json 2>&1 | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')" "Survivor remains after a failed delete"
+assert_fails "Deleting an unknown comment ID should fail" "$TZ_BIN" comments delete tz-1 no-such-comment
+assert_equals "1" "$("$TZ_BIN" comments list tz-1 --json 2>&1 | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')" "Survivor remains after a failed delete"
 
 # Test 6: Claim issue (sets status)
 echo -e "\n${YELLOW}Test 6: Claim issue${NC}"
-OUTPUT=$("$TZ_BIN" claim test-1 --as tester 2>&1)
-assert_contains "$OUTPUT" "Claimed test-1" "Should confirm claim"
-assert_fails "update --status should no longer exist" "$TZ_BIN" update test-1 --status open
+OUTPUT=$("$TZ_BIN" claim tz-1 --as tester 2>&1)
+assert_contains "$OUTPUT" "Claimed tz-1" "Should confirm claim"
+assert_fails "update --status should no longer exist" "$TZ_BIN" update tz-1 --status open
 
 # Verify status in file
-STATUS=$(grep "^status:" .tazk/issues/test-1.md | awk '{print $2}')
+STATUS=$(grep "^status:" .tazk/issues/tz-1.md | awk '{print $2}')
 assert_equals "in_progress" "$STATUS" "Status should be in_progress"
 
 # Test 7: Get statistics
@@ -210,31 +224,31 @@ assert_contains "$OUTPUT" "In Progress: 1" "Should show 1 in_progress issue"
 # Test 8: Get ready work
 echo -e "\n${YELLOW}Test 8: Get ready work${NC}"
 OUTPUT=$("$TZ_BIN" ready 2>&1)
-# test-2 is blocked by test-1, so it shouldn't appear in ready
+# tz-2 is blocked by tz-1, so it shouldn't appear in ready
 OUTPUT_LINES=$(echo "$OUTPUT" | wc -l)
-# Should have few lines since test-2 is blocked
+# Should have few lines since tz-2 is blocked
 assert_equals "true" "$([ $OUTPUT_LINES -le 3 ] && echo true || echo false)" "Should have limited ready work"
 
 # Test 9: Get blocked issues
 echo -e "\n${YELLOW}Test 9: Get blocked issues${NC}"
 OUTPUT=$("$TZ_BIN" blocked 2>&1)
-assert_contains "$OUTPUT" "test-2: Test issue 2 - blocked by: test-1" "test-2 should be blocked by test-1"
+assert_contains "$OUTPUT" "tz-2: Test issue 2 - blocked by: tz-1" "tz-2 should be blocked by tz-1"
 
 # Test 10: Close an issue
 echo -e "\n${YELLOW}Test 10: Close an issue${NC}"
-OUTPUT=$("$TZ_BIN" close test-1 --reason "Test completed" 2>&1)
-assert_contains "$OUTPUT" "Closed issue: test-1" "Should confirm closure"
+OUTPUT=$("$TZ_BIN" close tz-1 --reason "Test completed" 2>&1)
+assert_contains "$OUTPUT" "Closed issue: tz-1" "Should confirm closure"
 
 # Verify closed status
-STATUS=$(grep "^status:" .tazk/issues/test-1.md | awk '{print $2}')
+STATUS=$(grep "^status:" .tazk/issues/tz-1.md | awk '{print $2}')
 assert_equals "closed" "$STATUS" "Status should be closed"
 
 # Test 11: Reopen an issue
 echo -e "\n${YELLOW}Test 11: Reopen an issue${NC}"
-OUTPUT=$("$TZ_BIN" reopen test-1 2>&1)
-assert_contains "$OUTPUT" "Reopened issue: test-1" "Should confirm reopen"
+OUTPUT=$("$TZ_BIN" reopen tz-1 2>&1)
+assert_contains "$OUTPUT" "Reopened issue: tz-1" "Should confirm reopen"
 
-STATUS=$(grep "^status:" .tazk/issues/test-1.md | awk '{print $2}')
+STATUS=$(grep "^status:" .tazk/issues/tz-1.md | awk '{print $2}')
 assert_equals "open" "$STATUS" "Status should be open"
 
 # Test 12: JSON output
@@ -243,34 +257,34 @@ OUTPUT=$("$TZ_BIN" list --json 2>&1)
 # Verify it's valid JSON by checking structure
 assert_contains "$OUTPUT" "\"id\":" "JSON should have id field"
 assert_contains "$OUTPUT" "\"title\":" "JSON should have title field"
-assert_contains "$OUTPUT" "test-1" "JSON should include test-1"
+assert_contains "$OUTPUT" "tz-1" "JSON should include tz-1"
 
 # Test 13: Add dependency manually
 echo -e "\n${YELLOW}Test 13: Add dependency${NC}"
 "$TZ_BIN" create "Test issue 3" -r agent -p 1 -t task >/dev/null 2>&1
-OUTPUT=$("$TZ_BIN" dep add test-3 --target test-2 --type related_to 2>&1)
-assert_contains "$OUTPUT" "Added dependency: test-3 depends on test-2" "Should add dependency"
+OUTPUT=$("$TZ_BIN" dep add tz-3 --target tz-2 --type related_to 2>&1)
+assert_contains "$OUTPUT" "Added dependency: tz-3 depends on tz-2" "Should add dependency"
 
 # Test 14: Numeric shorthand for tz show
 echo -e "\n${YELLOW}Test 14: Numeric shorthand for tz show${NC}"
 OUTPUT=$("$TZ_BIN" show 1 2>&1)
-assert_contains "$OUTPUT" "ID: test-1" "tz show 1 should show test-1"
+assert_contains "$OUTPUT" "ID: tz-1" "tz show 1 should show tz-1"
 assert_contains "$OUTPUT" "Title: Test issue 1" "Should show correct title"
 
 # Test 15: Multi-issue show
 echo -e "\n${YELLOW}Test 15: Multi-issue show${NC}"
-OUTPUT=$("$TZ_BIN" show test-1 test-2 test-3 2>&1)
-assert_contains "$OUTPUT" "ID: test-1" "Should show test-1"
-assert_contains "$OUTPUT" "ID: test-2" "Should show test-2"
-assert_contains "$OUTPUT" "ID: test-3" "Should show test-3"
+OUTPUT=$("$TZ_BIN" show tz-1 tz-2 tz-3 2>&1)
+assert_contains "$OUTPUT" "ID: tz-1" "Should show tz-1"
+assert_contains "$OUTPUT" "ID: tz-2" "Should show tz-2"
+assert_contains "$OUTPUT" "ID: tz-3" "Should show tz-3"
 # Check for separator between issues
 assert_contains "$OUTPUT" "======" "Should have separator between issues"
 
 # Test 16: Mixed format for tz show (full ID + shorthand)
 echo -e "\n${YELLOW}Test 16: Mixed format for tz show${NC}"
-OUTPUT=$("$TZ_BIN" show test-1 2 2>&1)
-assert_contains "$OUTPUT" "ID: test-1" "Should show test-1"
-assert_contains "$OUTPUT" "ID: test-2" "Should show test-2 from shorthand"
+OUTPUT=$("$TZ_BIN" show tz-1 2 2>&1)
+assert_contains "$OUTPUT" "ID: tz-1" "Should show tz-1"
+assert_contains "$OUTPUT" "ID: tz-2" "Should show tz-2 from shorthand"
 
 # Print summary
 echo ""

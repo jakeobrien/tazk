@@ -31,11 +31,11 @@
 //!
 //! ```text
 //! Action sequence:
-//!   1. Init { prefix: "test" }
-//!   2. Create { expected_id: "test-1", ...}  →  Verify actual ID is "test-1"
-//!   3. Create { expected_id: "test-2", ... } →  Verify actual ID is "test-2"
-//!   4. Update { issue_id: "test-1", ... }     →  Valid because test-1 exists
-//!   5. Close { issue_id: "test-2", ... }      →  Valid because test-2 exists
+//!   1. Init { tz_hash_ids: Some(false) }
+//!   2. Create { expected_id: "tz-1", ...}  →  Verify actual ID is "tz-1"
+//!   3. Create { expected_id: "tz-2", ... } →  Verify actual ID is "tz-2"
+//!   4. Update { issue_id: "tz-1", ... }     →  Valid because tz-1 exists
+//!   5. Close { issue_id: "tz-2", ... }      →  Valid because tz-2 exists
 //! ```
 
 use anyhow::{Context, Result};
@@ -45,16 +45,14 @@ use std::collections::HashSet;
 use std::process::Command;
 
 // Re-export production types instead of defining duplicates
+use crate::types::ID_PREFIX;
 pub use crate::types::{DependencyType, IssueType, Status};
 
 /// Represents a tazk command/action
 #[derive(Debug, Clone, PartialEq)]
 pub enum TazkAction {
     /// Initialize tazk in directory
-    Init {
-        prefix: Option<String>,
-        tz_hash_ids: Option<bool>,
-    },
+    Init { tz_hash_ids: Option<bool> },
 
     /// Create a new issue with expected ID for verification
     Create {
@@ -100,14 +98,8 @@ pub enum TazkAction {
 impl std::fmt::Display for TazkAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TazkAction::Init {
-                prefix,
-                tz_hash_ids,
-            } => {
+            TazkAction::Init { tz_hash_ids } => {
                 let mut parts = vec!["init".to_string()];
-                if let Some(p) = prefix {
-                    parts.push(format!("--prefix {}", p));
-                }
                 if let Some(true) = tz_hash_ids {
                     parts.push("--tz-hash-ids".to_string());
                 }
@@ -169,7 +161,6 @@ impl std::fmt::Display for TazkAction {
 /// - Predicts issue IDs using sequential numbering assumption
 pub struct ActionGenerator {
     rng: StdRng,
-    prefix: String,
     next_issue_num: usize,
     existing_issues: Vec<String>, // Maintains creation order
     closed_issues: HashSet<String>,
@@ -186,7 +177,6 @@ impl ActionGenerator {
     pub fn new_with_mode(seed: u64, use_hash_ids: bool) -> Self {
         Self {
             rng: StdRng::seed_from_u64(seed),
-            prefix: "test".to_string(),
             next_issue_num: 1,
             existing_issues: Vec::new(),
             closed_issues: HashSet::new(),
@@ -202,7 +192,6 @@ impl ActionGenerator {
 
         // Always start with init
         actions.push(TazkAction::Init {
-            prefix: Some(self.prefix.clone()),
             tz_hash_ids: Some(self.use_hash_ids),
         });
 
@@ -279,10 +268,10 @@ impl ActionGenerator {
         let expected_id = if self.use_hash_ids {
             // For hash mode, use a placeholder since hash IDs are timestamp-based
             // and cannot be predicted in advance (they depend on execution-time timestamp)
-            format!("{}-HASH", self.prefix)
+            format!("{ID_PREFIX}HASH")
         } else {
             // Use sequential numbering
-            format!("{}-{}", self.prefix, self.next_issue_num)
+            format!("{ID_PREFIX}{}", self.next_issue_num)
         };
 
         // Track the issue (will be updated with actual ID for hash mode)
@@ -402,7 +391,7 @@ impl ActionGenerator {
     fn pick_random_issue(&mut self) -> String {
         if self.existing_issues.is_empty() {
             // Shouldn't happen, but handle it
-            format!("{}-1", self.prefix)
+            format!("{ID_PREFIX}1")
         } else {
             let idx = self.rng.gen_range(0..self.existing_issues.len());
             self.existing_issues[idx].clone()
@@ -445,15 +434,9 @@ impl ActionExecutor {
         let mut actual_issue_id: Option<String> = None;
 
         let output = match action {
-            TazkAction::Init {
-                prefix,
-                tz_hash_ids,
-            } => {
+            TazkAction::Init { tz_hash_ids } => {
                 let mut cmd = self.build_command();
                 cmd.arg("init");
-                if let Some(p) = prefix {
-                    cmd.arg("--prefix").arg(p);
-                }
                 if let Some(true) = tz_hash_ids {
                     cmd.arg("--tz-hash-ids");
                 }
@@ -493,43 +476,13 @@ impl ActionExecutor {
                 if output.status.success() && !expected_id.contains("HASH") {
                     if let Some(ref actual) = actual_issue_id {
                         if actual != expected_id {
-                            // Parse both IDs to understand the mismatch
-                            let expected_parts: Vec<&str> = expected_id.split('-').collect();
-                            let actual_parts: Vec<&str> = actual.split('-').collect();
-
-                            let prefix_mismatch = expected_parts.first() != actual_parts.first();
-                            let number_mismatch = expected_parts.get(1) != actual_parts.get(1);
-
                             let mut error_msg = String::from("ISSUE ID MISMATCH!\n");
                             error_msg.push_str(&format!("Expected: {}\n", expected_id));
                             error_msg.push_str(&format!("Actual:   {}\n\n", actual));
-
-                            if prefix_mismatch {
-                                error_msg.push_str(&format!(
-                                    "PREFIX MISMATCH: Expected '{}', got '{}'\n",
-                                    expected_parts.first().unwrap_or(&"?"),
-                                    actual_parts.first().unwrap_or(&"?")
-                                ));
-                                error_msg.push_str("Possible causes:\n");
-                                error_msg.push_str("  - Init command failed to set prefix\n");
-                                error_msg.push_str(
-                                    "  - Found existing tazk directory with different prefix\n",
-                                );
-                                error_msg.push_str("  - Working in wrong directory\n");
-                            }
-
-                            if number_mismatch && !prefix_mismatch {
-                                error_msg.push_str(&format!(
-                                    "NUMBER MISMATCH: Expected '{}', got '{}'\n",
-                                    expected_parts.get(1).unwrap_or(&"?"),
-                                    actual_parts.get(1).unwrap_or(&"?")
-                                ));
-                                error_msg.push_str("Possible causes:\n");
-                                error_msg.push_str("  - Existing issues in database\n");
-                                error_msg
-                                    .push_str("  - Sequential numbering assumption violated\n");
-                                error_msg.push_str("  - Test directory not isolated\n");
-                            }
+                            error_msg.push_str("Possible causes:\n");
+                            error_msg.push_str("  - Existing issues in database\n");
+                            error_msg.push_str("  - Sequential numbering assumption violated\n");
+                            error_msg.push_str("  - Test directory not isolated\n");
 
                             anyhow::bail!(error_msg);
                         }
@@ -696,7 +649,6 @@ pub struct ExecutionResult {
 /// TazkAction sequences. This provides a "golden state" for verification.
 pub struct ReferenceInterpreter {
     pub issues: std::collections::HashMap<String, ReferenceIssue>,
-    pub prefix: String,
     pub next_id: usize,
     pub use_hash_ids: bool,
 }
@@ -713,22 +665,26 @@ pub struct ReferenceIssue {
     pub depends_on: std::collections::HashMap<String, DependencyType>,
 }
 
+impl Default for ReferenceInterpreter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReferenceInterpreter {
-    /// Create a new reference interpreter with the given prefix
-    pub fn new(prefix: String) -> Self {
+    /// Create a new reference interpreter
+    pub fn new() -> Self {
         Self {
             issues: std::collections::HashMap::new(),
-            prefix,
             next_id: 1,
             use_hash_ids: false,
         }
     }
 
     /// Create a new reference interpreter with hash IDs enabled
-    pub fn new_with_hash_ids(prefix: String) -> Self {
+    pub fn new_with_hash_ids() -> Self {
         Self {
             issues: std::collections::HashMap::new(),
-            prefix,
             next_id: 1,
             use_hash_ids: true,
         }
@@ -737,13 +693,7 @@ impl ReferenceInterpreter {
     /// Execute an action, updating the internal state
     pub fn execute(&mut self, action: &TazkAction) -> Result<()> {
         match action {
-            TazkAction::Init {
-                prefix,
-                tz_hash_ids,
-            } => {
-                if let Some(p) = prefix {
-                    self.prefix = p.clone();
-                }
+            TazkAction::Init { tz_hash_ids } => {
                 if let Some(use_hash) = tz_hash_ids {
                     self.use_hash_ids = *use_hash;
                 }
@@ -761,7 +711,7 @@ impl ReferenceInterpreter {
                 // by the test harness, so we just use it directly
                 // For numeric mode, verify it matches the expected sequential ID
                 if !self.use_hash_ids {
-                    let computed_id = format!("{}-{}", self.prefix, self.next_id);
+                    let computed_id = format!("{ID_PREFIX}{}", self.next_id);
                     if *expected_id != computed_id {
                         anyhow::bail!(
                             "Reference interpreter ID mismatch: expected {}, got {}",
@@ -841,11 +791,6 @@ impl ReferenceInterpreter {
     /// Get the final state as a reference to the issues HashMap
     pub fn get_final_state(&self) -> &std::collections::HashMap<String, ReferenceIssue> {
         &self.issues
-    }
-
-    /// Get the current prefix
-    pub fn get_prefix(&self) -> &str {
-        &self.prefix
     }
 
     /// Get the next expected issue ID

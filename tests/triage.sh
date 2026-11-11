@@ -100,7 +100,7 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: an empty repo
-"$TZ_BIN" init --prefix test >/dev/null 2>&1
+"$TZ_BIN" init >/dev/null 2>&1
 
 field() { grep "^$2:" ".tazk/issues/$1.md" | sed "s/^$2: *//"; }
 assert_not_contains() {
@@ -191,36 +191,36 @@ assert_fails "promote without --title should fail" "$TZ_BIN" triage promote "$A"
 assert_fails "promote without --role should fail" "$TZ_BIN" triage promote "$A" --title T
 assert_fails "promote of a missing item should fail" "$TZ_BIN" triage promote "$A" nope --title T -r agent
 assert_equals "3" "$(item_count)" "failed promote should delete nothing"
-OUTPUT=$("$TZ_BIN" triage promote "$A" "$B" --title "Fix auth" -r agent -p 1 -t bug --parent test-1 -l backend 2>&1)
-assert_contains "$OUTPUT" "Created issue: test-2" "promote should create an issue"
-assert_equals "open" "$(field test-2 status)" "promoted issue should be open"
-assert_equals "1" "$(field test-2 priority)" "priority should be set"
-assert_equals "bug" "$(field test-2 issue_type)" "type should be set"
-assert_equals "agent" "$(field test-2 role)" "role should be set"
-ISSUE=$(cat .tazk/issues/test-2.md)
+OUTPUT=$("$TZ_BIN" triage promote "$A" "$B" --title "Fix auth" -r agent -p 1 -t bug --parent tz-1 -l backend 2>&1)
+assert_contains "$OUTPUT" "Created issue: tz-2" "promote should create an issue"
+assert_equals "open" "$(field tz-2 status)" "promoted issue should be open"
+assert_equals "1" "$(field tz-2 priority)" "priority should be set"
+assert_equals "bug" "$(field tz-2 issue_type)" "type should be set"
+assert_equals "agent" "$(field tz-2 role)" "role should be set"
+ISSUE=$(cat .tazk/issues/tz-2.md)
 assert_contains "$ISSUE" "It_breaks_on_Mondays" "description should hold the first item"
 assert_contains "$ISSUE" "Ref: GH-7" "description should hold the second item"
 assert_contains "$ISSUE" "Promoted from triage: $A, $B" "notes should record the items"
-assert_contains "$ISSUE" "test-1: child_of" "--parent should be applied"
+assert_contains "$ISSUE" "tz-1: child_of" "--parent should be applied"
 assert_equals "$C" "$("$TZ_BIN" triage list)" "promoted items should be deleted"
-assert_contains "$("$TZ_BIN" ready)" "test-2:" "promoted issue should be ready"
+assert_contains "$("$TZ_BIN" ready)" "tz-2:" "promoted issue should be ready"
 
 # Test 7: promote with an explicit description
 echo -e "\n${YELLOW}Test 7: promote with --description${NC}"
 E=$(add_item "raw report")
 "$TZ_BIN" triage promote "$E" --title "Clean" -r human -d "Rewritten" >/dev/null 2>&1
-assert_contains "$(cat .tazk/issues/test-3.md)" "Rewritten" "--description should replace the item text"
-assert_not_contains "$(cat .tazk/issues/test-3.md)" "raw report" "item text should not be kept"
+assert_contains "$(cat .tazk/issues/tz-3.md)" "Rewritten" "--description should replace the item text"
+assert_not_contains "$(cat .tazk/issues/tz-3.md)" "raw report" "item text should not be kept"
 
 # Test 8: attach items to an issue as comments
 echo -e "\n${YELLOW}Test 8: attach${NC}"
-assert_fails "attach to a missing issue should fail" "$TZ_BIN" triage attach "$C" --to test-99 --author alice
+assert_fails "attach to a missing issue should fail" "$TZ_BIN" triage attach "$C" --to tz-99 --author alice
 assert_fails "attach without --to should fail" "$TZ_BIN" triage attach "$C" --author alice
-assert_fails "attach without --author should fail" "$TZ_BIN" triage attach "$C" --to test-2
+assert_fails "attach without --author should fail" "$TZ_BIN" triage attach "$C" --to tz-2
 assert_equals "$C" "$("$TZ_BIN" triage list)" "failed attach should delete nothing"
-OUTPUT=$("$TZ_BIN" triage attach "$C" --to test-2 --author alice 2>&1)
-assert_contains "$OUTPUT" "Attached $C to test-2 as comment" "attach should confirm"
-COMMENTS=$("$TZ_BIN" comments list test-2 2>&1)
+OUTPUT=$("$TZ_BIN" triage attach "$C" --to tz-2 --author alice 2>&1)
+assert_contains "$OUTPUT" "Attached $C to tz-2 as comment" "attach should confirm"
+COMMENTS=$("$TZ_BIN" comments list tz-2 2>&1)
 assert_contains "$COMMENTS" '[alice at' "comment should have the author"
 assert_contains "$COMMENTS" 'Body with `backticks`' "comment should hold the item text"
 assert_equals "0" "$(item_count)" "attached item should be deleted"
@@ -228,7 +228,7 @@ assert_equals "0" "$(item_count)" "attached item should be deleted"
 # Test 9: the triage status is gone
 echo -e "\n${YELLOW}Test 9: no triage status${NC}"
 assert_fails "list --status triage should fail" "$TZ_BIN" list --status triage
-assert_fails "the old open command should be gone" "$TZ_BIN" open --id test-2 --title T -r agent
+assert_fails "the old open command should be gone" "$TZ_BIN" open --id tz-2 --title T -r agent
 
 # Print summary
 echo ""

@@ -5,7 +5,7 @@ use crate::paths::{ensure_contained, IssueId};
 use crate::transaction::{atomic_write, FileTransaction};
 use crate::types::{
     parse_effort, validate_effort, BlockedIssue, Comment, DependencyType, EditField, Issue,
-    IssueType, Role, Stats, Status,
+    IssueType, Role, Stats, Status, ID_PREFIX,
 };
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -331,24 +331,9 @@ impl Storage {
         // Validate and ensure config.yaml exists
         let config_path = tazk_dir.join("config.yaml");
         if !config_path.exists() {
-            // Prefer inferring the prefix from issue files that already exist in
-            // issues_dir (ground truth -- e.g. a config.yaml that was
-            // lost/deleted): the directory-name guess below
-            // has no relation to a project's real issue IDs and can silently
-            // produce a wrong prefix (e.g. "tmp" for a checkout under /tmp/...).
-            // Only fall back to the directory-name guess, then to "tz", when
-            // there are no existing issues to learn from.
-            let prefix = infer_prefix_from_issues_dir(&issues_dir)
-                .or_else(|| infer_prefix(&tazk_dir))
-                .unwrap_or_else(|| "tz".to_string());
-            let mut config = HashMap::new();
-            config.insert("issue-prefix".to_string(), prefix);
-            let config_yaml = serde_yaml::to_string(&config)?;
-            fs::write(&config_path, config_yaml).context("Failed to create config.yaml")?;
+            fs::write(&config_path, "").context("Failed to create config.yaml")?;
         } else {
-            // Validate that config.yaml parses. We do NOT require an active
-            // `issue-prefix` key here: when it is absent (or commented out) the
-            // prefix is inferred from issue filenames on demand (see get_prefix).
+            // Validate that config.yaml parses.
             let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
             serde_yaml::from_str::<HashMap<String, String>>(&content)
                 .context("Failed to parse config.yaml")?;
@@ -418,13 +403,9 @@ impl Storage {
     /// Initialize a new tazk database
     pub fn init(
         tazk_dir: PathBuf,
-        prefix: Option<String>,
         tz_hash_ids: bool,
         issue_layout: IssueStorageLayout,
     ) -> Result<Self> {
-        if let Some(value) = prefix.as_deref() {
-            IssueId::parse(value)?;
-        }
         // Create tazk directory
         fs::create_dir_all(&tazk_dir).context("Failed to create tazk directory")?;
 
@@ -432,20 +413,8 @@ impl Storage {
         let issues_dir = tazk_dir.join("issues");
         fs::create_dir_all(&issues_dir).context("Failed to create issues directory")?;
 
-        // Determine prefix: an explicit --prefix wins; otherwise prefer
-        // inferring from issue files that already exist in issues_dir (ground
-        // truth) over the directory-name guess -- see the matching comment in
-        // `open`. `init` usually creates a brand-new, empty issues_dir, but
-        // this keeps both entry points consistent and safe if it's ever
-        // pointed at a directory that already has orphaned issue files.
-        let prefix = prefix
-            .or_else(|| infer_prefix_from_issues_dir(&issues_dir))
-            .or_else(|| infer_prefix(&tazk_dir))
-            .unwrap_or_else(|| "tz".to_string());
-
-        IssueId::parse(&prefix)?;
-        // Create config.yaml with the issue prefix and tazk options
-        write_initial_config(&tazk_dir, &prefix, tz_hash_ids, issue_layout)?;
+        // Create config.yaml with the tazk options
+        write_initial_config(&tazk_dir, tz_hash_ids, issue_layout)?;
 
         // Ensure .gitignore exists and has required entries
         ensure_gitignore(&tazk_dir)?;
@@ -455,30 +424,6 @@ impl Storage {
             issues_dir,
             access: StorageAccess::ReadWrite,
         })
-    }
-
-    /// Get the issue prefix from config
-    pub fn get_prefix(&self) -> Result<String> {
-        let config_path = self.config_path();
-
-        if !config_path.exists() {
-            // Try to infer from existing issues
-            return self.infer_prefix_from_issues();
-        }
-
-        let content = fs::read_to_string(&config_path).context("Failed to read config.yaml")?;
-        let config: HashMap<String, String> =
-            serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
-
-        // When `issue-prefix` is missing from config.yaml, fall back to
-        // inferring it from the existing issue filenames.
-        match config.get("issue-prefix") {
-            Some(prefix) => {
-                IssueId::parse(prefix)?;
-                Ok(prefix.clone())
-            }
-            None => self.infer_prefix_from_issues(),
-        }
     }
 
     /// Get a config value from config.yaml.
@@ -500,9 +445,6 @@ impl Storage {
     pub fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
         let _lock = self.lock_for_write()?;
         reject_removed_config_key(key)?;
-        if key == "issue-prefix" {
-            IssueId::parse(value)?;
-        }
         let config_path = self.config_path();
 
         if !config_path.exists() {
@@ -669,24 +611,12 @@ impl Storage {
         issue_file_paths_in(&self.issues_dir)
     }
 
-    /// Infer prefix from existing issues in the filesystem
-    fn infer_prefix_from_issues(&self) -> Result<String> {
-        infer_prefix_from_issues_dir(&self.issues_dir)
-            .ok_or_else(|| anyhow::anyhow!("No issues found to infer prefix"))
-    }
-
-    /// Get the next issue number
-    fn get_next_number(&self, prefix: &str) -> Result<u32> {
+    /// Get the next issue number: the highest numeric suffix + 1.
+    fn get_next_number(&self) -> Result<u32> {
         let mut max_num = 0;
         for (issue_id, _) in self.issue_file_paths()? {
-            if let Some(pos) = issue_id.rfind('-') {
-                let issue_prefix = &issue_id[..pos];
-                let num_str = &issue_id[pos + 1..];
-                if issue_prefix == prefix {
-                    if let Ok(num) = num_str.parse::<u32>() {
-                        max_num = max_num.max(num);
-                    }
-                }
+            if let Ok(num) = id_suffix(&issue_id).parse::<u32>() {
+                max_num = max_num.max(num);
             }
         }
 
@@ -694,7 +624,7 @@ impl Storage {
     }
 
     /// Generate a hash-based ID with adaptive length and collision handling
-    fn generate_hash_id(&self, prefix: &str, title: &str, description: &str) -> Result<String> {
+    fn generate_hash_id(&self, title: &str, description: &str) -> Result<String> {
         use chrono::Utc;
 
         let timestamp = Utc::now();
@@ -704,7 +634,6 @@ impl Storage {
 
         // Use hash::generate_hash_id_with_collision_check with filesystem checker
         hash::generate_hash_id_with_collision_check(
-            prefix,
             title,
             description,
             timestamp,
@@ -784,16 +713,15 @@ impl Storage {
         let issue_id = if let Some(id) = id {
             id
         } else {
-            let prefix = self.get_prefix()?;
             let use_hash_ids = self.use_hash_ids()?;
 
             if use_hash_ids {
                 // Use hash-based ID generation
-                self.generate_hash_id(&prefix, &title, &description)?
+                self.generate_hash_id(&title, &description)?
             } else {
                 // Use sequential numbering
-                let num = self.get_next_number(&prefix)?;
-                format!("{}-{}", prefix, num)
+                let num = self.get_next_number()?;
+                format!("{ID_PREFIX}{num}")
             }
         };
 
@@ -2197,115 +2125,6 @@ impl Storage {
         Ok((imported, skipped, errors))
     }
 
-    /// Rename the issue prefix for all issues
-    ///
-    /// This operation:
-    /// - Renames all issue files from old-prefix-N to new-prefix-N
-    /// - Updates the ID in all issue frontmatter
-    /// - Updates all dependency references
-    /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
-    /// - Updates the prefix in config.yaml
-    /// - Is atomic (all updates succeed or none)
-    pub fn rename_prefix(
-        &self,
-        new_prefix: &str,
-        dry_run: bool,
-        force: bool,
-    ) -> Result<Vec<String>> {
-        let _lock = self.lock_for_write()?;
-
-        IssueId::parse(new_prefix)?;
-        // Get current prefix
-        let old_prefix = self.get_prefix()?;
-
-        // Validate new prefix is different
-        if old_prefix == new_prefix {
-            anyhow::bail!("New prefix '{}' is the same as current prefix", new_prefix);
-        }
-
-        // Validate new prefix format (alphanumeric and hyphens only)
-        if !new_prefix.chars().all(|c| c.is_alphanumeric() || c == '-') {
-            anyhow::bail!(
-                "Invalid prefix format: '{}'. Use only alphanumeric characters and hyphens.",
-                new_prefix
-            );
-        }
-
-        // Load all issues
-        let all_issues = self.list_all_issues_no_dependents()?;
-
-        // Build mapping from old ID to new ID
-        let mut id_mapping = HashMap::new();
-        for issue in &all_issues {
-            // Check if this issue uses the current prefix
-            if let Some(pos) = issue.id.rfind('-') {
-                let issue_prefix = &issue.id[..pos];
-                let issue_number = &issue.id[pos + 1..];
-
-                if issue_prefix == old_prefix {
-                    let new_id = format!("{}-{}", new_prefix, issue_number);
-
-                    // Check if new ID would conflict with existing issue
-                    if !force && self.issue_exists_any_layout(&new_id)? {
-                        anyhow::bail!(
-                            "Cannot rename: new ID '{}' already exists. Use --force to override.",
-                            new_id
-                        );
-                    }
-
-                    id_mapping.insert(issue.id.clone(), new_id);
-                }
-            }
-        }
-
-        if id_mapping.is_empty() {
-            anyhow::bail!("No issues found with prefix '{}'", old_prefix);
-        }
-
-        // Track all changes for dry-run mode
-        let mut changes = Vec::new();
-        changes.push(format!(
-            "Update config.yaml: issue-prefix: {} -> {}",
-            old_prefix, new_prefix
-        ));
-
-        // Plan all file renames and content updates
-        for issue in &all_issues {
-            if let Some(new_id) = id_mapping.get(&issue.id) {
-                changes.push(format!("Rename file: {}.md -> {}.md", issue.id, new_id));
-                changes.push(format!(
-                    "Update ID in frontmatter: {} -> {}",
-                    issue.id, new_id
-                ));
-
-                // Check if this issue has dependencies that will be renamed
-                for dep_id in issue.depends_on.keys() {
-                    if id_mapping.contains_key(dep_id) {
-                        changes.push(format!(
-                            "Update dependency in {}: {} -> {}",
-                            new_id,
-                            dep_id,
-                            id_mapping.get(dep_id).unwrap()
-                        ));
-                    }
-                }
-            }
-        }
-
-        // If dry-run, return changes without applying
-        if dry_run {
-            return Ok(changes);
-        }
-
-        self.apply_id_mapping(
-            all_issues,
-            &id_mapping,
-            &[("config.yaml", "issue-prefix", new_prefix)],
-        )?;
-
-        Ok(changes)
-    }
-
     /// Move issue markdown files between flat and sharded on-disk layouts.
     pub fn migrate_issue_storage_layout(
         &self,
@@ -2435,7 +2254,7 @@ impl Storage {
     ///
     /// This operation:
     /// - Generates hash-based IDs for all issues with numeric IDs
-    /// - Renames all issue files from prefix-N to prefix-hash
+    /// - Renames all issue files from tz-N to tz-hash
     /// - Updates all dependency references
     /// - Updates all text mentions of old IDs in all issues (title, description, design, notes, acceptance_criteria)
     /// - Updates config.yaml to set tz-hash-ids: true (unless update_config is false)
@@ -2454,36 +2273,26 @@ impl Storage {
             );
         }
 
-        // Get current prefix
-        let prefix = self.get_prefix()?;
-
         // Load all issues
         let all_issues = self.list_all_issues_no_dependents()?;
 
         // Build mapping from old numeric ID to new hash ID
         let mut id_mapping = HashMap::new();
         for issue in &all_issues {
-            // Check if this issue has a numeric ID (prefix-N pattern)
-            if let Some(pos) = issue.id.rfind('-') {
-                let issue_prefix = &issue.id[..pos];
-                let issue_suffix = &issue.id[pos + 1..];
+            // Only migrate numeric IDs
+            if id_suffix(&issue.id).parse::<u32>().is_ok() {
+                // Generate hash-based ID
+                let hash_id = self.generate_hash_id(&issue.title, &issue.description)?;
 
-                // Only migrate if it's a numeric ID
-                if issue_prefix == prefix && issue_suffix.parse::<u32>().is_ok() {
-                    // Generate hash-based ID
-                    let hash_id =
-                        self.generate_hash_id(&prefix, &issue.title, &issue.description)?;
-
-                    // Check if new ID would conflict with existing issue
-                    if self.issue_exists_any_layout(&hash_id)? {
-                        anyhow::bail!(
-                            "Cannot migrate: generated hash ID '{}' already exists. This is a collision - please report this bug.",
-                            hash_id
-                        );
-                    }
-
-                    id_mapping.insert(issue.id.clone(), hash_id);
+                // Check if new ID would conflict with existing issue
+                if self.issue_exists_any_layout(&hash_id)? {
+                    anyhow::bail!(
+                        "Cannot migrate: generated hash ID '{}' already exists. This is a collision - please report this bug.",
+                        hash_id
+                    );
                 }
+
+                id_mapping.insert(issue.id.clone(), hash_id);
             }
         }
 
@@ -2554,9 +2363,6 @@ impl Storage {
     ) -> Result<(Vec<String>, HashMap<String, String>)> {
         let _lock = self.lock_for_write()?;
 
-        // Get current prefix
-        let prefix = self.get_prefix()?;
-
         // Load all issues
         let all_issues = self.list_all_issues_no_dependents()?;
 
@@ -2567,27 +2373,15 @@ impl Storage {
         let mut numeric_ids = Vec::new();
         let mut numeric_id_to_issue: HashMap<u32, Issue> = HashMap::new();
 
-        // First pass: collect all numeric IDs with matching prefix
+        // First pass: collect all numeric IDs
         for issue in &all_issues {
-            if let Some(pos) = issue.id.rfind('-') {
-                let issue_prefix = &issue.id[..pos];
-                let issue_suffix = &issue.id[pos + 1..];
-
-                if issue_prefix == prefix {
-                    // Check if it's numeric
-                    if let Ok(num) = issue_suffix.parse::<u32>() {
-                        numeric_ids.push(num);
-                        numeric_id_to_issue.insert(num, issue.clone());
-                    } else {
-                        // Non-numeric suffix = hash-based ID
-                        hash_issues.push(issue.clone());
-                    }
-                } else {
-                    // Different prefix, check suffix length >= 4
-                    if issue_suffix.len() >= 4 {
-                        hash_issues.push(issue.clone());
-                    }
-                }
+            // Check if it's numeric
+            if let Ok(num) = id_suffix(&issue.id).parse::<u32>() {
+                numeric_ids.push(num);
+                numeric_id_to_issue.insert(num, issue.clone());
+            } else {
+                // Non-numeric suffix = hash-based ID
+                hash_issues.push(issue.clone());
             }
         }
 
@@ -2624,7 +2418,7 @@ impl Storage {
         let mut id_mapping = HashMap::new();
 
         for (next_id, issue) in (max_numeric_id + 1..).zip(hash_issues.iter()) {
-            let new_id = format!("{}-{}", prefix, next_id);
+            let new_id = format!("{ID_PREFIX}{next_id}");
 
             // Check if new ID would conflict with existing issue
             if self.issue_exists_any_layout(&new_id)? {
@@ -2684,7 +2478,7 @@ impl Storage {
     /// Repack numeric IDs to fill gaps (make them contiguous)
     ///
     /// This operation:
-    /// - Collects all issues with numeric IDs for the current prefix
+    /// - Collects all issues with numeric IDs
     /// - Sorts them by creation timestamp (preserves chronological order)
     /// - Renumbers them as 1, 2, 3, ... (fills gaps)
     /// - If closed_issue_start is provided, numbers open and closed issues separately:
@@ -2705,25 +2499,14 @@ impl Storage {
     ) -> Result<(Vec<String>, HashMap<String, String>)> {
         let _lock = self.lock_for_write()?;
 
-        // Get current prefix
-        let prefix = self.get_prefix()?;
-
         // Load all issues
         let all_issues = self.list_all_issues_no_dependents()?;
 
-        // Collect all numeric IDs with matching prefix
+        // Collect all numeric IDs
         let mut numeric_issues = Vec::new();
         for issue in &all_issues {
-            if let Some(pos) = issue.id.rfind('-') {
-                let issue_prefix = &issue.id[..pos];
-                let issue_suffix = &issue.id[pos + 1..];
-
-                if issue_prefix == prefix {
-                    // Check if it's numeric
-                    if issue_suffix.parse::<u32>().is_ok() {
-                        numeric_issues.push(issue.clone());
-                    }
-                }
+            if id_suffix(&issue.id).parse::<u32>().is_ok() {
+                numeric_issues.push(issue.clone());
             }
         }
 
@@ -2765,7 +2548,7 @@ impl Storage {
 
             // Number open issues: 1, 2, 3, ...
             for (next_open_id, issue) in (1u32..).zip(open_issues.iter()) {
-                let new_id = format!("{}-{}", prefix, next_open_id);
+                let new_id = format!("{ID_PREFIX}{next_open_id}");
 
                 // Only add to mapping if ID actually changes
                 if issue.id != new_id {
@@ -2775,7 +2558,7 @@ impl Storage {
 
             // Number closed issues: closed_issue_start, closed_issue_start+1, ...
             for (next_closed_id, issue) in (closed_start..).zip(closed_issues.iter()) {
-                let new_id = format!("{}-{}", prefix, next_closed_id);
+                let new_id = format!("{ID_PREFIX}{next_closed_id}");
 
                 // Only add to mapping if ID actually changes
                 if issue.id != new_id {
@@ -2785,7 +2568,7 @@ impl Storage {
         } else {
             // Original behavior: number all issues sequentially
             for (next_id, issue) in (1u32..).zip(numeric_issues.iter()) {
-                let new_id = format!("{}-{}", prefix, next_id);
+                let new_id = format!("{ID_PREFIX}{next_id}");
 
                 // Only add to mapping if ID actually changes
                 if issue.id != new_id {
@@ -2845,8 +2628,7 @@ impl Storage {
 
 /// Recursively walk `issues_dir` (flat or sharded layout) and return every
 /// issue's ID and path. Free function so it can be used before a `Storage` is
-/// fully constructed (see `infer_prefix_from_issues_dir`, used while
-/// bootstrapping `config.yaml`); `Storage::issue_file_paths` delegates here.
+/// fully constructed (`Storage::issue_file_paths` delegates here).
 pub(crate) fn issue_file_paths_in(issues_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     if !issues_dir.exists() {
         return Ok(Vec::new());
@@ -2892,48 +2674,17 @@ pub(crate) fn issue_file_paths_in(issues_dir: &Path) -> Result<Vec<(String, Path
     Ok(paths)
 }
 
-/// Infer the dominant issue prefix from issue files already sitting in
-/// `issues_dir` (e.g. `ds-42.md`, `ds-43.md` -> `"ds"`). This is GROUND TRUTH
-/// when issues already exist and must be preferred over guessing from the
-/// directory name: opening or initializing a store whose config.yaml is
-/// missing (but whose issues/ directory already has real issues in it, e.g.
-/// a deleted/lost config.yaml) must not silently invent a prefix that ignores the issues
-/// that are right there. Returns `None` only when there is nothing to infer
-/// from (empty or newly-created issues/ directory).
-fn infer_prefix_from_issues_dir(issues_dir: &Path) -> Option<String> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for (issue_id, _) in issue_file_paths_in(issues_dir).ok()? {
-        if let Some(pos) = issue_id.rfind('-') {
-            *counts.entry(issue_id[..pos].to_string()).or_insert(0) += 1;
-        }
-    }
-    counts
-        .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(prefix, _)| prefix)
-}
-
-/// Infer prefix from the parent directory name. Only a fallback: prefer
-/// [`infer_prefix_from_issues_dir`] whenever real issues already exist, since
-/// this directory-name guess has no relation to a project's actual issue IDs
-/// and can produce a silently-wrong prefix (e.g. "tmp" for a store opened
-/// from a path under `/tmp/...`).
-fn infer_prefix(tazk_dir: &Path) -> Option<String> {
-    let parent = tazk_dir.parent()?.parent()?;
-    let name = parent.file_name()?.to_str()?;
-
-    let prefix = name.to_lowercase().replace([' ', '_'], "-");
-
-    Some(prefix)
+/// The part of an issue ID after the last `-`.
+fn id_suffix(id: &str) -> &str {
+    id.rsplit('-').next().unwrap_or(id)
 }
 
 /// Legacy file that used to hold the tazk options before they moved into config.yaml.
 const LEGACY_TAZK_CONFIG: &str = "config-tazk.yaml";
 
-/// Write a fresh config.yaml: the issue prefix plus the documented tazk options.
+/// Write a fresh config.yaml: the documented tazk options.
 fn write_initial_config(
     tazk_dir: &Path,
-    prefix: &str,
     tz_hash_ids: bool,
     issue_layout: IssueStorageLayout,
 ) -> Result<()> {
@@ -2947,26 +2698,15 @@ fn write_initial_config(
 
     writeln!(
         file,
-        "# Prefix for issue IDs (e.g. prefix-1 or prefix-a1b2c3)"
-    )?;
-    writeln!(
-        file,
-        "issue-prefix: {}",
-        serde_yaml::to_string(prefix)?.trim()
-    )?;
-    writeln!(file)?;
-
-    writeln!(
-        file,
         "# Use hash-based issue IDs instead of sequential numbers"
     )?;
     writeln!(
         file,
-        "# When true, issues are named like: prefix-a1b2c3 (based on content hash)"
+        "# When true, issues are named like: tz-a1b2c3 (based on content hash)"
     )?;
     writeln!(
         file,
-        "# When false, issues are named like: prefix-1, prefix-2, ... (sequential)"
+        "# When false, issues are named like: tz-1, tz-2, ... (sequential)"
     )?;
     writeln!(file, "# Default: false")?;
     writeln!(
@@ -2996,7 +2736,7 @@ fn write_initial_config(
 /// Fold a legacy `config-tazk.yaml` into `config.yaml` and delete it.
 /// Keys already present in config.yaml are kept.
 /// config.yaml keys that used to exist and are now rejected.
-const REMOVED_CONFIG_KEYS: &[&str] = &["hash-encoding"];
+const REMOVED_CONFIG_KEYS: &[&str] = &["hash-encoding", "issue-prefix"];
 
 fn reject_removed_config_key(key: &str) -> Result<()> {
     anyhow::ensure!(
@@ -3255,13 +2995,7 @@ mod create_integrity_tests {
     fn duplicate_create_id_fails_without_overwriting_existing_issue() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir.clone(),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Flat).unwrap();
 
         let original = storage
             .create_issue(
@@ -3274,13 +3008,13 @@ mod create_integrity_tests {
                 None,
                 Vec::new(),
                 None,
-                Some("demo-2".to_string()),
+                Some("tz-2".to_string()),
                 Vec::new(),
                 None,
                 None,
             )
             .unwrap();
-        let original_markdown = fs::read_to_string(tazk_dir.join("issues/demo-2.md")).unwrap();
+        let original_markdown = fs::read_to_string(tazk_dir.join("issues/tz-2.md")).unwrap();
 
         let result = storage.create_issue(
             "Accidental replacement".to_string(),
@@ -3300,7 +3034,7 @@ mod create_integrity_tests {
 
         assert!(result.is_err(), "duplicate creation must fail loudly");
         assert_eq!(
-            fs::read_to_string(tazk_dir.join("issues/demo-2.md")).unwrap(),
+            fs::read_to_string(tazk_dir.join("issues/tz-2.md")).unwrap(),
             original_markdown,
             "a failed create must preserve the existing issue"
         );
@@ -3354,13 +3088,8 @@ mod ready_tests {
     fn storage_with_open_issues(count: usize) -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir,
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .expect("init storage");
+        let storage =
+            Storage::init(tazk_dir, false, IssueStorageLayout::Flat).expect("init storage");
         for i in 0..count {
             storage
                 .create_issue(
@@ -3408,24 +3137,17 @@ mod config_tests {
     fn init_writes_all_options_to_config_yaml_only() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir.clone(),
-            Some("acme".into()),
-            true,
-            IssueStorageLayout::Sharded,
-        )
-        .unwrap();
+        let storage = Storage::init(tazk_dir.clone(), true, IssueStorageLayout::Sharded).unwrap();
 
         assert!(!tazk_dir.join("config-tazk.yaml").exists());
-        assert_eq!(storage.get_prefix().unwrap(), "acme");
         assert!(storage.use_hash_ids().unwrap());
         assert_eq!(
             storage.issue_storage_layout().unwrap(),
             IssueStorageLayout::Sharded
         );
-        assert_eq!(storage.get_config_value("hash-encoding").unwrap(), None);
         let config = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
         assert!(!config.contains("hash-encoding"));
+        assert!(!config.contains("issue-prefix"));
     }
 
     #[test]
@@ -3433,7 +3155,11 @@ mod config_tests {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
         fs::create_dir_all(tazk_dir.join("issues")).unwrap();
-        fs::write(tazk_dir.join("config.yaml"), "issue-prefix: acme\n").unwrap();
+        fs::write(
+            tazk_dir.join("config.yaml"),
+            "# options live in the legacy file\n",
+        )
+        .unwrap();
         fs::write(
             tazk_dir.join("config-tazk.yaml"),
             "# comment\ntz-hash-ids: true\nissue-storage-layout: sharded\n",
@@ -3442,7 +3168,6 @@ mod config_tests {
 
         let storage = Storage::open(tazk_dir.clone()).unwrap();
         assert!(!tazk_dir.join("config-tazk.yaml").exists());
-        assert_eq!(storage.get_prefix().unwrap(), "acme");
         assert!(storage.use_hash_ids().unwrap());
         assert_eq!(
             storage.issue_storage_layout().unwrap(),
@@ -3459,11 +3184,7 @@ mod config_tests {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
         fs::create_dir_all(tazk_dir.join("issues")).unwrap();
-        fs::write(
-            tazk_dir.join("config.yaml"),
-            "issue-prefix: tz\nhash-encoding: base36\n",
-        )
-        .unwrap();
+        fs::write(tazk_dir.join("config.yaml"), "hash-encoding: base36\n").unwrap();
 
         let expected =
             "config.yaml: 'hash-encoding' is no longer supported (IDs are always tz-…); remove it";
@@ -3477,13 +3198,7 @@ mod config_tests {
     fn config_set_rejects_hash_encoding() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir.clone(),
-            Some("tz".into()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Flat).unwrap();
         let err = storage
             .set_config_value("hash-encoding", "base36")
             .unwrap_err();
@@ -3494,92 +3209,63 @@ mod config_tests {
         assert!(!config.contains("hash-encoding"));
     }
 
-    /// A config.yaml may have `issue-prefix` commented out. Opening such a
-    /// repo must succeed, and the
-    /// prefix must be inferred from the issue filenames rather than erroring.
     #[test]
-    fn open_tolerates_commented_issue_prefix() {
+    fn open_rejects_removed_issue_prefix_key() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let issues_dir = tazk_dir.join("issues");
-        fs::create_dir_all(&issues_dir).unwrap();
+        fs::create_dir_all(tazk_dir.join("issues")).unwrap();
+        fs::write(tazk_dir.join("config.yaml"), "issue-prefix: tz\n").unwrap();
 
-        // config.yaml where issue-prefix only appears as a comment.
-        fs::write(
-            tazk_dir.join("config.yaml"),
-            "# Configuration File\n# issue-prefix: \"\"\n",
-        )
-        .unwrap();
-
-        // Two issues on disk so the prefix can be inferred.
-        fs::write(issues_dir.join("acme-1.md"), "placeholder").unwrap();
-        fs::write(issues_dir.join("acme-2.md"), "placeholder").unwrap();
-
-        let storage = Storage::open(tazk_dir).expect("open must tolerate commented prefix");
-        assert_eq!(storage.get_prefix().unwrap(), "acme");
+        let expected =
+            "config.yaml: 'issue-prefix' is no longer supported (IDs are always tz-…); remove it";
+        let err = Storage::open(tazk_dir.clone()).err().unwrap();
+        assert_eq!(err.to_string(), expected);
+        let err = Storage::open_readonly(tazk_dir).err().unwrap();
+        assert_eq!(err.to_string(), expected);
     }
 
-    /// Regression test: opening a store whose config.yaml is MISSING entirely
-    /// (e.g. a lost/deleted config.yaml) must infer the prefix from issue files that already exist,
-    /// not from the parent directory's name. A directory-name guess is
-    /// unrelated to a project's real issue IDs and can be actively misleading
-    /// -- e.g. a checkout living under a path containing "tmp" would silently
-    /// bootstrap `issue-prefix: tmp` and every later `tz create` would then
-    /// use that wrong prefix, ignoring the `ds-*` issues sitting right there.
     #[test]
-    fn open_infers_prefix_from_existing_issues_over_directory_name() {
+    fn config_set_rejects_issue_prefix() {
         let tmp = tempfile::tempdir().unwrap();
-        // Simulate a checkout living under a path whose grandparent-of-.tazk
-        // directory is named "tmp" -- exactly the directory-name heuristic's
-        // input (see `infer_prefix`) -- so it would mislead it into guessing
-        // "tmp" as the prefix.
-        let tazk_dir = tmp.path().join("tmp").join("checkout").join(".tazk");
-        let issues_dir = tazk_dir.join("issues");
-        fs::create_dir_all(&issues_dir).unwrap();
-
-        // No config.yaml at all yet -- but real issues already exist.
-        fs::write(issues_dir.join("ds-1.md"), "placeholder").unwrap();
-        fs::write(issues_dir.join("ds-2.md"), "placeholder").unwrap();
-        fs::write(issues_dir.join("ds-3.md"), "placeholder").unwrap();
-
-        let storage = Storage::open(tazk_dir.clone()).expect("open must succeed");
-        assert_eq!(
-            storage.get_prefix().unwrap(),
-            "ds",
-            "must infer the prefix from the existing ds-* issues, not the 'tmp' directory name"
-        );
-
-        // And the inferred prefix must have actually been written into
-        // config.yaml, not just returned transiently.
-        let config_yaml = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
-        assert!(
-            config_yaml.contains("ds"),
-            "config.yaml should record the inferred prefix: {config_yaml}"
-        );
-        assert!(
-            !config_yaml.contains("tmp"),
-            "config.yaml must not fall back to the misleading directory name: {config_yaml}"
-        );
+        let tazk_dir = tmp.path().join(".tazk");
+        let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Flat).unwrap();
+        let err = storage.set_config_value("issue-prefix", "x").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("'issue-prefix' is no longer supported"));
+        let config = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
+        assert!(!config.contains("issue-prefix"));
     }
 
-    /// Companion case: with NO existing issues to learn from, falling back to
-    /// the directory-name guess (then "tz") is still the reasonable default --
-    /// this fix must not regress that.
+    /// A missing config.yaml is recreated without any prefix key, and new IDs
+    /// always use the fixed prefix whatever the existing issue files are called.
     #[test]
-    fn open_falls_back_to_directory_name_when_no_issues_exist() {
+    fn open_without_config_creates_one_and_uses_fixed_prefix() {
         let tmp = tempfile::tempdir().unwrap();
-        // `infer_prefix`'s directory-name guess reads the grandparent-of-.tazk
-        // directory name (see the `open`/`init` bootstrap: it's the fallback
-        // consulted only when there are no existing issues to learn from).
-        let tazk_dir = tmp
-            .path()
-            .join("acme-project")
-            .join("checkout")
-            .join(".tazk");
+        let tazk_dir = tmp.path().join("acme-project").join(".tazk");
         fs::create_dir_all(&tazk_dir).unwrap();
 
-        let storage = Storage::open(tazk_dir).expect("open must succeed");
-        assert_eq!(storage.get_prefix().unwrap(), "acme-project");
+        let storage = Storage::open(tazk_dir.clone()).expect("open must succeed");
+        let config = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
+        assert!(!config.contains("issue-prefix"));
+        let issue = storage
+            .create_issue(
+                "t".into(),
+                "d".into(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                vec![],
+                None,
+                None,
+                vec![],
+                Some(Role::Agent),
+                None,
+            )
+            .unwrap();
+        assert_eq!(issue.id, format!("{ID_PREFIX}1"));
     }
 }
 
@@ -3591,23 +3277,20 @@ mod issue_layout_tests {
     #[test]
     fn sharded_paths_use_numeric_suffix_or_hash_prefix() {
         assert_eq!(
-            sharded_relative_path("demo-1"),
-            PathBuf::from("n").join("0").join("1").join("demo-1.md")
+            sharded_relative_path("tz-1"),
+            PathBuf::from("n").join("0").join("1").join("tz-1.md")
         );
         assert_eq!(
-            sharded_relative_path("demo-12"),
-            PathBuf::from("n").join("1").join("2").join("demo-12.md")
+            sharded_relative_path("tz-12"),
+            PathBuf::from("n").join("1").join("2").join("tz-12.md")
         );
         assert_eq!(
-            sharded_relative_path("demo-123"),
-            PathBuf::from("n").join("2").join("3").join("demo-123.md")
+            sharded_relative_path("tz-123"),
+            PathBuf::from("n").join("2").join("3").join("tz-123.md")
         );
         assert_eq!(
-            sharded_relative_path("demo-a3f9c2"),
-            PathBuf::from("h")
-                .join("a")
-                .join("3")
-                .join("demo-a3f9c2.md")
+            sharded_relative_path("tz-a3f9c2"),
+            PathBuf::from("h").join("a").join("3").join("tz-a3f9c2.md")
         );
     }
 
@@ -3615,13 +3298,7 @@ mod issue_layout_tests {
     fn create_uses_configured_sharded_layout() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir.clone(),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Sharded,
-        )
-        .unwrap();
+        let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Sharded).unwrap();
 
         let issue = storage
             .create_issue(
@@ -3641,23 +3318,17 @@ mod issue_layout_tests {
             )
             .unwrap();
 
-        assert_eq!(issue.id, "demo-1");
-        assert!(tazk_dir.join("issues/n/0/1/demo-1.md").exists());
-        assert!(!tazk_dir.join("issues/demo-1.md").exists());
-        assert!(storage.get_issue("demo-1").unwrap().is_some());
+        assert_eq!(issue.id, "tz-1");
+        assert!(tazk_dir.join("issues/n/0/1/tz-1.md").exists());
+        assert!(!tazk_dir.join("issues/tz-1.md").exists());
+        assert!(storage.get_issue("tz-1").unwrap().is_some());
     }
 
     #[test]
     fn migrate_layout_moves_existing_files_and_updates_config() {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir.clone(),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Flat).unwrap();
 
         storage
             .create_issue(
@@ -3699,9 +3370,9 @@ mod issue_layout_tests {
             .unwrap();
 
         assert!(changes.iter().any(|c| c.contains("issue-storage-layout")));
-        assert!(tazk_dir.join("issues/n/0/1/demo-1.md").exists());
-        assert!(tazk_dir.join("issues/n/0/2/demo-2.md").exists());
-        assert!(!tazk_dir.join("issues/demo-1.md").exists());
+        assert!(tazk_dir.join("issues/n/0/1/tz-1.md").exists());
+        assert!(tazk_dir.join("issues/n/0/2/tz-2.md").exists());
+        assert!(!tazk_dir.join("issues/tz-1.md").exists());
         assert_eq!(
             storage.issue_storage_layout().unwrap(),
             IssueStorageLayout::Sharded
@@ -3724,8 +3395,8 @@ mod issue_layout_tests {
                 None,
             )
             .unwrap();
-        assert_eq!(next.id, "demo-3");
-        assert!(tazk_dir.join("issues/n/0/3/demo-3.md").exists());
+        assert_eq!(next.id, "tz-3");
+        assert!(tazk_dir.join("issues/n/0/3/tz-3.md").exists());
     }
 }
 
@@ -3737,13 +3408,8 @@ mod claim_tests {
     fn storage_with_one_issue() -> (tempfile::TempDir, Storage, String) {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir,
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .expect("init storage");
+        let storage =
+            Storage::init(tazk_dir, false, IssueStorageLayout::Flat).expect("init storage");
         let issue = storage
             .create_issue(
                 "A task".to_string(),
@@ -3857,13 +3523,8 @@ mod reopen_tests {
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
         (tmp, storage)
     }
 
@@ -3923,13 +3584,8 @@ mod role_effort_tests {
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
         (tmp, storage)
     }
 
@@ -4008,13 +3664,8 @@ mod comment_tests {
     fn storage() -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir,
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .expect("init storage");
+        let storage =
+            Storage::init(tazk_dir, false, IssueStorageLayout::Flat).expect("init storage");
         (tmp, storage)
     }
 
@@ -4128,13 +3779,8 @@ mod search_replace_tests {
     fn storage_with_description(desc: &str) -> (tempfile::TempDir, Storage, String) {
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir,
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .expect("init storage");
+        let storage =
+            Storage::init(tazk_dir, false, IssueStorageLayout::Flat).expect("init storage");
         let issue = storage
             .create_issue(
                 "A task".to_string(),
@@ -4377,13 +4023,8 @@ mod hold_tests {
 
     fn storage_with_issue() -> (tempfile::TempDir, Storage, String) {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
         let id = storage
             .create_issue(
                 "x".into(),
@@ -4453,13 +4094,8 @@ mod close_reason_tests {
     #[test]
     fn close_and_reopen_reasons_append_to_notes() {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
         let id = storage
             .create_issue(
                 "x".into(),
@@ -4499,13 +4135,8 @@ mod tolerant_loader_tests {
 
     fn setup() -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
         (tmp, storage)
     }
 
@@ -4522,30 +4153,30 @@ mod tolerant_loader_tests {
         let dir = storage.get_tazk_dir().join("issues");
         write_issue(
             &storage,
-            &Issue::new("demo-1".into(), "ok".into(), 2, IssueType::Task),
+            &Issue::new("tz-1".into(), "ok".into(), 2, IssueType::Task),
         );
 
-        fs::write(dir.join("demo-2.md"), "---\ntitle: [unclosed\n---\n").unwrap();
-        let good = issue_to_markdown(&Issue::new("demo-3".into(), "c".into(), 2, IssueType::Task))
-            .unwrap();
+        fs::write(dir.join("tz-2.md"), "---\ntitle: [unclosed\n---\n").unwrap();
+        let good =
+            issue_to_markdown(&Issue::new("tz-3".into(), "c".into(), 2, IssueType::Task)).unwrap();
         fs::write(
-            dir.join("demo-3.md"),
+            dir.join("tz-3.md"),
             format!("{good}\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n"),
         )
         .unwrap();
         let bad_effort =
-            issue_to_markdown(&Issue::new("demo-4".into(), "e".into(), 2, IssueType::Task))
+            issue_to_markdown(&Issue::new("tz-4".into(), "e".into(), 2, IssueType::Task))
                 .unwrap()
                 .replacen("issue_type: task", "issue_type: task\neffort: 99", 1);
-        fs::write(dir.join("demo-4.md"), bad_effort).unwrap();
+        fs::write(dir.join("tz-4.md"), bad_effort).unwrap();
 
         let loaded = storage.list_all_issues_tolerant().unwrap();
         assert_eq!(loaded.items.len(), 1);
-        assert_eq!(loaded.items[0].id, "demo-1");
+        assert_eq!(loaded.items[0].id, "tz-1");
         assert_eq!(loaded.skipped.len(), 3);
         let mut skipped = loaded.skipped.clone();
         skipped.sort_by(|a, b| a.path.cmp(&b.path));
-        for (s, n) in skipped.iter().zip(["demo-2", "demo-3", "demo-4"]) {
+        for (s, n) in skipped.iter().zip(["tz-2", "tz-3", "tz-4"]) {
             assert_eq!(s.path, dir.join(format!("{n}.md")));
             assert!(
                 !s.error.is_empty() && !s.error.contains('\n'),
@@ -4568,15 +4199,15 @@ mod tolerant_loader_tests {
     #[test]
     fn dependents_cover_all_parsed_issues_including_closed() {
         let (_tmp, storage) = setup();
-        let parent = Issue::new("demo-1".into(), "p".into(), 2, IssueType::Epic);
-        let mut child = Issue::new("demo-2".into(), "c".into(), 2, IssueType::Task);
+        let parent = Issue::new("tz-1".into(), "p".into(), 2, IssueType::Epic);
+        let mut child = Issue::new("tz-2".into(), "c".into(), 2, IssueType::Task);
         child
             .depends_on
-            .insert("demo-1".into(), DependencyType::ChildOf);
-        let mut blocked = Issue::new("demo-3".into(), "b".into(), 2, IssueType::Task);
+            .insert("tz-1".into(), DependencyType::ChildOf);
+        let mut blocked = Issue::new("tz-3".into(), "b".into(), 2, IssueType::Task);
         blocked
             .depends_on
-            .insert("demo-2".into(), DependencyType::BlockedBy);
+            .insert("tz-2".into(), DependencyType::BlockedBy);
         blocked.status = Status::Closed;
         for i in [&parent, &child, &blocked] {
             write_issue(&storage, i);
@@ -4586,14 +4217,14 @@ mod tolerant_loader_tests {
         assert!(loaded.skipped.is_empty());
         assert_eq!(loaded.items.len(), 3);
         let get = |id: &str| loaded.items.iter().find(|i| i.id == id).unwrap();
-        assert_eq!(get("demo-1").dependents.len(), 1);
-        assert_eq!(get("demo-1").dependents[0].id, "demo-2");
-        assert_eq!(get("demo-2").dependents[0].id, "demo-3");
-        assert_eq!(get("demo-3").status, Status::Closed);
+        assert_eq!(get("tz-1").dependents.len(), 1);
+        assert_eq!(get("tz-1").dependents[0].id, "tz-2");
+        assert_eq!(get("tz-2").dependents[0].id, "tz-3");
+        assert_eq!(get("tz-3").status, Status::Closed);
 
-        let closed: HashSet<String> = ["demo-2".to_string()].into();
-        assert!(has_unresolved_dependencies(get("demo-3"), &HashSet::new()));
-        assert!(!has_unresolved_dependencies(get("demo-3"), &closed));
+        let closed: HashSet<String> = ["tz-2".to_string()].into();
+        assert!(has_unresolved_dependencies(get("tz-3"), &HashSet::new()));
+        assert!(!has_unresolved_dependencies(get("tz-3"), &closed));
     }
 
     #[test]
@@ -4601,7 +4232,7 @@ mod tolerant_loader_tests {
         let (_tmp, storage) = setup();
         write_issue(
             &storage,
-            &Issue::new("demo-1".into(), "ok".into(), 2, IssueType::Task),
+            &Issue::new("tz-1".into(), "ok".into(), 2, IssueType::Task),
         );
         let ro = Storage::open_readonly(storage.get_tazk_dir()).unwrap();
         assert_eq!(ro.list_all_issues_tolerant().unwrap().items.len(), 1);

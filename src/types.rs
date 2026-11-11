@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
+/// The one prefix every issue ID starts with (`tz-1`, `tz-a1b2c`).
+pub const ID_PREFIX: &str = "tz-";
+
 /// Issue status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

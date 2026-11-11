@@ -131,10 +131,6 @@ impl std::str::FromStr for ValidationMode {
 enum Commands {
     /// Initialize tazk in current directory
     Init {
-        /// Issue prefix (e.g., 'myproject' for myproject-1, myproject-2)
-        #[arg(short, long)]
-        prefix: Option<String>,
-
         /// Use hash-based issue IDs instead of sequential numbers
         #[arg(long = "tz-hash-ids")]
         tz_hash_ids: bool,
@@ -299,7 +295,7 @@ enum Commands {
 
     /// Show issue details
     Show {
-        /// Issue IDs (supports shorthand: "14" expands to "prefix-14")
+        /// Issue IDs (supports shorthand: "14" expands to "tz-14")
         issue_ids: Vec<String>,
     },
 
@@ -544,20 +540,6 @@ enum Commands {
         tz_patch_code: bool,
     },
 
-    /// Rename the issue prefix for all issues
-    RenamePrefix {
-        /// New prefix to use
-        new_prefix: String,
-
-        /// Preview changes without applying them
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Force rename even if issues would conflict
-        #[arg(long)]
-        force: bool,
-    },
-
     /// Manage dependencies
     Dep {
         #[command(subcommand)]
@@ -781,7 +763,6 @@ impl Commands {
             | Self::Close { .. }
             | Self::Reopen { .. }
             | Self::Rename { .. }
-            | Self::RenamePrefix { .. }
             | Self::Sync { .. }
             | Self::Migrate { .. }
             | Self::MergeDriver { .. } => false,
@@ -870,7 +851,7 @@ enum DepCommands {
 
     /// Show dependency tree
     Tree {
-        /// Issue ID to show tree for (supports shorthand: "14" expands to "prefix-14")
+        /// Issue ID to show tree for (supports shorthand: "14" expands to "tz-14")
         issue_id: String,
 
         /// Maximum tree depth to display (safety limit)
@@ -1900,7 +1881,6 @@ fn run() -> Result<()> {
 
     match cli.command {
         Commands::Init {
-            prefix,
             tz_hash_ids,
             tz_issue_layout,
             quiet,
@@ -1925,7 +1905,7 @@ fn run() -> Result<()> {
                     other
                 ),
             };
-            let storage = Storage::init(tazk_dir, prefix, tz_hash_ids, issue_layout)?;
+            let storage = Storage::init(tazk_dir, tz_hash_ids, issue_layout)?;
 
             // Log command after successful init
             if !tz_no_cmd_logging {
@@ -1933,10 +1913,7 @@ fn run() -> Result<()> {
             }
 
             if !json && !quiet {
-                println!(
-                    "Initialized tazk database with prefix: {}",
-                    storage.get_prefix()?
-                );
+                println!("Initialized tazk database");
             }
             Ok(())
         }
@@ -2105,13 +2082,12 @@ fn run() -> Result<()> {
                 anyhow::bail!("No issue IDs provided. Usage: tz show <issue-id> [issue-ids...]");
             }
 
-            let prefix = storage.get_prefix()?;
             let mut issues = Vec::new();
 
-            // Normalize issue IDs (expand numeric shorthand like "14" -> "prefix-14")
+            // Normalize issue IDs (expand numeric shorthand like "14" -> "tz-14")
             for id_str in &issue_ids {
                 let normalized_id = if id_str.parse::<u32>().is_ok() {
-                    format!("{}-{}", prefix, id_str)
+                    format!("{}{}", types::ID_PREFIX, id_str)
                 } else {
                     id_str.clone()
                 };
@@ -2544,34 +2520,6 @@ fn run() -> Result<()> {
                         }
                     }
                 }
-            }
-            Ok(())
-        }
-
-        Commands::RenamePrefix {
-            new_prefix,
-            dry_run,
-            force,
-        } => {
-            let storage = get_storage(tz_dir, readonly)?;
-
-            // Log command after storage is validated
-            if !tz_no_cmd_logging {
-                let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
-            }
-
-            let changes = storage.rename_prefix(&new_prefix, dry_run, force)?;
-
-            if json {
-                println!("{}", serde_json::to_string_pretty(&changes)?);
-            } else if dry_run {
-                println!("Dry run - would make the following changes:");
-                for change in &changes {
-                    println!("  {}", change);
-                }
-            } else {
-                println!("Successfully renamed prefix to '{}'", new_prefix);
-                println!("Renamed {} issue(s)", changes.len() / 2); // Each issue has 2 changes: file rename + content update
             }
             Ok(())
         }
@@ -3551,10 +3499,9 @@ Issues chained together by dependencies.
 GETTING STARTED
   tz init   Initialize tz in your project
             Creates .tazk/ directory with project-specific database
-            Auto-detects prefix from directory name (e.g., myapp-1, myapp-2)
+            Issues are named tz-1, tz-2, ...
 
-  tz init --prefix api   Initialize with custom prefix
-            Issues will be named: api-1, api-2, ...
+  tz init --tz-hash-ids   Use hash-based IDs instead (tz-a1b2c, ...)
 
 CREATING ISSUES
   tz create "Fix login bug" -r agent   --role (human|agent) is required

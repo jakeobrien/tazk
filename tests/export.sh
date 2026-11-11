@@ -131,21 +131,21 @@ cd "$TEST_DIR"
 
 # Test 1: Initialize tazk database
 echo -e "\n${YELLOW}Test 1: Initialize tazk database${NC}"
-OUTPUT=$("$TZ_BIN" init --prefix exp 2>&1)
-assert_contains "$OUTPUT" "Initialized tazk database with prefix: exp" "Initialize should report prefix"
+OUTPUT=$("$TZ_BIN" init 2>&1)
+assert_contains "$OUTPUT" "Initialized tazk database" "Initialize should succeed"
 
 # Test 2: Create test issues with various types and states
 echo -e "\n${YELLOW}Test 2: Create test issues${NC}"
 "$TZ_BIN" create "Bug Fix A" -r agent -p 0 -t bug -d "Fix critical authentication bug" >/dev/null 2>&1
 "$TZ_BIN" create "Feature B" -r agent -p 1 -t feature -d "Add export functionality" >/dev/null 2>&1
-"$TZ_BIN" create "Task C" -r agent -p 2 -t task --deps exp-1 >/dev/null 2>&1
-"$TZ_BIN" claim exp-2 --as tester >/dev/null 2>&1
-"$TZ_BIN" close exp-1 --reason "Fixed" >/dev/null 2>&1
+"$TZ_BIN" create "Task C" -r agent -p 2 -t task --deps tz-1 >/dev/null 2>&1
+"$TZ_BIN" claim tz-2 --as tester >/dev/null 2>&1
+"$TZ_BIN" close tz-1 --reason "Fixed" >/dev/null 2>&1
 
 # Verify issues were created
-assert_file_exists ".tazk/issues/exp-1.md" "exp-1 file should exist"
-assert_file_exists ".tazk/issues/exp-2.md" "exp-2 file should exist"
-assert_file_exists ".tazk/issues/exp-3.md" "exp-3 file should exist"
+assert_file_exists ".tazk/issues/tz-1.md" "tz-1 file should exist"
+assert_file_exists ".tazk/issues/tz-2.md" "tz-2 file should exist"
+assert_file_exists ".tazk/issues/tz-3.md" "tz-3 file should exist"
 
 # Test 3: Export to stdout
 echo -e "\n${YELLOW}Test 3: Export to stdout (default)${NC}"
@@ -154,9 +154,9 @@ LINE_COUNT=$(echo "$STDOUT_EXPORT" | wc -l | tr -d ' ')
 assert_equals "3" "$LINE_COUNT" "Should export 3 issues to stdout"
 
 # Verify it's valid JSON
-assert_contains "$STDOUT_EXPORT" '"id":"exp-1"' "Should contain exp-1 in JSON"
-assert_contains "$STDOUT_EXPORT" '"id":"exp-2"' "Should contain exp-2 in JSON"
-assert_contains "$STDOUT_EXPORT" '"id":"exp-3"' "Should contain exp-3 in JSON"
+assert_contains "$STDOUT_EXPORT" '"id":"tz-1"' "Should contain tz-1 in JSON"
+assert_contains "$STDOUT_EXPORT" '"id":"tz-2"' "Should contain tz-2 in JSON"
+assert_contains "$STDOUT_EXPORT" '"id":"tz-3"' "Should contain tz-3 in JSON"
 
 # Test 4: Export to file with -o flag
 echo -e "\n${YELLOW}Test 4: Export to file with -o flag${NC}"
@@ -201,26 +201,26 @@ assert_contains "$FIRST_ISSUE" '"updated_at":' "Issue should have updated_at fie
 
 # Test 7: Verify dependencies/dependents format (MCP compatible)
 echo -e "\n${YELLOW}Test 7: Verify dependencies/dependents format${NC}"
-# exp-3 depends on exp-1
-EXP3_JSON=$(grep '"id":"exp-3"' "$JSONL_FILE")
+# tz-3 depends on tz-1
+EXP3_JSON=$(grep '"id":"tz-3"' "$JSONL_FILE")
 assert_contains "$EXP3_JSON" '"dependencies":[' "Should have dependencies array"
-assert_contains "$EXP3_JSON" '"id":"exp-1"' "Should have exp-1 dependency"
+assert_contains "$EXP3_JSON" '"id":"tz-1"' "Should have tz-1 dependency"
 
-# exp-1 should have exp-3 as dependent
-EXP1_JSON=$(grep '"id":"exp-1"' "$JSONL_FILE")
+# tz-1 should have tz-3 as dependent
+EXP1_JSON=$(grep '"id":"tz-1"' "$JSONL_FILE")
 assert_contains "$EXP1_JSON" '"dependents":[' "Should have dependents array"
-assert_contains "$EXP1_JSON" '"id":"exp-3"' "Should have exp-3 as dependent"
+assert_contains "$EXP1_JSON" '"id":"tz-3"' "Should have tz-3 as dependent"
 
 # Test 8: Export with filters
 echo -e "\n${YELLOW}Test 8: Export with status filter${NC}"
 OPEN_EXPORT=$("$TZ_BIN" export --status open 2>/dev/null)
 OPEN_COUNT=$(echo "$OPEN_EXPORT" | wc -l | tr -d ' ')
-assert_equals "1" "$OPEN_COUNT" "Should export 1 open issue (exp-3)"
+assert_equals "1" "$OPEN_COUNT" "Should export 1 open issue (tz-3)"
 
 # Also test closed filter
 CLOSED_EXPORT=$("$TZ_BIN" export --status closed 2>/dev/null)
 CLOSED_COUNT=$(echo "$CLOSED_EXPORT" | wc -l | tr -d ' ')
-assert_equals "1" "$CLOSED_COUNT" "Should export 1 closed issue (exp-1)"
+assert_equals "1" "$CLOSED_COUNT" "Should export 1 closed issue (tz-1)"
 
 # Print summary
 echo ""

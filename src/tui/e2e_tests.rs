@@ -112,13 +112,7 @@ impl Fixture {
         fixtures::init();
         let tmp = tempfile::tempdir().unwrap();
         let tazk_dir = tmp.path().join(".tazk");
-        let storage = Storage::init(
-            tazk_dir.clone(),
-            Some("fx".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage = Storage::init(tazk_dir.clone(), false, IssueStorageLayout::Flat).unwrap();
         for issue in fixture_issues() {
             write_issue(&tazk_dir, issue);
         }

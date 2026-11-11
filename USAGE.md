@@ -7,7 +7,7 @@ overview, see the [README](README.md).
 
 ### Core Commands
 
-- `tz init [--prefix PREFIX]` - Initialize a database
+- `tz init [--tz-hash-ids] [--tz-issue-layout flat|sharded]` - Initialize a database
 - `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required.
   - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `--effort 1-5`, `-l LABEL`
 - `tz list [FILTERS]` - List issues with optional filters (including `--assignee USER` and `-r/--role ROLE`)
@@ -278,7 +278,7 @@ are emitted using the same names.
 
 | Property | Required | Values | Notes |
 |----------|----------|--------|-------|
-| `id` | yes | `PREFIX-N`, or a hash/sharded form depending on how the database was initialised | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). Commands accept numeric shorthand (`14` expands to `PREFIX-14`). Set explicitly with `tz create --id`. |
+| `id` | yes | `tz-N`, or `tz-<hash>` if the database was initialised with `--tz-hash-ids` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). Commands accept numeric shorthand (`14` expands to `tz-14`). Set explicitly with `tz create --id`. |
 | `title` | yes | Any text | Settable with `create`, `triage promote --title` and `update --title`. |
 | `status` | yes | See [Status](#status) | Default `open`. |
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |

@@ -100,65 +100,65 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: a repo with one issue whose description has a repeated token.
-"$TZ_BIN" init --prefix test >/dev/null 2>&1
+"$TZ_BIN" init >/dev/null 2>&1
 "$TZ_BIN" create "A task" -r agent -d "I have a CLI that lets agents file tasks. The CLI is clumsy to edit." >/dev/null 2>&1
 
-# Read back the description body of test-1 (everything after the "# Description" heading).
+# Read back the description body of tz-1 (everything after the "# Description" heading).
 desc_body() {
-    sed -n '/^# Description/,/^# /p' .tazk/issues/test-1.md | grep -v '^# ' | sed '/^$/d'
+    sed -n '/^# Description/,/^# /p' .tazk/issues/tz-1.md | grep -v '^# ' | sed '/^$/d'
 }
 
 # Test 1: a uniquely-matching search is replaced in place
 echo -e "\n${YELLOW}Test 1: Unique search/replace edits the description${NC}"
-OUTPUT=$("$TZ_BIN" update test-1 --search "clumsy to edit" --replace "edited via search/replace" 2>&1)
-assert_contains "$OUTPUT" "Updated issue: test-1 (description field)" "Should confirm targeted edit"
+OUTPUT=$("$TZ_BIN" update tz-1 --search "clumsy to edit" --replace "edited via search/replace" 2>&1)
+assert_contains "$OUTPUT" "Updated issue: tz-1 (description field)" "Should confirm targeted edit"
 assert_contains "$(desc_body)" "edited via search/replace" "Replacement text should be present"
-assert_fails "Old text should be gone" grep -qF "clumsy to edit" .tazk/issues/test-1.md
+assert_fails "Old text should be gone" grep -qF "clumsy to edit" .tazk/issues/tz-1.md
 
 # Test 2: a search that does not match fails and changes nothing
 echo -e "\n${YELLOW}Test 2: Missing search text is an error${NC}"
-BEFORE=$(cat .tazk/issues/test-1.md)
-assert_fails "Non-matching search should fail" "$TZ_BIN" update test-1 --search "no such text" --replace "x"
-assert_equals "$BEFORE" "$(cat .tazk/issues/test-1.md)" "File must be untouched after a failed search"
+BEFORE=$(cat .tazk/issues/tz-1.md)
+assert_fails "Non-matching search should fail" "$TZ_BIN" update tz-1 --search "no such text" --replace "x"
+assert_equals "$BEFORE" "$(cat .tazk/issues/tz-1.md)" "File must be untouched after a failed search"
 
 # Test 3: an ambiguous (multi-match) search is rejected by default
 echo -e "\n${YELLOW}Test 3: Ambiguous search is rejected without --replace-all${NC}"
-assert_fails "Ambiguous search should fail" "$TZ_BIN" update test-1 --search "CLI" --replace "tool"
-OUTPUT=$("$TZ_BIN" update test-1 --search "CLI" --replace "tool" 2>&1 || true)
+assert_fails "Ambiguous search should fail" "$TZ_BIN" update tz-1 --search "CLI" --replace "tool"
+OUTPUT=$("$TZ_BIN" update tz-1 --search "CLI" --replace "tool" 2>&1 || true)
 assert_contains "$OUTPUT" "2 times" "Error should report the match count"
 
 # Test 4: --replace-all rewrites every occurrence
 echo -e "\n${YELLOW}Test 4: --replace-all rewrites every occurrence${NC}"
-"$TZ_BIN" update test-1 --search "CLI" --replace "tool" --replace-all >/dev/null 2>&1
-assert_fails "No CLI should remain" grep -qF "CLI" .tazk/issues/test-1.md
+"$TZ_BIN" update tz-1 --search "CLI" --replace "tool" --replace-all >/dev/null 2>&1
+assert_fails "No CLI should remain" grep -qF "CLI" .tazk/issues/tz-1.md
 assert_contains "$(desc_body)" "tool" "Replacement should be present after replace-all"
 
 # Test 5: --field targets a non-default field
 echo -e "\n${YELLOW}Test 5: --field targets another text field${NC}"
-"$TZ_BIN" update test-1 --design "alpha beta gamma" >/dev/null 2>&1
-OUTPUT=$("$TZ_BIN" update test-1 --field design --search "beta" --replace "BETA" 2>&1)
-assert_contains "$OUTPUT" "Updated issue: test-1 (design field)" "Should report the design field"
-assert_contains "$(sed -n '/^# Design/,/^# /p' .tazk/issues/test-1.md)" "alpha BETA gamma" "Design field should be edited"
+"$TZ_BIN" update tz-1 --design "alpha beta gamma" >/dev/null 2>&1
+OUTPUT=$("$TZ_BIN" update tz-1 --field design --search "beta" --replace "BETA" 2>&1)
+assert_contains "$OUTPUT" "Updated issue: tz-1 (design field)" "Should report the design field"
+assert_contains "$(sed -n '/^# Design/,/^# /p' .tazk/issues/tz-1.md)" "alpha BETA gamma" "Design field should be edited"
 
 # Test 6: --search requires --replace, and conflicts with wholesale --description
 echo -e "\n${YELLOW}Test 6: Argument guards${NC}"
-assert_fails "--search without --replace should fail" "$TZ_BIN" update test-1 --search "tool"
-assert_fails "--search with --description should conflict" "$TZ_BIN" update test-1 --search "tool" --replace "x" --description "whole new body"
+assert_fails "--search without --replace should fail" "$TZ_BIN" update tz-1 --search "tool"
+assert_fails "--search with --description should conflict" "$TZ_BIN" update tz-1 --search "tool" --replace "x" --description "whole new body"
 
 # Test 7: --append tacks a new paragraph onto a field
 echo -e "\n${YELLOW}Test 7: --append adds to the end of a field${NC}"
-OUTPUT=$("$TZ_BIN" update test-1 --append "An appended closing paragraph." 2>&1)
-assert_contains "$OUTPUT" "Appended to issue: test-1 (description field)" "Should confirm the append"
+OUTPUT=$("$TZ_BIN" update tz-1 --append "An appended closing paragraph." 2>&1)
+assert_contains "$OUTPUT" "Appended to issue: tz-1 (description field)" "Should confirm the append"
 assert_contains "$(desc_body)" "An appended closing paragraph." "Appended text should be present"
 # The pre-existing description content must still be there.
 assert_contains "$(desc_body)" "edited via search/replace" "Original description must be preserved"
 
 # Test 8: --append honors --field and conflicts with the wholesale setters
 echo -e "\n${YELLOW}Test 8: --append field selection and guards${NC}"
-"$TZ_BIN" update test-1 --field design --append "An appended design note." >/dev/null 2>&1
-assert_contains "$(sed -n '/^# Design/,/^# /p' .tazk/issues/test-1.md)" "An appended design note." "Append should target the design field"
-assert_fails "--append with --description should conflict" "$TZ_BIN" update test-1 --append "x" --description "whole new body"
-assert_fails "--append with --search should conflict" "$TZ_BIN" update test-1 --append "x" --search "y" --replace "z"
+"$TZ_BIN" update tz-1 --field design --append "An appended design note." >/dev/null 2>&1
+assert_contains "$(sed -n '/^# Design/,/^# /p' .tazk/issues/tz-1.md)" "An appended design note." "Append should target the design field"
+assert_fails "--append with --description should conflict" "$TZ_BIN" update tz-1 --append "x" --description "whole new body"
+assert_fails "--append with --search should conflict" "$TZ_BIN" update tz-1 --append "x" --search "y" --replace "z"
 
 # Print summary
 echo ""

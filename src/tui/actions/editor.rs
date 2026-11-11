@@ -200,13 +200,7 @@ mod tests {
 
     fn storage(layout: IssueStorageLayout) -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            layout,
-        )
-        .unwrap();
+        let storage = Storage::init(tmp.path().join(".tazk"), false, layout).unwrap();
         (tmp, storage)
     }
 
@@ -234,8 +228,8 @@ mod tests {
     #[test]
     fn resolves_flat_and_sharded_issue_paths() {
         for (layout, rel) in [
-            (IssueStorageLayout::Flat, "issues/demo-1.md"),
-            (IssueStorageLayout::Sharded, "issues/n/0/1/demo-1.md"),
+            (IssueStorageLayout::Flat, "issues/tz-1.md"),
+            (IssueStorageLayout::Sharded, "issues/n/0/1/tz-1.md"),
         ] {
             let (_tmp, storage) = storage(layout);
             let id = create(&storage);
@@ -254,7 +248,7 @@ mod tests {
             .set_config_value("issue-storage-layout", "sharded")
             .unwrap();
         let path = resolve_path(&storage, &EditorTarget::Issue(id)).unwrap();
-        assert_eq!(path, storage.get_tazk_dir().join("issues/demo-1.md"));
+        assert_eq!(path, storage.get_tazk_dir().join("issues/tz-1.md"));
 
         let name = storage.add_triage_item("a report").unwrap().name;
         let path = resolve_path(&storage, &EditorTarget::Triage(name.clone())).unwrap();
@@ -264,7 +258,7 @@ mod tests {
     #[test]
     fn missing_files_are_errors() {
         let (_tmp, storage) = storage(IssueStorageLayout::Flat);
-        assert!(resolve_path(&storage, &EditorTarget::Issue("demo-9".into())).is_err());
+        assert!(resolve_path(&storage, &EditorTarget::Issue("tz-9".into())).is_err());
         assert!(resolve_path(&storage, &EditorTarget::Triage("nope.md".into())).is_err());
     }
 

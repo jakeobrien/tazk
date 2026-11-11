@@ -100,7 +100,7 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: an empty repo
-"$TZ_BIN" init --prefix test >/dev/null 2>&1
+"$TZ_BIN" init >/dev/null 2>&1
 
 field() { grep "^$2:" ".tazk/issues/$1.md" | sed "s/^$2: *//"; }
 
@@ -108,24 +108,24 @@ field() { grep "^$2:" ".tazk/issues/$1.md" | sed "s/^$2: *//"; }
 echo -e "\n${YELLOW}Test 1: create requires --role${NC}"
 assert_fails "create without --role should fail" "$TZ_BIN" create "No role"
 OUTPUT=$("$TZ_BIN" create "With role" -r human 2>&1)
-assert_contains "$OUTPUT" "Created issue: test-1" "create with --role should succeed"
-assert_equals "open" "$(field test-1 status)" "create should produce an open issue"
-assert_equals "human" "$(field test-1 role)" "create should store the role"
+assert_contains "$OUTPUT" "Created issue: tz-1" "create with --role should succeed"
+assert_equals "open" "$(field tz-1 status)" "create should produce an open issue"
+assert_equals "human" "$(field tz-1 role)" "create should store the role"
 
 # Test 2: reopen requires a role
 echo -e "\n${YELLOW}Test 2: reopen requires a role${NC}"
-"$TZ_BIN" close test-1 >/dev/null 2>&1
+"$TZ_BIN" close tz-1 >/dev/null 2>&1
 # Simulate a legacy issue with no role.
-sed -i.bak '/^role:/d' .tazk/issues/test-1.md && rm .tazk/issues/test-1.md.bak
-OUTPUT=$("$TZ_BIN" reopen test-1 2>&1 || true)
+sed -i.bak '/^role:/d' .tazk/issues/tz-1.md && rm .tazk/issues/tz-1.md.bak
+OUTPUT=$("$TZ_BIN" reopen tz-1 2>&1 || true)
 assert_contains "$OUTPUT" "--role" "reopen without a role should ask for --role"
-assert_equals "closed" "$(field test-1 status)" "Failed reopen should leave the issue closed"
-OUTPUT=$("$TZ_BIN" reopen test-1 --role agent 2>&1)
-assert_contains "$OUTPUT" "Reopened issue: test-1" "reopen with --role should succeed"
-assert_equals "agent" "$(field test-1 role)" "Role should be set by reopen"
-"$TZ_BIN" close test-1 >/dev/null 2>&1
-OUTPUT=$("$TZ_BIN" reopen test-1 2>&1)
-assert_contains "$OUTPUT" "Reopened issue: test-1" "reopen should keep an existing role"
+assert_equals "closed" "$(field tz-1 status)" "Failed reopen should leave the issue closed"
+OUTPUT=$("$TZ_BIN" reopen tz-1 --role agent 2>&1)
+assert_contains "$OUTPUT" "Reopened issue: tz-1" "reopen with --role should succeed"
+assert_equals "agent" "$(field tz-1 role)" "Role should be set by reopen"
+"$TZ_BIN" close tz-1 >/dev/null 2>&1
+OUTPUT=$("$TZ_BIN" reopen tz-1 2>&1)
+assert_contains "$OUTPUT" "Reopened issue: tz-1" "reopen should keep an existing role"
 
 # Print summary
 echo ""

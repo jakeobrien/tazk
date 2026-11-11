@@ -127,8 +127,8 @@ cd "$TEST_DIR"
 
 # Test 1: Initialize database with numeric IDs
 echo -e "\n${YELLOW}Test 1: Initialize database (default: numeric IDs)${NC}"
-OUTPUT=$("$TZ_BIN" init --prefix test 2>&1)
-assert_contains "$OUTPUT" "Initialized tazk database with prefix: test" "Initialize should succeed"
+OUTPUT=$("$TZ_BIN" init 2>&1)
+assert_contains "$OUTPUT" "Initialized tazk database" "Initialize should succeed"
 # Check config.yaml has tz-hash-ids: false
 CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config.yaml | awk '{print $2}' | tr -d "'\"")
 assert_equals "false" "$CONFIG_VALUE" "tz-hash-ids should default to false"
@@ -136,28 +136,28 @@ assert_equals "false" "$CONFIG_VALUE" "tz-hash-ids should default to false"
 # Test 2: Create issues with numeric IDs
 echo -e "\n${YELLOW}Test 2: Create issues with numeric IDs${NC}"
 "$TZ_BIN" create "First issue" -r agent -d "This is the first test issue" >/dev/null 2>&1
-"$TZ_BIN" create "Second issue" -r agent -d "This depends on the first" --deps test-1 >/dev/null 2>&1
-"$TZ_BIN" create "Third issue" -r agent -d "This also depends on the first" --deps test-1 >/dev/null 2>&1
+"$TZ_BIN" create "Second issue" -r agent -d "This depends on the first" --deps tz-1 >/dev/null 2>&1
+"$TZ_BIN" create "Third issue" -r agent -d "This also depends on the first" --deps tz-1 >/dev/null 2>&1
 
 # Verify numeric IDs were created
-assert_file_exists ".tazk/issues/test-1.md" "test-1.md should exist"
-assert_file_exists ".tazk/issues/test-2.md" "test-2.md should exist"
-assert_file_exists ".tazk/issues/test-3.md" "test-3.md should exist"
+assert_file_exists ".tazk/issues/tz-1.md" "tz-1.md should exist"
+assert_file_exists ".tazk/issues/tz-2.md" "tz-2.md should exist"
+assert_file_exists ".tazk/issues/tz-3.md" "tz-3.md should exist"
 
 # Test 3: Dry-run migration
 echo -e "\n${YELLOW}Test 3: Dry-run migration${NC}"
 OUTPUT=$("$TZ_BIN" migrate --dry-run 2>&1)
 assert_contains "$OUTPUT" "Dry run - would make the following changes:" "Should show dry-run header"
 assert_contains "$OUTPUT" "Update config.yaml: tz-hash-ids: false -> true" "Should update config"
-assert_contains "$OUTPUT" "Rename file: test-1.md ->" "Should rename test-1"
-assert_contains "$OUTPUT" "Rename file: test-2.md ->" "Should rename test-2"
-assert_contains "$OUTPUT" "Rename file: test-3.md ->" "Should rename test-3"
+assert_contains "$OUTPUT" "Rename file: tz-1.md ->" "Should rename tz-1"
+assert_contains "$OUTPUT" "Rename file: tz-2.md ->" "Should rename tz-2"
+assert_contains "$OUTPUT" "Rename file: tz-3.md ->" "Should rename tz-3"
 assert_contains "$OUTPUT" "Update dependency" "Should update dependencies"
 
 # Verify files haven't changed (dry-run)
-assert_file_exists ".tazk/issues/test-1.md" "test-1.md should still exist after dry-run"
-assert_file_exists ".tazk/issues/test-2.md" "test-2.md should still exist after dry-run"
-assert_file_exists ".tazk/issues/test-3.md" "test-3.md should still exist after dry-run"
+assert_file_exists ".tazk/issues/tz-1.md" "tz-1.md should still exist after dry-run"
+assert_file_exists ".tazk/issues/tz-2.md" "tz-2.md should still exist after dry-run"
+assert_file_exists ".tazk/issues/tz-3.md" "tz-3.md should still exist after dry-run"
 
 # Test 4: Actual migration
 echo -e "\n${YELLOW}Test 4: Actual migration${NC}"
@@ -166,9 +166,9 @@ assert_contains "$OUTPUT" "Successfully migrated 3 issue(s) to hash-based IDs" "
 assert_contains "$OUTPUT" "Updated config.yaml: tz-hash-ids: true" "Should confirm config update"
 
 # Verify old files are gone
-assert_file_not_exists ".tazk/issues/test-1.md" "test-1.md should be removed"
-assert_file_not_exists ".tazk/issues/test-2.md" "test-2.md should be removed"
-assert_file_not_exists ".tazk/issues/test-3.md" "test-3.md should be removed"
+assert_file_not_exists ".tazk/issues/tz-1.md" "tz-1.md should be removed"
+assert_file_not_exists ".tazk/issues/tz-2.md" "tz-2.md should be removed"
+assert_file_not_exists ".tazk/issues/tz-3.md" "tz-3.md should be removed"
 
 # Verify config was updated
 CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config.yaml | awk '{print $2}' | tr -d "'\"")
@@ -206,7 +206,7 @@ assert_contains "$OUTPUT" "$ISSUE_1_ID" "Should depend on migrated issue 1"
 # Test 7: Create new issue with hash ID
 echo -e "\n${YELLOW}Test 7: Create new issue with hash ID${NC}"
 OUTPUT=$("$TZ_BIN" create "Fourth issue" -r agent -d "Created after migration" 2>&1)
-assert_contains "$OUTPUT" "Created issue: test-" "Should create new issue"
+assert_contains "$OUTPUT" "Created issue: tz-" "Should create new issue"
 
 # Extract the new issue ID
 NEW_ISSUE_ID=$(echo "$OUTPUT" | grep "Created issue:" | awk '{print $3}')

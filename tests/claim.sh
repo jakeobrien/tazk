@@ -100,76 +100,76 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: a repo with two open issues
-"$TZ_BIN" init --prefix test >/dev/null 2>&1
+"$TZ_BIN" init >/dev/null 2>&1
 "$TZ_BIN" create "First task" -r agent -p 1 -t task >/dev/null 2>&1
 "$TZ_BIN" create "Second task" -r agent -p 2 -t task >/dev/null 2>&1
 
 # Test 1: claim sets assignee and status (no claim window)
 echo -e "\n${YELLOW}Test 1: Claim an issue${NC}"
-OUTPUT=$("$TZ_BIN" claim test-1 --as boxA 2>&1)
-assert_contains "$OUTPUT" "Claimed test-1 as 'boxA'" "Claim should report holder"
-assert_equals "in_progress" "$(grep '^status:' .tazk/issues/test-1.md | awk '{print $2}')" "Status should be in_progress"
-assert_equals "boxA" "$(grep '^assignee:' .tazk/issues/test-1.md | awk '{print $2}')" "Assignee should be boxA"
-assert_equals "false" "$(grep -q '^claimed_' .tazk/issues/test-1.md && echo true || echo false)" "No claim window fields should be written"
+OUTPUT=$("$TZ_BIN" claim tz-1 --as boxA 2>&1)
+assert_contains "$OUTPUT" "Claimed tz-1 as 'boxA'" "Claim should report holder"
+assert_equals "in_progress" "$(grep '^status:' .tazk/issues/tz-1.md | awk '{print $2}')" "Status should be in_progress"
+assert_equals "boxA" "$(grep '^assignee:' .tazk/issues/tz-1.md | awk '{print $2}')" "Assignee should be boxA"
+assert_equals "false" "$(grep -q '^claimed_' .tazk/issues/tz-1.md && echo true || echo false)" "No claim window fields should be written"
 
 # Test 2: --as is required, and update --claim / --for are gone
 echo -e "\n${YELLOW}Test 2: Flag validation${NC}"
-assert_fails "claim without --as should fail" "$TZ_BIN" claim test-2
-assert_fails "update --claim should no longer exist" "$TZ_BIN" update test-2 --claim --as boxA
-assert_fails "claim --for should no longer exist" "$TZ_BIN" claim test-2 --as boxA --for 4h
+assert_fails "claim without --as should fail" "$TZ_BIN" claim tz-2
+assert_fails "update --claim should no longer exist" "$TZ_BIN" update tz-2 --claim --as boxA
+assert_fails "claim --for should no longer exist" "$TZ_BIN" claim tz-2 --as boxA --for 4h
 
 # Test 3: an in_progress issue cannot be claimed, even by the same identity
 echo -e "\n${YELLOW}Test 3: In-progress issue is protected${NC}"
-assert_fails "Claim by another worker should fail" "$TZ_BIN" claim test-1 --as boxB
-assert_fails "Re-claim by the same worker should fail" "$TZ_BIN" claim test-1 --as boxA
-assert_equals "boxA" "$(grep '^assignee:' .tazk/issues/test-1.md | awk '{print $2}')" "Holder should be unchanged after failed claim"
+assert_fails "Claim by another worker should fail" "$TZ_BIN" claim tz-1 --as boxB
+assert_fails "Re-claim by the same worker should fail" "$TZ_BIN" claim tz-1 --as boxA
+assert_equals "boxA" "$(grep '^assignee:' .tazk/issues/tz-1.md | awk '{print $2}')" "Holder should be unchanged after failed claim"
 
 # Test 4: claimed issue drops out of ready
 echo -e "\n${YELLOW}Test 4: Claimed work leaves the ready queue${NC}"
 OUTPUT=$("$TZ_BIN" ready 2>&1)
-if echo "$OUTPUT" | grep -qF "test-1:"; then
-    fail "test-1 should not appear in ready while claimed"
+if echo "$OUTPUT" | grep -qF "tz-1:"; then
+    fail "tz-1 should not appear in ready while claimed"
 else
-    success "test-1 excluded from ready while claimed"
+    success "tz-1 excluded from ready while claimed"
 fi
 TESTS_RUN=$((TESTS_RUN + 1))
 
 # Test 5: --force overrides the lock
 echo -e "\n${YELLOW}Test 5: Force-claim an in-progress issue${NC}"
-OUTPUT=$("$TZ_BIN" claim test-1 --as boxB --force 2>&1)
-assert_contains "$OUTPUT" "Claimed test-1 as 'boxB'" "Forced claim should succeed"
-assert_equals "boxB" "$(grep '^assignee:' .tazk/issues/test-1.md | awk '{print $2}')" "Assignee should be boxB after forced claim"
+OUTPUT=$("$TZ_BIN" claim tz-1 --as boxB --force 2>&1)
+assert_contains "$OUTPUT" "Claimed tz-1 as 'boxB'" "Forced claim should succeed"
+assert_equals "boxB" "$(grep '^assignee:' .tazk/issues/tz-1.md | awk '{print $2}')" "Assignee should be boxB after forced claim"
 
 # Test 6: host/team identity
 echo -e "\n${YELLOW}Test 6: host/team identity${NC}"
-OUTPUT=$("$TZ_BIN" claim test-2 --as boxA --team backend 2>&1)
-assert_contains "$OUTPUT" "Claimed test-2 as 'boxA/backend'" "claim should support --team"
-assert_equals "boxA/backend" "$(grep '^assignee:' .tazk/issues/test-2.md | awk '{print $2}')" "Assignee should be boxA/backend"
+OUTPUT=$("$TZ_BIN" claim tz-2 --as boxA --team backend 2>&1)
+assert_contains "$OUTPUT" "Claimed tz-2 as 'boxA/backend'" "claim should support --team"
+assert_equals "boxA/backend" "$(grep '^assignee:' .tazk/issues/tz-2.md | awk '{print $2}')" "Assignee should be boxA/backend"
 
 # Test 7: release returns the issue to the backlog
 echo -e "\n${YELLOW}Test 7: Release a claim${NC}"
-OUTPUT=$("$TZ_BIN" claim test-1 --release --as boxB 2>&1)
-assert_contains "$OUTPUT" "Released test-1" "Release should be confirmed"
-assert_equals "open" "$(grep '^status:' .tazk/issues/test-1.md | awk '{print $2}')" "Status should be open after release"
-assert_equals "false" "$(grep -q '^assignee:' .tazk/issues/test-1.md && echo true || echo false)" "Assignee should be cleared after release"
+OUTPUT=$("$TZ_BIN" claim tz-1 --release --as boxB 2>&1)
+assert_contains "$OUTPUT" "Released tz-1" "Release should be confirmed"
+assert_equals "open" "$(grep '^status:' .tazk/issues/tz-1.md | awk '{print $2}')" "Status should be open after release"
+assert_equals "false" "$(grep -q '^assignee:' .tazk/issues/tz-1.md && echo true || echo false)" "Assignee should be cleared after release"
 OUTPUT=$("$TZ_BIN" ready 2>&1)
-assert_contains "$OUTPUT" "test-1:" "test-1 should return to ready after release"
+assert_contains "$OUTPUT" "tz-1:" "tz-1 should return to ready after release"
 
 # Test 8: releasing someone else's claim requires --force
 echo -e "\n${YELLOW}Test 8: Force-release another worker's claim${NC}"
-"$TZ_BIN" claim test-1 --as boxA >/dev/null 2>&1
-assert_fails "Releasing another worker's claim should fail without --force" "$TZ_BIN" claim test-1 --release --as boxB
-OUTPUT=$("$TZ_BIN" claim test-1 --release --as boxB --force 2>&1)
-assert_contains "$OUTPUT" "Released test-1" "Force release should succeed"
+"$TZ_BIN" claim tz-1 --as boxA >/dev/null 2>&1
+assert_fails "Releasing another worker's claim should fail without --force" "$TZ_BIN" claim tz-1 --release --as boxB
+OUTPUT=$("$TZ_BIN" claim tz-1 --release --as boxB --force 2>&1)
+assert_contains "$OUTPUT" "Released tz-1" "Force release should succeed"
 
 # Test 9: claim survives JSONL round-trip
 echo -e "\n${YELLOW}Test 9: Claim survives JSONL sync round-trip${NC}"
-"$TZ_BIN" claim test-1 --as boxA >/dev/null 2>&1
-BEFORE=$(cat .tazk/issues/test-1.md)
+"$TZ_BIN" claim tz-1 --as boxA >/dev/null 2>&1
+BEFORE=$(cat .tazk/issues/tz-1.md)
 "$TZ_BIN" export --tz-output-default >/dev/null 2>&1
-rm .tazk/issues/test-1.md
+rm .tazk/issues/tz-1.md
 "$TZ_BIN" sync >/dev/null 2>&1
-AFTER=$(cat .tazk/issues/test-1.md)
+AFTER=$(cat .tazk/issues/tz-1.md)
 assert_equals "$BEFORE" "$AFTER" "Claimed issue should round-trip identically through JSONL"
 
 # Print summary

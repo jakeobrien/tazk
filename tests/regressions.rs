@@ -22,13 +22,7 @@ use tazk::types::{Issue, IssueType};
 
 fn fixture(layout: IssueStorageLayout) -> (tempfile::TempDir, Storage) {
     let temp = tempfile::tempdir().unwrap();
-    let storage = Storage::init(
-        temp.path().join("database"),
-        Some("r".into()),
-        false,
-        layout,
-    )
-    .unwrap();
+    let storage = Storage::init(temp.path().join("database"), false, layout).unwrap();
     (temp, storage)
 }
 
@@ -54,7 +48,7 @@ fn create(storage: &Storage, id: &str, title: &str) -> anyhow::Result<Issue> {
 fn unsafe_ids_cannot_create_rename_read_or_write_comments() {
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         let (_temp, storage) = fixture(layout);
-        create(&storage, "r-1", "Keep me").unwrap();
+        create(&storage, "tz-1", "Keep me").unwrap();
         for id in [
             "",
             ".",
@@ -65,18 +59,18 @@ fn unsafe_ids_cannot_create_rename_read_or_write_comments() {
             r"C:\outside",
             r"C:outside",
             r"\\server\share",
-            "r-1:stream",
+            "tz-1:stream",
             "CON",
             "NUL.txt",
-            "r-2.",
-            "r-2 ",
+            "tz-2.",
+            "tz-2 ",
         ] {
             assert!(
                 create(&storage, id, "Bad").is_err(),
                 "create accepted {id:?}"
             );
             assert!(
-                storage.rename_issue("r-1", id, false).is_err(),
+                storage.rename_issue("tz-1", id, false).is_err(),
                 "rename accepted {id:?}"
             );
             assert!(storage.get_issue(id).is_err(), "read accepted {id:?}");
@@ -85,27 +79,8 @@ fn unsafe_ids_cannot_create_rename_read_or_write_comments() {
                 "comments accepted {id:?}"
             );
         }
-        assert_eq!(storage.get_issue("r-1").unwrap().unwrap().title, "Keep me");
+        assert_eq!(storage.get_issue("tz-1").unwrap().unwrap().title, "Keep me");
     }
-}
-
-#[test]
-fn unsafe_prefixes_are_rejected_before_initialization_or_config_update() {
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("uninitialized");
-    assert!(Storage::init(
-        path.clone(),
-        Some("../escape".into()),
-        false,
-        IssueStorageLayout::Flat
-    )
-    .is_err());
-    assert!(!path.exists());
-    let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    assert!(storage
-        .set_config_value("issue-prefix", r"..\escape")
-        .is_err());
-    assert_eq!(storage.get_prefix().unwrap(), "r");
 }
 
 #[test]
@@ -140,9 +115,9 @@ fn a_symlink_cannot_redirect_issue_writes_outside_the_database() {
     let (temp, storage) = fixture(IssueStorageLayout::Flat);
     let sentinel = temp.path().join("outside.md");
     fs::write(&sentinel, "keep this").unwrap();
-    std::os::unix::fs::symlink(&sentinel, storage.get_tazk_dir().join("issues/r-1.md")).unwrap();
-    assert!(create(&storage, "r-1", "overwrite").is_err());
-    assert!(storage.get_issue("r-1").is_err());
+    std::os::unix::fs::symlink(&sentinel, storage.get_tazk_dir().join("issues/tz-1.md")).unwrap();
+    assert!(create(&storage, "tz-1", "overwrite").is_err());
+    assert!(storage.get_issue("tz-1").is_err());
     assert_eq!(fs::read_to_string(sentinel).unwrap(), "keep this");
 }
 
@@ -181,7 +156,7 @@ fn import_fixture_issues(storage: &Storage, ids: &[&str]) -> Vec<Issue> {
 fn repacking_swaps_and_cycles_preserves_all_issues_dependencies_and_comments() {
     use tazk::types::DependencyType;
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
-        for ids in [vec!["r-2", "r-1"], vec!["r-3", "r-1", "r-2"]] {
+        for ids in [vec!["tz-2", "tz-1"], vec!["tz-3", "tz-1", "tz-2"]] {
             let (_temp, storage) = fixture(layout);
             let issues = import_fixture_issues(&storage, &ids);
             storage
@@ -218,9 +193,9 @@ fn repacking_swaps_and_cycles_preserves_all_issues_dependencies_and_comments() {
 
 #[test]
 fn every_id_migration_preserves_comment_ownership_and_jsonl_ids() {
-    for mode in ["rename", "prefix", "hash", "numeric", "repack"] {
+    for mode in ["rename", "hash", "numeric", "repack"] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-        let old_id = if mode == "numeric" { "r-abcd" } else { "r-2" };
+        let old_id = if mode == "numeric" { "tz-abcd" } else { "tz-2" };
         let originals = import_fixture_issues(&storage, &[old_id]);
         let comment = storage
             .add_comment(old_id, "review", "keep my identity")
@@ -232,12 +207,8 @@ fn every_id_migration_preserves_comment_ownership_and_jsonl_ids() {
         .unwrap();
         let new_id = match mode {
             "rename" => {
-                storage.rename_issue(old_id, "r-9", false).unwrap();
-                "r-9".to_owned()
-            }
-            "prefix" => {
-                storage.rename_prefix("new", false, false).unwrap();
-                "new-2".to_owned()
+                storage.rename_issue(old_id, "tz-9", false).unwrap();
+                "tz-9".to_owned()
             }
             "hash" => storage.migrate_to_hash_ids(false, true).unwrap().1[old_id].clone(),
             "numeric" => storage.migrate_to_numeric_ids(false, true).unwrap().1[old_id].clone(),
@@ -262,21 +233,22 @@ fn every_id_migration_preserves_comment_ownership_and_jsonl_ids() {
 #[test]
 fn migration_preflight_failure_preserves_sources_and_config() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "keep issue").unwrap();
+    create(&storage, "tz-1", "keep issue").unwrap();
+    create(&storage, "tz-3", "move me").unwrap();
     fs::create_dir_all(storage.get_tazk_dir().join("comments")).unwrap();
     fs::write(
-        storage.get_tazk_dir().join("comments/new-1.json"),
+        storage.get_tazk_dir().join("comments/tz-2.json"),
         b"orphan comments",
     )
     .unwrap();
-    assert!(storage.rename_prefix("new", false, false).is_err());
+    assert!(storage.repack_numeric_ids(false, None).is_err());
     assert_eq!(
-        storage.get_issue("r-1").unwrap().unwrap().title,
+        storage.get_issue("tz-1").unwrap().unwrap().title,
         "keep issue"
     );
-    assert_eq!(storage.get_prefix().unwrap(), "r");
+    assert_eq!(storage.get_issue("tz-3").unwrap().unwrap().title, "move me");
     assert_eq!(
-        fs::read(storage.get_tazk_dir().join("comments/new-1.json")).unwrap(),
+        fs::read(storage.get_tazk_dir().join("comments/tz-2.json")).unwrap(),
         b"orphan comments"
     );
 }
@@ -285,11 +257,11 @@ fn migration_preflight_failure_preserves_sources_and_config() {
 fn repacking_closed_issues_can_swap_their_ids_with_open_issues() {
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         let (_temp, storage) = fixture(layout);
-        import_fixture_issues(&storage, &["r-1", "r-2"]);
-        storage.close_issue("r-1", Some("done")).unwrap();
+        import_fixture_issues(&storage, &["tz-1", "tz-2"]);
+        storage.close_issue("tz-1", Some("done")).unwrap();
         storage.repack_numeric_ids(false, Some(2)).unwrap();
-        let open = storage.get_issue("r-1").unwrap().unwrap();
-        let closed = storage.get_issue("r-2").unwrap().unwrap();
+        let open = storage.get_issue("tz-1").unwrap().unwrap();
+        let closed = storage.get_issue("tz-2").unwrap().unwrap();
         assert_eq!(open.title, "original 1");
         assert_eq!(open.status, tazk::types::Status::Open);
         assert_eq!(closed.title, "original 0");
@@ -307,7 +279,7 @@ fn layout_migration_preserves_mtime_and_newer_jsonl_edits() {
         (IssueStorageLayout::Sharded, IssueStorageLayout::Flat),
     ] {
         let (_temp, storage) = fixture(source);
-        let mut issue = create(&storage, "r-1", "original title").unwrap();
+        let mut issue = create(&storage, "tz-1", "original title").unwrap();
         let root = storage.get_tazk_dir();
         let original_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let markdown = load_markdown_issues(&root).unwrap();
@@ -327,7 +299,7 @@ fn layout_migration_preserves_mtime_and_newer_jsonl_edits() {
                 load_jsonl_issues(&jsonl_path).unwrap(),
             )
             .unwrap();
-        assert_eq!(before.jsonl_newer, ["r-1"]);
+        assert_eq!(before.jsonl_newer, ["tz-1"]);
 
         storage
             .migrate_issue_storage_layout(target, false, true)
@@ -338,7 +310,7 @@ fn layout_migration_preserves_mtime_and_newer_jsonl_edits() {
         let after = engine
             .analyze(markdown, load_jsonl_issues(&jsonl_path).unwrap())
             .unwrap();
-        assert_eq!(after.jsonl_newer, ["r-1"]);
+        assert_eq!(after.jsonl_newer, ["tz-1"]);
         assert!(after.markdown_newer.is_empty());
     }
 }
@@ -349,7 +321,6 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
 
     enum Migration {
         Rename,
-        Prefix,
         Hash,
         Numeric,
         Repack,
@@ -358,16 +329,15 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
     for layout in [IssueStorageLayout::Flat, IssueStorageLayout::Sharded] {
         for migration in [
             Migration::Rename,
-            Migration::Prefix,
             Migration::Hash,
             Migration::Numeric,
             Migration::Repack,
         ] {
             let (_temp, storage) = fixture(layout);
             let old_id = if matches!(migration, Migration::Numeric) {
-                "r-abcd"
+                "tz-abcd"
             } else {
-                "r-2"
+                "tz-2"
             };
             let mut independent = import_fixture_issues(&storage, &[old_id])
                 .into_iter()
@@ -393,10 +363,7 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
 
             match migration {
                 Migration::Rename => {
-                    storage.rename_issue(old_id, "r-9", false).unwrap();
-                }
-                Migration::Prefix => {
-                    storage.rename_prefix("new", false, false).unwrap();
+                    storage.rename_issue(old_id, "tz-9", false).unwrap();
                 }
                 Migration::Hash => {
                     storage.migrate_to_hash_ids(false, true).unwrap();
@@ -428,36 +395,36 @@ fn id_migrations_preserve_newer_independent_jsonl_edits() {
 fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
     use tazk::types::DependencyType;
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    for id in ["r-1", "r-2", "r-3", "r-4"] {
+    for id in ["tz-1", "tz-2", "tz-3", "tz-4"] {
         create(&storage, id, id).unwrap();
     }
     storage
-        .add_dependency("r-2", "r-1", DependencyType::BlockedBy)
+        .add_dependency("tz-2", "tz-1", DependencyType::BlockedBy)
         .unwrap();
     storage
-        .add_dependency("r-3", "r-missing", DependencyType::BlockedBy)
+        .add_dependency("tz-3", "tz-missing", DependencyType::BlockedBy)
         .unwrap();
     storage
-        .add_dependency("r-4", "r-1", DependencyType::RelatedTo)
+        .add_dependency("tz-4", "tz-1", DependencyType::RelatedTo)
         .unwrap();
     assert_eq!(storage.get_stats().unwrap().blocked_issues, 2);
-    storage.close_issue("r-1", Some("done")).unwrap();
+    storage.close_issue("tz-1", Some("done")).unwrap();
     let ready = storage.get_ready(None, None, None, "priority").unwrap();
-    assert!(ready.iter().any(|issue| issue.id == "r-2"));
-    assert!(ready.iter().any(|issue| issue.id == "r-4"));
-    assert!(!ready.iter().any(|issue| issue.id == "r-3"));
+    assert!(ready.iter().any(|issue| issue.id == "tz-2"));
+    assert!(ready.iter().any(|issue| issue.id == "tz-4"));
+    assert!(!ready.iter().any(|issue| issue.id == "tz-3"));
     let blocked = storage.get_blocked().unwrap();
     assert_eq!(blocked.len(), 1);
-    assert_eq!(blocked[0].issue.id, "r-3");
-    assert_eq!(blocked[0].blocked_by, ["r-missing"]);
+    assert_eq!(blocked[0].issue.id, "tz-3");
+    assert_eq!(blocked[0].blocked_by, ["tz-missing"]);
     let stats = storage.get_stats().unwrap();
     assert_eq!(stats.ready_issues, ready.len());
     assert_eq!(stats.blocked_issues, blocked.len());
     storage
-        .reopen_issue("r-1", Some(tazk::types::Role::Agent), None)
+        .reopen_issue("tz-1", Some(tazk::types::Role::Agent), None)
         .unwrap();
     let ready = storage.get_ready(None, None, None, "priority").unwrap();
-    assert!(!ready.iter().any(|issue| issue.id == "r-2"));
+    assert!(!ready.iter().any(|issue| issue.id == "tz-2"));
     assert_eq!(storage.get_stats().unwrap().blocked_issues, 2);
 }
 
@@ -465,11 +432,11 @@ fn closing_and_reopening_prerequisites_updates_ready_blocked_and_stats() {
 fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
     use tazk::types::DependencyType;
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "prerequisite").unwrap();
-    create(&storage, "r-2", "dependent").unwrap();
+    create(&storage, "tz-1", "prerequisite").unwrap();
+    create(&storage, "tz-2", "dependent").unwrap();
     storage
         .update_issue(
-            "r-1",
+            "tz-1",
             std::collections::HashMap::from([
                 ("priority".to_owned(), "0".to_owned()),
                 ("assignee".to_owned(), "other".to_owned()),
@@ -478,12 +445,12 @@ fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
         .unwrap();
     storage
         .update_issue(
-            "r-2",
+            "tz-2",
             std::collections::HashMap::from([("assignee".to_owned(), "worker".to_owned())]),
         )
         .unwrap();
     storage
-        .add_dependency("r-2", "r-1", DependencyType::BlockedBy)
+        .add_dependency("tz-2", "tz-1", DependencyType::BlockedBy)
         .unwrap();
     assert!(storage
         .get_ready(
@@ -494,7 +461,7 @@ fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
         )
         .unwrap()
         .is_empty());
-    storage.close_issue("r-1", Some("done")).unwrap();
+    storage.close_issue("tz-1", Some("done")).unwrap();
     let ready = storage
         .get_ready(
             Some("worker"),
@@ -504,7 +471,7 @@ fn ready_filters_do_not_hide_a_prerequisite_in_another_assignee_or_priority() {
         )
         .unwrap();
     assert_eq!(ready.len(), 1);
-    assert_eq!(ready[0].id, "r-2");
+    assert_eq!(ready[0].id, "tz-2");
 }
 
 #[test]
@@ -514,13 +481,13 @@ fn updates_refuse_unrecognized_or_ambiguous_sections_without_losing_text() {
         "\n# Notes\n\nfirst notes\n\n# Notes\n\nsecond notes\n",
     ] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-        create(&storage, "r-1", "keep").unwrap();
-        let path = storage.get_tazk_dir().join("issues/r-1.md");
+        create(&storage, "tz-1", "keep").unwrap();
+        let path = storage.get_tazk_dir().join("issues/tz-1.md");
         let original = fs::read_to_string(&path).unwrap() + extra;
         fs::write(&path, &original).unwrap();
         let error = storage
             .update_issue(
-                "r-1",
+                "tz-1",
                 std::collections::HashMap::from([("priority".to_owned(), "1".to_owned())]),
             )
             .expect_err("a partial parse must not be rewritten");
@@ -533,28 +500,28 @@ fn updates_refuse_unrecognized_or_ambiguous_sections_without_losing_text() {
 fn crlf_and_bom_frontmatter_survive_an_ordinary_update() {
     for bom in ["", "\u{feff}"] {
         let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-        create(&storage, "r-1", "Title ending in ---").unwrap();
-        let path = storage.get_tazk_dir().join("issues/r-1.md");
+        create(&storage, "tz-1", "Title ending in ---").unwrap();
+        let path = storage.get_tazk_dir().join("issues/tz-1.md");
         let original = fs::read_to_string(&path).unwrap() + "\n# Description\n\n  indented text\n";
         fs::write(&path, format!("{bom}{}", original.replace('\n', "\r\n"))).unwrap();
         let updated = storage
             .update_issue(
-                "r-1",
+                "tz-1",
                 std::collections::HashMap::from([("priority".to_owned(), "1".to_owned())]),
             )
             .unwrap();
         assert_eq!(updated.title, "Title ending in ---");
         assert_eq!(updated.description, "  indented text");
-        assert_eq!(storage.get_issue("r-1").unwrap().unwrap().priority, 1);
+        assert_eq!(storage.get_issue("tz-1").unwrap().unwrap().priority, 1);
     }
 }
 
 #[test]
 fn unstructured_preamble_is_rejected_instead_of_discarded() {
-    let issue = Issue::new("r-1".into(), "title".into(), 2, IssueType::Task);
+    let issue = Issue::new("tz-1".into(), "title".into(), 2, IssueType::Task);
     let markdown = tazk::format::issue_to_markdown(&issue).unwrap();
     let malformed = markdown + "\nimportant prose before any section\n";
-    let error = tazk::format::markdown_to_issue("r-1", &malformed).unwrap_err();
+    let error = tazk::format::markdown_to_issue("tz-1", &malformed).unwrap_err();
     assert!(format!("{error:#}").contains("before the first Markdown section"));
 }
 
@@ -570,7 +537,7 @@ fn run_cli(storage: &Storage, args: &[&str]) -> std::process::Output {
 #[test]
 fn jsonl_sync_waits_for_the_database_lock_instead_of_writing_through_it() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "keep").unwrap();
+    create(&storage, "tz-1", "keep").unwrap();
     let _lock = tazk::lock::Lock::acquire(&storage.get_tazk_dir()).unwrap();
     let output = run_cli(&storage, &["sync"]);
     assert!(!output.status.success());
@@ -581,14 +548,14 @@ fn jsonl_sync_waits_for_the_database_lock_instead_of_writing_through_it() {
 #[test]
 fn a_stale_jsonl_sync_plan_cannot_overwrite_a_new_local_edit() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "original").unwrap();
+    create(&storage, "tz-1", "original").unwrap();
     let engine = tazk::sync::SyncEngine::new();
     let markdown = tazk::sync::load_markdown_issues(&storage.get_tazk_dir()).unwrap();
     let jsonl = std::collections::HashMap::new();
     let plan = engine.analyze_ref(&markdown, &jsonl).unwrap();
     storage
         .update_issue(
-            "r-1",
+            "tz-1",
             std::collections::HashMap::from([("title".to_owned(), "concurrent edit".to_owned())]),
         )
         .unwrap();
@@ -597,7 +564,7 @@ fn a_stale_jsonl_sync_plan_cannot_overwrite_a_new_local_edit() {
         .unwrap_err();
     assert!(error.to_string().contains("changed after analysis"));
     assert_eq!(
-        storage.get_issue("r-1").unwrap().unwrap().title,
+        storage.get_issue("tz-1").unwrap().unwrap().title,
         "concurrent edit"
     );
     assert!(!storage.get_tazk_dir().join("issues.jsonl").exists());
@@ -606,7 +573,7 @@ fn a_stale_jsonl_sync_plan_cannot_overwrite_a_new_local_edit() {
 #[test]
 fn custom_jsonl_paths_are_honored_and_dry_runs_return_json_with_planned_counts() {
     let (temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "local").unwrap();
+    create(&storage, "tz-1", "local").unwrap();
     let custom = temp.path().join("custom.jsonl");
     fs::write(&custom, "").unwrap();
     let dry = run_cli(
@@ -634,17 +601,17 @@ fn custom_jsonl_paths_are_honored_and_dry_runs_return_json_with_planned_counts()
     assert_eq!(report["dry_run"], false);
     assert!(tazk::sync::load_jsonl_issues(&custom)
         .unwrap()
-        .contains_key("r-1"));
+        .contains_key("tz-1"));
     assert!(!storage.get_tazk_dir().join("issues.jsonl").exists());
 }
 
 #[test]
 fn equal_time_content_conflicts_are_reported_without_overwriting_either_copy() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    let issue = create(&storage, "r-1", "markdown title").unwrap();
+    let issue = create(&storage, "tz-1", "markdown title").unwrap();
     let mut remote = issue.clone();
     remote.title = "JSONL title".into();
-    let markdown_path = storage.get_tazk_dir().join("issues/r-1.md");
+    let markdown_path = storage.get_tazk_dir().join("issues/tz-1.md");
     let jsonl_path = storage.get_tazk_dir().join("issues.jsonl");
     let jsonl_bytes = serde_json::to_vec(&remote).unwrap();
     fs::write(&jsonl_path, &jsonl_bytes).unwrap();
@@ -666,9 +633,9 @@ fn equal_time_content_conflicts_are_reported_without_overwriting_either_copy() {
 #[test]
 fn jsonl_sync_ignores_timestamp_and_label_order_when_content_is_unchanged() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "same content").unwrap();
+    create(&storage, "tz-1", "same content").unwrap();
     let issue = storage
-        .set_labels("r-1", vec!["alpha".into(), "beta".into()])
+        .set_labels("tz-1", vec!["alpha".into(), "beta".into()])
         .unwrap();
     let mut jsonl_issue = issue.clone();
     jsonl_issue.labels.reverse();
@@ -686,7 +653,7 @@ fn jsonl_sync_ignores_timestamp_and_label_order_when_content_is_unchanged() {
 #[test]
 fn duplicate_records_are_rejected_before_sync() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    let issue = create(&storage, "r-1", "keep").unwrap();
+    let issue = create(&storage, "tz-1", "keep").unwrap();
     let record = serde_json::to_string(&issue).unwrap();
     let jsonl_path = storage.get_tazk_dir().join("issues.jsonl");
     fs::write(&jsonl_path, format!("{record}\n{record}\n")).unwrap();
@@ -694,8 +661,8 @@ fn duplicate_records_are_rejected_before_sync() {
     let duplicate_dir = storage.get_tazk_dir().join("issues/duplicate");
     fs::create_dir_all(&duplicate_dir).unwrap();
     fs::copy(
-        storage.get_tazk_dir().join("issues/r-1.md"),
-        duplicate_dir.join("r-1.md"),
+        storage.get_tazk_dir().join("issues/tz-1.md"),
+        duplicate_dir.join("tz-1.md"),
     )
     .unwrap();
     assert!(tazk::sync::load_markdown_issues(&storage.get_tazk_dir()).is_err());
@@ -705,7 +672,7 @@ fn duplicate_records_are_rejected_before_sync() {
 #[test]
 fn an_unsuccessful_jsonl_write_returns_failure() {
     let (temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "keep").unwrap();
+    create(&storage, "tz-1", "keep").unwrap();
     let path = temp.path().join("readonly.jsonl");
     fs::write(&path, "").unwrap();
     let original_permissions = fs::metadata(&path).unwrap().permissions();
@@ -721,23 +688,23 @@ fn an_unsuccessful_jsonl_write_returns_failure() {
 #[test]
 fn readonly_rejects_modifications_before_opening_storage() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "keep").unwrap();
-    let path = storage.get_tazk_dir().join("issues/r-1.md");
+    create(&storage, "tz-1", "keep").unwrap();
+    let path = storage.get_tazk_dir().join("issues/tz-1.md");
     let before = fs::read(&path).unwrap();
     for args in [
-        vec!["update", "r-1", "--title", "changed"],
+        vec!["update", "tz-1", "--title", "changed"],
         vec!["create", "new", "-r", "agent"],
         vec!["triage", "add", "found"],
         vec!["triage", "rm", "x"],
         vec!["triage", "update", "x", "--append", "more"],
         vec!["triage", "promote", "x", "--title", "t", "-r", "agent"],
-        vec!["triage", "attach", "x", "--to", "r-1", "--author", "a"],
-        vec!["close", "r-1"],
-        vec!["rename", "r-1", "r-2"],
-        vec!["config", "set", "issue-prefix", "changed"],
-        vec!["comments", "add", "r-1", "--body", "new", "--author", "a"],
-        vec!["label", "add", "r-1", "new"],
-        vec!["dep", "add", "r-1", "--target", "r-2"],
+        vec!["triage", "attach", "x", "--to", "tz-1", "--author", "a"],
+        vec!["close", "tz-1"],
+        vec!["rename", "tz-1", "tz-2"],
+        vec!["config", "set", "tz-hash-ids", "true"],
+        vec!["comments", "add", "tz-1", "--body", "new", "--author", "a"],
+        vec!["label", "add", "tz-1", "new"],
+        vec!["dep", "add", "tz-1", "--target", "tz-2"],
         vec!["sync"],
         vec!["export", "--tz-output-default"],
     ] {
@@ -790,18 +757,18 @@ fn command_history_keeps_multiline_arguments_on_one_line() {
 #[test]
 fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
     let (_temp, storage) = fixture(IssueStorageLayout::Flat);
-    create(&storage, "r-1", "keep").unwrap();
+    create(&storage, "tz-1", "keep").unwrap();
     for name in ["config.yaml", ".gitignore"] {
         fs::remove_file(storage.get_tazk_dir().join(name)).unwrap();
     }
     for args in [
-        vec!["show", "r-1"],
+        vec!["show", "tz-1"],
         vec!["list"],
         vec!["ready"],
         vec!["stats"],
         vec!["blocked"],
         vec!["export"],
-        vec!["comments", "list", "r-1"],
+        vec!["comments", "list", "tz-1"],
         vec!["config", "list"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_tz"))
@@ -823,13 +790,11 @@ fn readonly_reads_do_not_bootstrap_or_log_and_refuse_recovery() {
         );
     }
     let readonly = Storage::open_readonly(storage.get_tazk_dir()).unwrap();
-    assert!(create(&readonly, "r-2", "must fail").is_err());
-    assert!(readonly
-        .set_config_value("issue-prefix", "changed")
-        .is_err());
+    assert!(create(&readonly, "tz-2", "must fail").is_err());
+    assert!(readonly.set_config_value("tz-hash-ids", "true").is_err());
     let journal = storage.get_tazk_dir().join("tazk-transaction.json");
     fs::write(&journal, "pending recovery sentinel").unwrap();
-    let output = run_cli(&storage, &["--readonly", "show", "r-1"]);
+    let output = run_cli(&storage, &["--readonly", "show", "tz-1"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires recovery"));
     assert_eq!(

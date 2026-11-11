@@ -404,13 +404,8 @@ mod tests {
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let tmp = tempfile::tempdir().unwrap();
-        let storage = Storage::init(
-            tmp.path().join(".tazk"),
-            Some("demo".to_string()),
-            false,
-            IssueStorageLayout::Flat,
-        )
-        .unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
         (tmp, storage)
     }
 
@@ -759,7 +754,7 @@ mod tests {
         let id = create_issue(&storage);
         let item = storage.add_triage_item("report").unwrap();
         let err = storage
-            .attach_triage_items(std::slice::from_ref(&item.name), "demo-99", "a")
+            .attach_triage_items(std::slice::from_ref(&item.name), "tz-99", "a")
             .unwrap_err();
         assert!(err.to_string().contains("Issue not found"), "{err}");
         assert!(storage
