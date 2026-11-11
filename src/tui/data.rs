@@ -75,6 +75,17 @@ pub struct Reloader {
     rx: Receiver<Result<Snapshot, String>>,
     in_flight: bool,
     pending: bool,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Reloader {
+    /// Wait for an in-flight load so process exit can't kill it while it
+    /// holds the tazk lock (which would leave a stale `tazk.lock` behind).
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Reloader {
@@ -86,6 +97,7 @@ impl Reloader {
             rx,
             in_flight: false,
             pending: false,
+            handle: None,
         }
     }
 
@@ -113,12 +125,12 @@ impl Reloader {
         self.in_flight = true;
         let load = Arc::clone(&self.load);
         let tx = self.tx.clone();
-        std::thread::spawn(move || {
+        self.handle = Some(std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load()))
                 .unwrap_or_else(|_| Err(anyhow::anyhow!("loader panicked")))
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(result);
-        });
+        }));
     }
 
     /// A finished load, if any (never blocks). Starts the coalesced

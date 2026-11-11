@@ -172,6 +172,13 @@ OUTPUT=$("$TZ_BIN" ready --group-priority 2>&1)
 assert_contains "$OUTPUT" "Priority 1" "group-priority prints a Priority 1 header"
 assert_contains "$OUTPUT" "Priority 2" "group-priority prints a Priority 2 header"
 
+# Effort is shown next to priority when set, and omitted when not.
+echo -e "\n${YELLOW}effort in default output${NC}"
+"$TZ_BIN" update tz-1 --effort 3 >/dev/null
+OUTPUT=$("$TZ_BIN" ready 2>&1)
+assert_contains "$(grep '^tz-1:' <<<"$OUTPUT")" "[priority: 1, effort: 3]" "ready shows priority and effort"
+assert_not_contains "$(grep '^tz-2:' <<<"$OUTPUT")" "effort" "ready omits effort when unset"
+
 # --sort random preserves the full ready set (just reorders it).
 echo -e "\n${YELLOW}--sort random preserves the set${NC}"
 TESTS_RUN=$((TESTS_RUN + 1))

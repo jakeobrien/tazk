@@ -3224,9 +3224,13 @@ fn run() -> Result<()> {
                 print_issues_grouped_by_priority(&ready);
             } else {
                 for issue in ready {
+                    let effort = issue
+                        .effort
+                        .map(|effort| format!(", effort: {effort}"))
+                        .unwrap_or_default();
                     println!(
-                        "{}: {} [priority: {}]",
-                        issue.id, issue.title, issue.priority
+                        "{}: {} [priority: {}{}]",
+                        issue.id, issue.title, issue.priority, effort
                     );
                 }
             }

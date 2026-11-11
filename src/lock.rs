@@ -7,6 +7,7 @@ use std::time::Duration;
 
 const MAX_BACKOFF_MS: u64 = 5000;
 const INITIAL_BACKOFF_MS: u64 = 10;
+const INVALID_LOCK_GRACE: Duration = Duration::from_secs(2);
 
 pub struct Lock {
     lock_path: PathBuf,
@@ -94,11 +95,18 @@ fn try_acquire_lock(lock_path: &Path, pid: u32) -> Result<()> {
             }
         } else {
             // A newly-created lock is briefly empty while its owner writes
-            // its PID. Treat invalid content as contention rather than
-            // deleting another process's just-created lock. The retry loop
-            // will observe the completed PID write; if the owner died before
-            // writing, we fail loudly instead of risking an unlocked write.
-            anyhow::bail!("Lock file is being initialized or is invalid");
+            // its PID. Treat that as contention, but if the file stays
+            // empty/invalid for a while its owner died before writing (e.g.
+            // killed on exit) and it is stale.
+            let age = fs::metadata(lock_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .unwrap_or_default();
+            if age < INVALID_LOCK_GRACE {
+                anyhow::bail!("Lock file is being initialized or is invalid");
+            }
+            fs::remove_file(lock_path).context("Failed to remove stale lock")?;
         }
     }
 

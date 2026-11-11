@@ -3,3 +3,5 @@ command_history.log
 tazk-transaction.json
 .tz-write-*
 sync_ancestors/
+
+tz-transaction.json
