@@ -377,8 +377,6 @@ async fn run_migration_test(
     ));
 
     // Verify all IDs are now hash-based and use base36 encoding
-    // Note: Hash IDs can contain only digits or only hex chars (e.g., "test-9753" or "test-afca")
-    // and still be valid base36 IDs - it's just random what characters appear
     let mut invalid_ids = Vec::new();
     let mut extended_base36_count = 0;
     let prefix = "test"; // Migration test uses "test" prefix
@@ -947,15 +945,14 @@ fn is_critical_failure(result: &tazk::action_generator::ExecutionResult) -> bool
 
 /// Check if an ID is a valid base36 hash ID (contains only 0-9, a-z after prefix)
 ///
-/// Base36 encoding uses characters [0-9a-z], giving better information density than hex.
-/// ///
+/// Base36 encoding uses characters [0-9a-z].
+///
 /// Examples of valid base36 hash IDs:
 /// - "test-3s9"
 /// - "tazk-0qeg"
 /// - "tz-12f8393"
 ///
-/// Examples of invalid (contains hex-only chars or uppercase):
-/// - "test-4f10" (valid hex but 'f' is valid in base36 too, but if it has ONLY hex it might be wrong impl)
+/// Examples of invalid (uppercase or non-base36 characters):
 /// - "test-ABCD" (uppercase not allowed)
 /// - "test-xyz!" (! is not base36)
 fn is_base36_hash_id(id: &str, prefix: &str) -> bool {
@@ -979,62 +976,15 @@ fn is_base36_hash_id(id: &str, prefix: &str) -> bool {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
-/// Check if an ID is a hexadecimal hash ID (not base36)
-///
-/// This detects if we're using hex encoding instead of base36.
-/// Hex-only IDs contain 0-9 and a-f, but base36 can also contain g-z.
-///
-/// NOTE: This can produce false positives! Base36 encoding CAN produce hashes that
-/// only contain hex characters (0-9, a-f) by random chance. This function is only
-/// useful as a heuristic, not a definitive test.
-///
-/// Returns true if the ID uses ONLY hex characters AND has alphabetic chars (suggesting possible hex encoding).
-fn is_hex_hash_id(id: &str, prefix: &str) -> bool {
-    // Must start with prefix-
-    let expected_prefix = format!("{}-", prefix);
-    if !id.starts_with(&expected_prefix) {
-        return false;
-    }
-
-    // Extract the hash part after prefix-
-    let hash_part = &id[expected_prefix.len()..];
-
-    // Hash must not be empty
-    if hash_part.is_empty() {
-        return false;
-    }
-
-    // All-digit IDs are valid for both hex and base36, can't distinguish
-    if hash_part.chars().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-
-    // Check if it has alphabetic characters AND they're all in hex range (a-f)
-    let has_alpha = hash_part.chars().any(|c| c.is_alphabetic());
-    let is_hex_chars = hash_part
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase());
-
-    // Check if it's NOT pure base36 (contains NO g-z)
-    let has_extended_base36 = hash_part.chars().any(|c| matches!(c, 'g'..='z'));
-
-    // It's hex-based if it uses only hex chars, has letters, and doesn't use extended base36
-    // But this is still just a heuristic - base36 can randomly produce hex-only hashes!
-    is_hex_chars && has_alpha && !has_extended_base36
-}
-
 /// Validate that all hash IDs in a collection use base36 encoding
 ///
 /// Returns Ok if all IDs use valid base36 characters (0-9, a-z).
-/// Note: Some base36 IDs may only contain hex characters (0-9, a-f) by random chance.
-/// This is normal and not an error.
 fn validate_hash_ids_are_base36(
     issues: &std::collections::HashMap<String, tazk::action_generator::ReferenceIssue>,
     prefix: &str,
     logger: &Logger,
 ) -> Result<()> {
     let mut non_base36_ids = Vec::new();
-    let mut hex_only_ids = Vec::new();
     let mut extended_base36_ids = Vec::new();
 
     for id in issues.keys() {
@@ -1046,8 +996,6 @@ fn validate_hash_ids_are_base36(
 
         if !is_base36_hash_id(id, prefix) {
             non_base36_ids.push(id.clone());
-        } else if is_hex_hash_id(id, prefix) {
-            hex_only_ids.push(id.clone());
         } else if id_suffix.chars().any(|c| matches!(c, 'g'..='z')) {
             extended_base36_ids.push(id.clone());
         }
@@ -1067,13 +1015,6 @@ fn validate_hash_ids_are_base36(
         "   ✓ All {} hash IDs use valid base36 characters",
         issues.len()
     ));
-
-    if !hex_only_ids.is_empty() {
-        logger.verbose(format!(
-            "     {} IDs use only hex-compatible chars (0-9, a-f) - this is normal for base36",
-            hex_only_ids.len()
-        ));
-    }
 
     if !extended_base36_ids.is_empty() {
         logger.verbose(format!(

@@ -1,44 +1,8 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-/// Hash encoding format for issue IDs
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HashEncoding {
-    /// Base36 encoding using [0-9a-z] (recommended)
-    Base36,
-    /// Hexadecimal encoding using [0-9a-f] (legacy format)
-    Hex,
-}
-
 /// Base36 alphabet for encoding (0-9, a-z)
 const BASE36_ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-
-/// Encode bytes to hexadecimal string of specified length (legacy format)
-///
-/// Converts a byte slice to a hex string representation.
-/// This is the legacy encoding format for backwards compatibility.
-///
-/// # Arguments
-/// * `data` - Byte slice to encode
-/// * `length` - Desired output length in hex characters
-///
-/// # Returns
-/// A hex string of the specified length
-fn encode_hex(data: &[u8], length: usize) -> String {
-    // Convert bytes to hex string
-    let hex_full = data
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>();
-
-    // Take exactly 'length' characters
-    if hex_full.len() >= length {
-        hex_full[..length].to_string()
-    } else {
-        // Pad with zeros if needed (shouldn't happen with proper byte count)
-        format!("{:0<width$}", hex_full, width = length)
-    }
-}
 
 /// Encode bytes to base36 string of specified length
 ///
@@ -101,6 +65,12 @@ fn encode_base36(data: &[u8], length: usize) -> String {
     result
 }
 
+/// True if the part of `id` after the last `-` consists only of ASCII digits.
+fn is_all_digit_suffix(id: &str) -> bool {
+    let suffix = id.rsplit('-').next().unwrap_or(id);
+    !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Generate a hash-based ID with collision handling
 ///
 /// Takes a collision checker function that returns true if the ID already exists.
@@ -113,18 +83,17 @@ fn encode_base36(data: &[u8], length: usize) -> String {
 /// * `description` - Issue description
 /// * `timestamp` - Creation timestamp for deterministic hashing
 /// * `estimated_db_size` - Approximate number of existing issues (for adaptive length)
-/// * `encoding` - Hash encoding format (base36 or hex)
 /// * `collision_check` - Function that returns true if an ID already exists
 ///
 /// # Returns
-/// A unique hash-based ID like "tazk-4f10" or "tazk-b127a5"
+/// A unique hash-based ID like "tazk-4f1" or "tazk-b127a5" (the hash always
+/// contains at least one letter)
 pub fn generate_hash_id_with_collision_check<F>(
     prefix: &str,
     title: &str,
     description: &str,
     timestamp: DateTime<Utc>,
     estimated_db_size: usize,
-    encoding: HashEncoding,
     mut collision_check: F,
 ) -> anyhow::Result<String>
 where
@@ -132,38 +101,19 @@ where
 {
     let creator = "user"; // Default creator
 
-    // Adaptive length based on database size and encoding
-    // Base36 starts at length 3 (vs hex which starts at 4)
-    let initial_length = match encoding {
-        HashEncoding::Base36 => {
-            if estimated_db_size < 10 {
-                3
-            } else if estimated_db_size < 100 {
-                4
-            } else if estimated_db_size < 1000 {
-                5
-            } else if estimated_db_size < 10000 {
-                6
-            } else if estimated_db_size < 100000 {
-                7
-            } else {
-                8
-            }
-        }
-        HashEncoding::Hex => {
-            // Hex encoding (legacy): starts at 4 chars
-            if estimated_db_size < 100 {
-                4
-            } else if estimated_db_size < 1000 {
-                5
-            } else if estimated_db_size < 10000 {
-                6
-            } else if estimated_db_size < 100000 {
-                7
-            } else {
-                8
-            }
-        }
+    // Adaptive length based on database size
+    let initial_length = if estimated_db_size < 10 {
+        3
+    } else if estimated_db_size < 100 {
+        4
+    } else if estimated_db_size < 1000 {
+        5
+    } else if estimated_db_size < 10000 {
+        6
+    } else if estimated_db_size < 100000 {
+        7
+    } else {
+        8
     };
 
     // Try adaptive lengths starting from initial_length, checking for collisions
@@ -177,8 +127,13 @@ where
                 timestamp,
                 length,
                 nonce,
-                encoding,
             );
+
+            // An all-digit suffix would be indistinguishable from a numeric ID,
+            // so treat it like a collision and move on to the next nonce/length.
+            if is_all_digit_suffix(&candidate) {
+                continue;
+            }
 
             // Check for collision using provided function
             if !collision_check(&candidate) {
@@ -196,7 +151,7 @@ where
 /// Generate a hash-based issue ID from content and metadata.
 ///
 /// The hash is deterministic based on title, description, creator, timestamp, and nonce.
-/// Supports both base36 encoding (recommended) and hex encoding (legacy).
+/// The hash is base36 encoded.
 ///
 /// # Arguments
 /// * `prefix` - The issue prefix (e.g., "tazk")
@@ -206,10 +161,10 @@ where
 /// * `timestamp` - Creation timestamp
 /// * `length` - Number of characters to use (3-8)
 /// * `nonce` - Collision avoidance nonce
-/// * `encoding` - Hash encoding format (base36 or hex)
 ///
 /// # Returns
-/// A hash-based ID like "tazk-3s9" (base36) or "tazk-a1b2" (hex)
+/// A hash-based ID like "tazk-3s9". The suffix may be all digits; callers that
+/// need a valid hash ID must use `generate_hash_id_with_collision_check`.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_hash_id(
     prefix: &str,
@@ -219,7 +174,6 @@ pub fn generate_hash_id(
     timestamp: DateTime<Utc>,
     length: usize,
     nonce: u32,
-    encoding: HashEncoding,
 ) -> String {
     // Combine inputs into stable content string
     // Format: "title|description|creator|timestamp_nanos|nonce"
@@ -237,29 +191,18 @@ pub fn generate_hash_id(
     hasher.update(content.as_bytes());
     let hash_result = hasher.finalize();
 
-    // Encode hash based on selected encoding
-    let short_hash = match encoding {
-        HashEncoding::Base36 => {
-            // Base36 encoding with variable length (3-8 chars)
-            // Determine how many bytes to use based on desired output length
-            let num_bytes = match length {
-                3 => 2, // 2 bytes = 16 bits ≈ 3.09 base36 chars
-                4 => 3, // 3 bytes = 24 bits ≈ 4.63 base36 chars
-                5 => 4, // 4 bytes = 32 bits ≈ 6.18 base36 chars
-                6 => 4, // 4 bytes = 32 bits ≈ 6.18 base36 chars
-                7 => 5, // 5 bytes = 40 bits ≈ 7.73 base36 chars
-                8 => 5, // 5 bytes = 40 bits ≈ 7.73 base36 chars
-                _ => 3, // default to 3 bytes
-            };
-            encode_base36(&hash_result[..num_bytes], length)
-        }
-        HashEncoding::Hex => {
-            // Hex encoding (legacy): simpler byte-to-length mapping
-            // 2 hex chars per byte
-            let num_bytes = length.div_ceil(2);
-            encode_hex(&hash_result[..num_bytes], length)
-        }
+    // Base36 encoding with variable length (3-8 chars)
+    // Determine how many bytes to use based on desired output length
+    let num_bytes = match length {
+        3 => 2, // 2 bytes = 16 bits ≈ 3.09 base36 chars
+        4 => 3, // 3 bytes = 24 bits ≈ 4.63 base36 chars
+        5 => 4, // 4 bytes = 32 bits ≈ 6.18 base36 chars
+        6 => 4, // 4 bytes = 32 bits ≈ 6.18 base36 chars
+        7 => 5, // 5 bytes = 40 bits ≈ 7.73 base36 chars
+        8 => 5, // 5 bytes = 40 bits ≈ 7.73 base36 chars
+        _ => 3, // default to 3 bytes
     };
+    let short_hash = encode_base36(&hash_result[..num_bytes], length);
 
     format!("{}-{}", prefix, short_hash)
 }
@@ -280,7 +223,6 @@ mod tests {
             timestamp,
             4,
             0,
-            HashEncoding::Base36,
         );
 
         // Should be format: prefix-hash
@@ -306,7 +248,6 @@ mod tests {
             timestamp,
             4,
             0,
-            HashEncoding::Base36,
         );
 
         let id2 = generate_hash_id(
@@ -317,7 +258,6 @@ mod tests {
             timestamp,
             4,
             0,
-            HashEncoding::Base36,
         );
 
         // Same inputs should produce same hash
@@ -336,7 +276,6 @@ mod tests {
             timestamp,
             4,
             0,
-            HashEncoding::Base36,
         );
 
         let id2 = generate_hash_id(
@@ -347,7 +286,6 @@ mod tests {
             timestamp,
             4,
             1,
-            HashEncoding::Base36,
         );
 
         // Different nonce should produce different hash
@@ -368,7 +306,6 @@ mod tests {
                 timestamp,
                 length,
                 0,
-                HashEncoding::Base36,
             );
 
             assert!(id.starts_with("test-"));
@@ -394,7 +331,6 @@ mod tests {
             timestamp,
             4,
             0,
-            HashEncoding::Base36,
         );
 
         let id2 = generate_hash_id(
@@ -405,66 +341,67 @@ mod tests {
             timestamp,
             4,
             0,
-            HashEncoding::Base36,
         );
 
         // Different inputs should produce different hash
         assert_ne!(id1, id2);
     }
 
-    #[test]
-    fn test_generate_hash_id_hex_encoding() {
-        let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
-        let id = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-            HashEncoding::Hex,
-        );
-
-        // Should be format: prefix-hash
-        assert!(id.starts_with("test-"));
-        assert_eq!(id.len(), "test-".len() + 4); // prefix + dash + 4 hex chars
-
-        // Verify it's hex (only contains 0-9, a-f)
-        let hash_part = &id["test-".len()..];
-        assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()));
+    /// Find a (title, length) whose nonce-0 candidate is all digits.
+    fn find_all_digit_title(timestamp: DateTime<Utc>, length: usize) -> String {
+        (0..100_000)
+            .map(|i| format!("title {i}"))
+            .find(|title| {
+                is_all_digit_suffix(&generate_hash_id(
+                    "t", title, "d", "user", timestamp, length, 0,
+                ))
+            })
+            .expect("an all-digit candidate exists within the search range")
     }
 
     #[test]
-    fn test_generate_hash_id_encodings_differ() {
+    fn all_digit_candidate_is_skipped() {
         let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
+        let title = find_all_digit_title(timestamp, 3);
+        let bad = generate_hash_id("t", &title, "d", "user", timestamp, 3, 0);
 
-        let id_base36 = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-            HashEncoding::Base36,
-        );
+        let mut seen = Vec::new();
+        let id = generate_hash_id_with_collision_check("t", &title, "d", timestamp, 0, |c| {
+            seen.push(c.to_string());
+            false
+        })
+        .unwrap();
 
-        let id_hex = generate_hash_id(
-            "test",
-            "First issue",
-            "Test description",
-            "user",
-            timestamp,
-            4,
-            0,
-            HashEncoding::Hex,
-        );
+        assert_ne!(id, bad);
+        assert!(!is_all_digit_suffix(&id));
+        // The all-digit candidate is never offered to the collision checker.
+        assert!(!seen.contains(&bad));
+    }
 
-        // Same inputs with different encodings should produce different IDs
-        // (but both should be valid)
-        assert_ne!(id_base36, id_hex);
-        assert!(id_base36.starts_with("test-"));
-        assert!(id_hex.starts_with("test-"));
+    #[test]
+    fn generated_ids_never_have_all_digit_suffix() {
+        let timestamp = Utc.with_ymd_and_hms(2025, 10, 31, 12, 0, 0).unwrap();
+        // Sizes chosen to hit initial lengths 3 through 8.
+        for size in [0usize, 10, 100, 1000, 10_000, 100_000] {
+            for i in 0..1700 {
+                let id = generate_hash_id_with_collision_check(
+                    "t",
+                    &format!("issue {i}"),
+                    "desc",
+                    timestamp,
+                    size,
+                    |_| false,
+                )
+                .unwrap();
+                let suffix = &id["t-".len()..];
+                assert!(
+                    suffix.bytes().any(|b| b.is_ascii_lowercase()),
+                    "all-digit suffix: {id}"
+                );
+                assert!(suffix
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+            }
+        }
     }
 }

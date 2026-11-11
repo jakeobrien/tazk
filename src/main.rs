@@ -3175,9 +3175,8 @@ fn run() -> Result<()> {
             // directly, so hide them unless the caller asks for them with
             // `--type epic` / `--type spec`.
             if r#type.is_none() {
-                ready.retain(|issue| {
-                    !matches!(issue.issue_type, IssueType::Epic | IssueType::Spec)
-                });
+                ready
+                    .retain(|issue| !matches!(issue.issue_type, IssueType::Epic | IssueType::Spec));
             }
 
             // Apply in-memory filters shared with `list`

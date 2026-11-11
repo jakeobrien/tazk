@@ -188,8 +188,8 @@ ISSUE_3_ID=$(echo "$OUTPUT" | grep "Third issue" | awk -F: '{print $1}')
 
 echo "New hash IDs: $ISSUE_1_ID, $ISSUE_2_ID, $ISSUE_3_ID"
 
-# Verify they're hash IDs (contain at least one hex digit a-f)
-if echo "$ISSUE_1_ID" | grep -q "[a-f]"; then
+# Verify they're hash IDs (suffix contains at least one letter)
+if echo "${ISSUE_1_ID##*-}" | grep -q "[a-z]"; then
     success "First issue has hash-based ID"
     TESTS_RUN=$((TESTS_RUN + 1))
 else
@@ -212,8 +212,8 @@ assert_contains "$OUTPUT" "Created issue: test-" "Should create new issue"
 NEW_ISSUE_ID=$(echo "$OUTPUT" | grep "Created issue:" | awk '{print $3}')
 echo "New issue ID: $NEW_ISSUE_ID"
 
-# Verify it's a hash ID (contains hex digits a-f)
-if echo "$NEW_ISSUE_ID" | grep -q "[a-f]"; then
+# Verify it's a hash ID (suffix contains at least one letter)
+if echo "${NEW_ISSUE_ID##*-}" | grep -q "[a-z]"; then
     success "New issue has hash-based ID"
     TESTS_RUN=$((TESTS_RUN + 1))
 else

@@ -9,12 +9,6 @@ issue-prefix: tz
 # Default: false
 tz-hash-ids: false
 
-# Hash encoding format for hash-based IDs
-# base36: Uses characters [0-9a-z] for better information density (recommended)
-# hex: Uses characters [0-9a-f] for hexadecimal encoding (legacy format)
-# Default: base36
-hash-encoding: base36
-
 # Issue markdown file layout
 # flat: issues are stored directly under issues/
 # sharded: issues are stored under issues/n/<tens>/<ones>/ for numeric IDs

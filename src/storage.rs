@@ -357,6 +357,7 @@ impl Storage {
         // Fold a legacy config-tazk.yaml (from before the two files were merged)
         // into config.yaml. Options absent from config.yaml use their defaults.
         merge_legacy_tazk_config(&tazk_dir)?;
+        reject_removed_config_keys(&config_path)?;
 
         // Ensure .gitignore exists and has required entries
         ensure_gitignore(&tazk_dir)?;
@@ -389,6 +390,7 @@ impl Storage {
         );
         let _lock = storage.lock_for_read()?;
         storage.list_config_values()?;
+        reject_removed_config_keys(&storage.config_path())?;
         storage.issue_storage_layout()?;
         Ok(storage)
     }
@@ -497,6 +499,7 @@ impl Storage {
     /// Set a config value in config.yaml.
     pub fn set_config_value(&self, key: &str, value: &str) -> Result<()> {
         let _lock = self.lock_for_write()?;
+        reject_removed_config_key(key)?;
         if key == "issue-prefix" {
             IssueId::parse(value)?;
         }
@@ -666,27 +669,6 @@ impl Storage {
         issue_file_paths_in(&self.issues_dir)
     }
 
-    /// Get hash encoding format from config.yaml
-    fn get_hash_encoding(&self) -> Result<hash::HashEncoding> {
-        let config = self.read_config_map()?;
-
-        // Parse hash-encoding field (default to base36 if not present)
-        match config.get("hash-encoding") {
-            Some(value) => match value.as_str() {
-                "hex" => Ok(hash::HashEncoding::Hex),
-                "base36" => Ok(hash::HashEncoding::Base36),
-                _ => {
-                    eprintln!(
-                        "Warning: Unknown hash-encoding value '{}' in config.yaml, using base36",
-                        value
-                    );
-                    Ok(hash::HashEncoding::Base36)
-                }
-            },
-            None => Ok(hash::HashEncoding::Base36),
-        }
-    }
-
     /// Infer prefix from existing issues in the filesystem
     fn infer_prefix_from_issues(&self) -> Result<String> {
         infer_prefix_from_issues_dir(&self.issues_dir)
@@ -720,9 +702,6 @@ impl Storage {
         // Count existing issues to determine adaptive length
         let issue_count = self.issue_file_paths()?.len();
 
-        // Get hash encoding from config
-        let encoding = self.get_hash_encoding()?;
-
         // Use hash::generate_hash_id_with_collision_check with filesystem checker
         hash::generate_hash_id_with_collision_check(
             prefix,
@@ -730,7 +709,6 @@ impl Storage {
             description,
             timestamp,
             issue_count,
-            encoding,
             |candidate| self.issue_exists_any_layout(candidate).unwrap_or(false),
         )
     }
@@ -2998,20 +2976,6 @@ fn write_initial_config(
     )?;
     writeln!(file)?;
 
-    // Hash encoding format
-    writeln!(file, "# Hash encoding format for hash-based IDs")?;
-    writeln!(
-        file,
-        "# base36: Uses characters [0-9a-z] for better information density (recommended)"
-    )?;
-    writeln!(
-        file,
-        "# hex: Uses characters [0-9a-f] for hexadecimal encoding (legacy format)"
-    )?;
-    writeln!(file, "# Default: base36")?;
-    writeln!(file, "hash-encoding: base36")?;
-    writeln!(file)?;
-
     // Issue file layout
     writeln!(file, "# Issue markdown file layout")?;
     writeln!(file, "# flat: issues are stored directly under issues/")?;
@@ -3031,6 +2995,41 @@ fn write_initial_config(
 
 /// Fold a legacy `config-tazk.yaml` into `config.yaml` and delete it.
 /// Keys already present in config.yaml are kept.
+/// config.yaml keys that used to exist and are now rejected.
+const REMOVED_CONFIG_KEYS: &[&str] = &["hash-encoding"];
+
+fn reject_removed_config_key(key: &str) -> Result<()> {
+    anyhow::ensure!(
+        !REMOVED_CONFIG_KEYS.contains(&key),
+        "config.yaml: '{key}' is no longer supported (IDs are always tz-…); remove it"
+    );
+    Ok(())
+}
+
+/// Fail if config.yaml still contains a removed key.
+fn reject_removed_config_keys(config_path: &Path) -> Result<()> {
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(config_path).context("Failed to read config.yaml")?;
+    let config: HashMap<String, serde_yaml::Value> =
+        serde_yaml::from_str(&content).context("Failed to parse config.yaml")?;
+    for key in REMOVED_CONFIG_KEYS {
+        reject_removed_config_key_if_present(&config, key)?;
+    }
+    Ok(())
+}
+
+fn reject_removed_config_key_if_present(
+    config: &HashMap<String, serde_yaml::Value>,
+    key: &str,
+) -> Result<()> {
+    if config.contains_key(key) {
+        reject_removed_config_key(key)?;
+    }
+    Ok(())
+}
+
 fn merge_legacy_tazk_config(tazk_dir: &Path) -> Result<()> {
     let legacy_path = tazk_dir.join(LEGACY_TAZK_CONFIG);
     if !legacy_path.exists() {
@@ -3424,13 +3423,9 @@ mod config_tests {
             storage.issue_storage_layout().unwrap(),
             IssueStorageLayout::Sharded
         );
-        assert_eq!(
-            storage
-                .get_config_value("hash-encoding")
-                .unwrap()
-                .as_deref(),
-            Some("base36")
-        );
+        assert_eq!(storage.get_config_value("hash-encoding").unwrap(), None);
+        let config = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
+        assert!(!config.contains("hash-encoding"));
     }
 
     #[test]
@@ -3441,7 +3436,7 @@ mod config_tests {
         fs::write(tazk_dir.join("config.yaml"), "issue-prefix: acme\n").unwrap();
         fs::write(
             tazk_dir.join("config-tazk.yaml"),
-            "# comment\ntz-hash-ids: true\nhash-encoding: hex\nissue-storage-layout: sharded\n",
+            "# comment\ntz-hash-ids: true\nissue-storage-layout: sharded\n",
         )
         .unwrap();
 
@@ -3453,14 +3448,50 @@ mod config_tests {
             storage.issue_storage_layout().unwrap(),
             IssueStorageLayout::Sharded
         );
-        assert!(matches!(
-            storage.get_hash_encoding().unwrap(),
-            hash::HashEncoding::Hex
-        ));
 
         // Read-only open refuses to ignore an unmerged legacy file.
         fs::write(tazk_dir.join("config-tazk.yaml"), "tz-hash-ids: false\n").unwrap();
         assert!(Storage::open_readonly(tazk_dir).is_err());
+    }
+
+    #[test]
+    fn open_rejects_removed_hash_encoding_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tazk_dir = tmp.path().join(".tazk");
+        fs::create_dir_all(tazk_dir.join("issues")).unwrap();
+        fs::write(
+            tazk_dir.join("config.yaml"),
+            "issue-prefix: tz\nhash-encoding: base36\n",
+        )
+        .unwrap();
+
+        let expected =
+            "config.yaml: 'hash-encoding' is no longer supported (IDs are always tz-…); remove it";
+        let err = Storage::open(tazk_dir.clone()).err().unwrap();
+        assert_eq!(err.to_string(), expected);
+        let err = Storage::open_readonly(tazk_dir).err().unwrap();
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
+    fn config_set_rejects_hash_encoding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tazk_dir = tmp.path().join(".tazk");
+        let storage = Storage::init(
+            tazk_dir.clone(),
+            Some("tz".into()),
+            false,
+            IssueStorageLayout::Flat,
+        )
+        .unwrap();
+        let err = storage
+            .set_config_value("hash-encoding", "base36")
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("'hash-encoding' is no longer supported"));
+        let config = fs::read_to_string(tazk_dir.join("config.yaml")).unwrap();
+        assert!(!config.contains("hash-encoding"));
     }
 
     /// A config.yaml may have `issue-prefix` commented out. Opening such a

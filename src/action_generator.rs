@@ -652,7 +652,7 @@ fn extract_issue_id(output: &str) -> Option<String> {
             }
         }
 
-        // Look for issue ID pattern (prefix-number or prefix-hexhash)
+        // Look for issue ID pattern (prefix-number or prefix-hash)
         let words: Vec<&str> = line.split_whitespace().collect();
         for word in words {
             if word.contains('-') {
@@ -663,8 +663,12 @@ fn extract_issue_id(output: &str) -> Option<String> {
                     return Some(word.to_string());
                 }
 
-                // Check if it's a hex hash (4-8 hex characters)
-                if (4..=8).contains(&suffix.len()) && suffix.chars().all(|c| c.is_ascii_hexdigit())
+                // Check if it's a base36 hash (3-8 characters, at least one letter)
+                if (3..=8).contains(&suffix.len())
+                    && suffix
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                    && suffix.chars().any(|c| c.is_ascii_lowercase())
                 {
                     return Some(word.to_string());
                 }
