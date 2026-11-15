@@ -75,17 +75,28 @@ role from before the rule loads normally; only setting a role on it fails, and
 Body conventions by type:
 
 - **Work types:** Description (the context a fresh agent needs), Design (when
-  an approach has been decided), Acceptance Criteria (always), Notes.
-- **Epic:** Description and Acceptance Criteria. By default the criteria are
-  "all children closed". Add more only if they can't be expressed as a child
-  task.
-- **Spec:** a free-form body in the Description section. It can be long, with
-  numbered sections that tickets refer to as `<spec-id> §N`.
-- **Gate:** Description says the condition (what has to happen) and how to
-  check it.
+  an approach has been decided), Acceptance Criteria (always), Notes. Every
+  section is optional for `tz`; "Acceptance Criteria always" is a convention.
+- **Epic:** Description says what the epic delivers and how its children fit
+  together. No Design: the approach belongs in the spec or the children.
+  Acceptance Criteria defaults to `- All child issues closed.`; an explicit
+  `--acceptance` replaces it, so add more only if they can't be expressed as a
+  child task, and keep that line yourself.
+- **Spec:** the whole spec is the Description (required), free-form and
+  possibly long, with numbered sections that tickets refer to as
+  `<spec-id> §N`. No Design or Acceptance Criteria: a spec is finished by being
+  ticketed. Notes holds later pointers (amendments, superseded-by).
+- **Gate:** Description (required) says the condition: what has to happen and
+  what it blocks. Acceptance Criteria (required) says how to check that the
+  condition is true. No Design. `role` says who checks.
+- **Notes** is allowed on every type.
 
-`tz` has one body format for all types; per-type templates and checks are
-still open (see [Open items](#open-items)).
+`tz create`, `tz triage promote` and `tz update` enforce this: a Design on an
+epic, spec or gate, Acceptance Criteria on a spec, a spec or gate without a
+Description, or a gate without Acceptance Criteria is an error. `update` checks
+only the sections it changes, so an older issue that breaks the rule still
+loads, closes and takes unrelated edits; its forbidden section can only be
+cleared (`--design ""`). See USAGE.md, "Body sections".
 
 ### Triage: the inbox
 
@@ -246,7 +257,8 @@ except where noted. None of them commit unless told to.
 1. Work through the problem with the human: ask questions, push back on the
    approach, settle what's in and out of scope.
 2. Write the spec: problem, goals and non-goals, design, open questions. Use
-   numbered sections if tickets will need to refer to parts of it.
+   numbered sections if tickets will need to refer to parts of it. All of it
+   goes in the Description; a spec has no Design or Acceptance Criteria section.
 3. Create it: `tz create "<title>" -t spec --description-file -`.
 4. If something has to come from the human and can't be settled now, create a
    `role: human` task and make the spec `blocked_by` it.
@@ -395,7 +407,6 @@ tuned. It may grow or go away.
 
 ## Open items
 
-- Per-type body templates and checks (triage).
 - Scales for priority and effort; choosing model and thinking level by effort.
 - Reviewer and validator subagents before `/build` closes a ticket.
 - Comment conventions.

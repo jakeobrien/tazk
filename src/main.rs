@@ -3598,6 +3598,13 @@ CREATING ISSUES
   tz create "Add auth" -r human -p 0 -t feature
   tz create "Write tests" -r agent -d "Unit tests for auth" --assignee alice
   tz create "Triage logs" -r agent --effort 2   Effort: 1-5
+  tz create "Auth" -t epic             Epics: no --design; --acceptance defaults to
+            "- All child issues closed."
+  tz create "Auth spec" -t spec -d "..."   Specs: description only (required);
+            no --design or --acceptance
+  tz create "Release out" -t gate -r human -d "Condition" --acceptance "How to check"
+            Gates: description and --acceptance required; no --design
+            (tz update checks the same rules on the sections it changes)
 
 REPORTING AND TRIAGING
   Triage items are plain-text reports in .tazk/triage/, not issues: no title,

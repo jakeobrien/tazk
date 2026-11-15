@@ -10,6 +10,12 @@ overview, see the [README](README.md).
 - `tz init [--tz-hash-ids] [--tz-issue-layout flat|sharded]` - Initialize a database
 - `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required for `task`, `bug`, `feature`, `chore` and `gate`, and rejected for `epic` and `spec`, which take no role.
   - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `--effort 1-5`, `-l LABEL`
+  - Body sections are checked against the issue's type (see [Body sections](#body-sections)); nothing is created when a check fails:
+    - `--design` with text on an `epic`, `spec` or `gate` fails (`tz-7 is an epic; epics have no Design section...`).
+    - `--acceptance` with text on a `spec` fails.
+    - A `spec` or `gate` needs a non-empty description (`-d` / `--description-file`).
+    - A `gate` needs non-empty `--acceptance`: how to check that its condition is true.
+    - An `epic` created without `--acceptance`, or with a blank one, gets `- All child issues closed.` as its Acceptance Criteria. An explicit `--acceptance` replaces that default, so include the line yourself if you still want it.
 - `tz list [FILTERS]` - List issues with optional filters (including `--assignee USER` and `-r/--role ROLE`, where ROLE is `human`, `agent` or `none` for issues with no role)
 - `tz show ISSUE_ID` - Show detailed issue information
 - `tz update ISSUE_ID [OPTIONS]` - Update issue fields (not status)
@@ -27,6 +33,19 @@ overview, see the [README](README.md).
     (default `description`), inserting a blank line before it when the field is
     non-empty so it becomes its own paragraph. Simpler than a search/replace when
     you only want to add to the end.
+  - Only the body sections a command changes are checked against the issue's
+    type (see [Body sections](#body-sections)), on the value they will have
+    afterwards, for `-d/--description`, `--description-file`, `--design`,
+    `--acceptance`, `--notes`, `--search/--replace` and `--append` on any body
+    `--field`. A change that would leave a forbidden section non-empty or a
+    required one empty fails and the issue is left untouched; `--field title`
+    and every other flag are never checked. For example, `--design ""` clears a
+    Design and succeeds on any type, while `--design "x"` fails on an epic. When
+    a rejected write is about a forbidden section that already has text, the
+    error says that clearing it is allowed. With several IDs each issue is
+    checked against its own type, and the first failure stops the command
+    (issues before it stay updated). The epic default Acceptance Criteria is only
+    set on `create`; `--acceptance ""` removes it.
 - `tz claim ISSUE_ID... --as NAME [--team TEAM] [--release] [--force]` - Claim or release issues
 - `tz block ISSUE_ID... [--release] [--reason TEXT]` - Mark issues `blocked`, or back to `open` with `--release`. A reason is appended to Notes as `Blocked <UTC timestamp>: <reason>` (`Unblocked ...` on release)
 - `tz defer ISSUE_ID... [--release] [--reason TEXT]` - Same as `tz block`, for `deferred` (`Deferred ...` / `Undeferred ...` notes)
@@ -80,9 +99,13 @@ the file in `.tazk/triage/`.
   one issue from one or more items and delete the items. Accepts the same
   options as `tz create` (`-p`, `-t`, `-d` /
   `--description-file`, `--design`, `--acceptance`, `-a`, `--effort`,
-  `-l`/`--labels`, `--external-ref`, `--deps`, `--parent`). Without a
+  `-l`/`--labels`, `--external-ref`, `--deps`, `--parent`). The per-type
+  body-section rules of `tz create` apply (nothing is promoted and no item is
+  deleted when one fails): a `gate` still needs `--acceptance`, and an `epic`
+  gets the default Acceptance Criteria. Without a
   description flag the description is the items' text, in the order given,
-  separated by `---` lines. The issue's Notes record the item names
+  separated by `---` lines, so a promoted `spec` or `gate` has a description
+  unless `-d ""` is given. The issue's Notes record the item names
   (`Promoted from triage: ...`), so the originals can be found in git history.
 - `tz triage attach NAME... --to ISSUE_ID --author NAME` - Add each item as a
   comment on an existing issue (one comment per item, in order) and delete the
@@ -341,8 +364,8 @@ Triage item names are not IDs and are unaffected.
 
 ### Body sections
 
-These are Markdown headings in the issue body. Each is free text and may be
-empty.
+These are Markdown headings in the issue body. Each is free text. Whether it
+may be empty depends on the issue type (below).
 
 | Section | Heading | `--field` name | Create/update flag |
 |---------|---------|----------------|--------------------|
@@ -353,6 +376,29 @@ empty.
 
 `--field` (used by `tz update --search/--replace` and `--append`) also accepts
 `title`.
+
+#### Sections by issue type
+
+| Type | Description | Design | Acceptance Criteria | Notes |
+|------|-------------|--------|---------------------|-------|
+| `task`, `bug`, `feature`, `chore` | optional | optional | optional | optional |
+| `epic` | optional | forbidden | optional, defaults to `- All child issues closed.` on create | optional |
+| `spec` | **required** | forbidden | forbidden | optional |
+| `gate` | **required** | forbidden | **required** | optional |
+
+- **Required:** the section must contain non-whitespace text.
+- **Forbidden:** the section must be empty (whitespace only counts as empty).
+- `tz create`, `tz triage promote` and `tz update` enforce the table as a hard
+  error. `create` and `promote` check every section; `update` checks only the
+  sections the command changes, after the change (see `tz update`).
+- **Loading never fails on these rules.** Reading, listing, `tz show`, the TUI,
+  `ready`, `close`, `reopen`, `claim`, labels, dependencies, comments, export
+  and the merge driver ignore them. An issue that already breaks the table (an
+  epic with Design, a spec with Acceptance Criteria, a gate with no Acceptance
+  Criteria) keeps working: it accepts every update that doesn't touch the
+  offending section. A forbidden section can be cleared (`--design ""`) but not
+  set, appended to or search/replaced into a non-empty result; a required one
+  fails only when a command touches it and leaves it empty.
 
 ### Status
 
@@ -376,10 +422,13 @@ matter, though an ancestor's does.
 | `bug` | Something is broken. |
 | `feature` | New functionality. |
 | `task` | General work item (default). |
-| `epic` | Large body of work grouping other issues. |
-| `gate` | Gate / checkpoint issue. |
+| `epic` | Large body of work grouping other issues. No Design; Acceptance Criteria defaults to `- All child issues closed.` |
+| `gate` | Gate / checkpoint issue. Description is the condition, Acceptance Criteria how to check it; both required, no Design. |
 | `chore` | Maintenance work. |
-| `spec` | Specification or design document. |
+| `spec` | Specification or design document. The whole spec is the Description (required); no Design or Acceptance Criteria. |
+
+Which [body sections](#sections-by-issue-type) each type may use is enforced
+by `tz create`, `tz triage promote` and `tz update`.
 
 ### Dependency types
 
