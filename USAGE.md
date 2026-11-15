@@ -99,8 +99,8 @@ leaves them to git's ordinary line merge.
 
 ### Queries
 
-- `tz ready [--assignee USER] [-r/--role ROLE] [--priority N]` - Find ready work, printed as `id: title [priority: N, effort: N]` (effort omitted when unset) (no blockers; `epic` and `spec` issues are hidden unless requested with `--type`)
-- `tz blocked` - Show blocked issues and what blocks them
+- `tz ready [--assignee USER] [-r/--role ROLE] [--priority N]` - Find ready work, printed as `id: title [priority: N, effort: N]` (effort omitted when unset) (no blockers, including blockers inherited from `child_of` ancestors; `epic` and `spec` issues are hidden unless requested with `--type`)
+- `tz blocked` - Show blocked issues and what blocks them. Blockers inherited from `child_of` ancestors are listed as `target (inherited from ANCESTOR)`, or `ANCESTOR (blocked status, inherited)` when the ancestor is in `blocked` status. `--json` keeps `blocked_by` for the issue's own blockers and adds `inherited_blocked_by`: a list of `{ancestor, blocked_by, blocked_status}`; `blocked_by_count` covers both
 - `tz stats` - Show statistics (total, open, blocked, average lead time)
 
 ### Terminal UI
@@ -364,8 +364,9 @@ empty.
 | `deferred` | Postponed (`tz defer`). Not listed by `tz ready`. |
 
 Status values are lowercase with underscores. Only `open` issues appear in `tz ready`. Note that `tz blocked` reports
-issues that have unresolved `blocked_by` dependencies; it does not depend on the
-`blocked` status value.
+issues that have unresolved `blocked_by` dependencies, their own or inherited
+from a `child_of` ancestor; the issue's own `blocked` status value does not
+matter, though an ancestor's does.
 
 ### Issue type
 
@@ -386,7 +387,7 @@ depends on B.
 
 | Value | Meaning |
 |-------|---------|
-| `blocked_by` | Default. The issue is not ready until the target is closed. The only type that affects `tz ready` and `tz blocked`. |
+| `blocked_by` | Default. The issue is not ready until the target is closed. The only type that affects `tz ready` and `tz blocked`. Inherited: an issue is also not ready while any `child_of` ancestor has an open (or missing) `blocked_by` target or is in `blocked` status. A closed ancestor does not block. |
 | `related_to` | Informational link. |
 | `child_of` | The issue is a child of the target (e.g. an epic). An issue has at most one parent; adding a second is an error (remove the first with `tz dep remove`). |
 | `discovered_from` | The issue was discovered while working on the target. |

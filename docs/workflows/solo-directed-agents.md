@@ -104,10 +104,10 @@ for the human, say so plainly, along with what it blocks.
 | `related_to` | Task → spec, when there is no epic. Amendment spec → original spec. |
 | `discovered_from` | New issue → the issue it was found while working on. |
 
-**Gap:** `tz ready` does not yet carry an epic's blockers down to its children.
-A child of a blocked epic shows up as ready. Until the tool fixes this (a
-triage item tracks it), [`/issue-hygiene`](#issue-hygiene) copies epic
-blockers onto the children.
+Blockers are inherited down `child_of`: an issue is not ready, and `tz blocked`
+reports it, while any ancestor epic has an open `blocked_by` target or is in
+`blocked` status. Block the epic once; its children (and their children) wait
+with it. Don't copy an epic's blockers onto its children.
 
 ### Status
 
@@ -369,8 +369,6 @@ tuned. It may grow or go away.
   with the human.
 - Close epics whose children are all closed but whose acceptance criteria go
   further.
-- *Until the tool fixes it:* copy each blocked epic's `blocked_by` links onto
-  its open children. Run this again after adding children.
 
 **Only reported:**
 - `blocked`-status issues whose reason may no longer apply.
@@ -392,7 +390,6 @@ tuned. It may grow or go away.
 
 ## Open items
 
-- `tz ready` should carry epic blockers to children (triage).
 - `role` optional for epics and specs; per-type body templates and checks
   (triage).
 - Scales for priority and effort; choosing model and thinking level by effort.

@@ -469,13 +469,36 @@ pub struct Stats {
     pub average_lead_time_hours: f64,
 }
 
+/// A blocker an issue inherits from one of its `child_of` ancestors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InheritedBlocker {
+    /// The ancestor the blocker comes from (not necessarily the direct parent).
+    pub ancestor: String,
+    /// The ancestor's unresolved `blocked_by` targets (open or missing).
+    pub blocked_by: Vec<String>,
+    /// True when the ancestor itself has status `blocked`.
+    pub blocked_status: bool,
+}
+
+impl InheritedBlocker {
+    /// Number of distinct reasons this ancestor blocks.
+    pub fn count(&self) -> usize {
+        self.blocked_by.len() + usize::from(self.blocked_status)
+    }
+}
+
 /// Blocked issue structure (for blocked command)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlockedIssue {
     #[serde(flatten)]
     pub issue: Issue,
+    /// The issue's own unresolved `blocked_by` targets.
     pub blocked_by: Vec<String>,
+    /// Direct blockers plus every inherited reason.
     pub blocked_by_count: usize,
+    /// Blockers inherited from `child_of` ancestors, naming each ancestor.
+    #[serde(default)]
+    pub inherited_blocked_by: Vec<InheritedBlocker>,
 }
 
 /// Tree node for dependency tree visualization

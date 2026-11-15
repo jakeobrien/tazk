@@ -4,8 +4,8 @@ use crate::lock::Lock;
 use crate::paths::{ensure_contained, numeric_id_suffix, IdKind, IssueId};
 use crate::transaction::{atomic_write, FileTransaction};
 use crate::types::{
-    parse_effort, validate_effort, BlockedIssue, Comment, DependencyType, EditField, Issue,
-    IssueType, Role, Stats, Status, ID_PREFIX,
+    parse_effort, validate_effort, BlockedIssue, Comment, DependencyType, EditField,
+    InheritedBlocker, Issue, IssueType, Role, Stats, Status, ID_PREFIX,
 };
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -1892,6 +1892,8 @@ impl Storage {
         let issues = self.list_issues(None, None, None, None, None)?;
 
         let closed_ids = closed_issue_ids(&issues);
+        let by_id = issues_by_id(&issues);
+        let is_blocked = |i: &Issue| is_blocked_with_ancestors(i, &by_id, &closed_ids);
         let total = issues.len();
         let open = issues.iter().filter(|i| i.status == Status::Open).count();
         let in_progress = issues
@@ -1903,13 +1905,13 @@ impl Storage {
         // Calculate blocked issues (those with blocking dependencies)
         let blocked = issues
             .iter()
-            .filter(|i| i.status != Status::Closed && has_unresolved_dependencies(i, &closed_ids))
+            .filter(|i| i.status != Status::Closed && is_blocked(i))
             .count();
 
         // Calculate ready issues
         let ready = issues
             .iter()
-            .filter(|i| i.status == Status::Open && !has_unresolved_dependencies(i, &closed_ids))
+            .filter(|i| i.status == Status::Open && !is_blocked(i))
             .count();
 
         // Calculate average lead time for closed issues
@@ -1945,6 +1947,17 @@ impl Storage {
         let issues = self.list_issues(None, None, None, None, None)?;
 
         let closed_ids = closed_issue_ids(&issues);
+        // Inherited blockers are computed up front: the lookup borrows
+        // `issues`, which is then consumed below.
+        let mut inherited: HashMap<String, Vec<InheritedBlocker>> = {
+            let by_id = issues_by_id(&issues);
+            issues
+                .iter()
+                .filter(|i| i.status != Status::Closed)
+                .map(|i| (i.id.clone(), inherited_blockers(i, &by_id, &closed_ids)))
+                .filter(|(_, found)| !found.is_empty())
+                .collect()
+        };
         let mut blocked = Vec::new();
         for issue in issues {
             if issue.status == Status::Closed {
@@ -1958,12 +1971,18 @@ impl Storage {
                 .cloned()
                 .collect();
 
-            if !blocked_by.is_empty() {
-                let blocked_by_count = blocked_by.len();
+            let inherited_blocked_by = inherited.remove(&issue.id).unwrap_or_default();
+            if !blocked_by.is_empty() || !inherited_blocked_by.is_empty() {
+                let blocked_by_count = blocked_by.len()
+                    + inherited_blocked_by
+                        .iter()
+                        .map(InheritedBlocker::count)
+                        .sum::<usize>();
                 blocked.push(BlockedIssue {
                     issue,
                     blocked_by,
                     blocked_by_count,
+                    inherited_blocked_by,
                 });
             }
         }
@@ -1987,6 +2006,15 @@ impl Storage {
         // an assignee/priority/type filter must not hide a live prerequisite.
         let issues = self.list_issues(None, None, None, None, None)?;
         let closed_ids = closed_issue_ids(&issues);
+        let blocked_ids: HashSet<String> = {
+            let by_id = issues_by_id(&issues);
+            issues
+                .iter()
+                .filter(|i| i.status == Status::Open)
+                .filter(|i| is_blocked_with_ancestors(i, &by_id, &closed_ids))
+                .map(|i| i.id.clone())
+                .collect()
+        };
         let mut ready: Vec<Issue> = issues
             .into_iter()
             .filter(|issue| {
@@ -1996,7 +2024,7 @@ impl Storage {
                         .is_none_or(|priorities| priorities.contains(&issue.priority))
                     && issue_type.is_none_or(|kind| issue.issue_type == kind)
                     && assignee.is_none_or(|actor| issue.assignee == actor)
-                    && !has_unresolved_dependencies(issue, &closed_ids)
+                    && !blocked_ids.contains(&issue.id)
             })
             .collect();
 
@@ -3966,6 +3994,84 @@ pub fn has_unresolved_dependencies(issue: &Issue, closed_ids: &HashSet<String>) 
             .any(|id| !closed_ids.contains(id.as_str()))
     }
 }
+
+/// Index issues by ID for ancestor lookups.
+pub fn issues_by_id(issues: &[Issue]) -> HashMap<&str, &Issue> {
+    issues.iter().map(|i| (i.id.as_str(), i)).collect()
+}
+
+/// Blockers `issue` inherits from its `child_of` ancestors.
+///
+/// Walks every ancestor (epics nest, and merges or hand edits can leave an
+/// issue with several parents). Each ancestor is visited once, so a `child_of`
+/// cycle terminates. An ancestor blocks when it is in `blocked` status or has
+/// an unresolved `blocked_by` (target open or missing: the rule of
+/// [`has_unresolved_dependencies`]). A closed ancestor no longer blocks, and a
+/// parent missing from `by_id` contributes nothing. Ancestors are reported
+/// nearest first, sorted by ID within a level.
+pub fn inherited_blockers(
+    issue: &Issue,
+    by_id: &HashMap<&str, &Issue>,
+    closed_ids: &HashSet<String>,
+) -> Vec<InheritedBlocker> {
+    let parents = |i: &Issue| -> Vec<String> {
+        let mut ids: Vec<String> = i
+            .depends_on
+            .iter()
+            .filter(|(_, ty)| **ty == DependencyType::ChildOf)
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let mut seen: HashSet<String> = HashSet::from([issue.id.clone()]);
+    let mut level = parents(issue);
+    let mut found = Vec::new();
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        for id in level {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let Some(ancestor) = by_id.get(id.as_str()) else {
+                continue;
+            };
+            next.extend(parents(ancestor));
+            if ancestor.status == Status::Closed {
+                continue;
+            }
+            let mut blocked_by: Vec<String> = ancestor
+                .get_blocking_dependencies()
+                .filter(|t| !closed_ids.contains(t.as_str()))
+                .cloned()
+                .collect();
+            blocked_by.sort();
+            let blocked_status = ancestor.status == Status::Blocked;
+            if !blocked_by.is_empty() || blocked_status {
+                found.push(InheritedBlocker {
+                    ancestor: id,
+                    blocked_by,
+                    blocked_status,
+                });
+            }
+        }
+        level = next;
+    }
+    found
+}
+
+/// The one "blocked" rule shared by `tz ready`, `tz blocked`, `tz stats` and
+/// the TUI: the issue's own unresolved `blocked_by` links, or a blocker
+/// inherited from an ancestor ([`inherited_blockers`]).
+pub fn is_blocked_with_ancestors(
+    issue: &Issue,
+    by_id: &HashMap<&str, &Issue>,
+    closed_ids: &HashSet<String>,
+) -> bool {
+    has_unresolved_dependencies(issue, closed_ids)
+        || !inherited_blockers(issue, by_id, closed_ids).is_empty()
+}
+
 fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> Result<()> {
     let now = chrono::Utc::now();
     for (key, value) in updates {
@@ -4321,5 +4427,185 @@ mod single_parent_tests {
             storage.list_all_issues_tolerant().unwrap().items.len(),
             before
         );
+    }
+}
+
+#[cfg(test)]
+mod inherited_blocker_tests {
+    use super::*;
+    use crate::types::{DependencyType, IssueType};
+
+    fn setup() -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
+        (tmp, storage)
+    }
+
+    /// Write `(id, status, [(target, type)])` issues straight to disk, so
+    /// cycles, several parents and missing targets can be set up.
+    fn fixture(
+        specs: &[(&str, Status, &[(&str, DependencyType)])],
+    ) -> (tempfile::TempDir, Storage) {
+        let (tmp, storage) = setup();
+        for (id, status, deps) in specs {
+            let mut issue = Issue::new((*id).into(), format!("issue {id}"), 2, IssueType::Task);
+            issue.status = *status;
+            for (target, ty) in *deps {
+                issue.depends_on.insert((*target).into(), *ty);
+            }
+            let path = storage.get_tazk_dir().join(format!("issues/{id}.md"));
+            fs::write(path, issue_to_markdown(&issue).unwrap()).unwrap();
+        }
+        (tmp, storage)
+    }
+
+    fn ready_ids(storage: &Storage) -> Vec<String> {
+        let mut ids: Vec<String> = storage
+            .get_ready(None, None, None, "oldest")
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    fn blocked_item(storage: &Storage, id: &str) -> Option<BlockedIssue> {
+        storage
+            .get_blocked()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.issue.id == id)
+    }
+
+    use DependencyType::{BlockedBy, ChildOf};
+    use Status::{Blocked, Closed, Open};
+
+    #[test]
+    fn blocked_direct_parent_blocks_child() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[("tz-2", BlockedBy)]),
+            ("tz-2", Open, &[]),
+            ("tz-3", Open, &[("tz-1", ChildOf)]),
+        ]);
+        assert_eq!(ready_ids(&s), vec!["tz-2"]);
+        let item = blocked_item(&s, "tz-3").unwrap();
+        assert!(item.blocked_by.is_empty());
+        assert_eq!(
+            item.inherited_blocked_by,
+            vec![InheritedBlocker {
+                ancestor: "tz-1".into(),
+                blocked_by: vec!["tz-2".into()],
+                blocked_status: false,
+            }]
+        );
+        assert_eq!(item.blocked_by_count, 1);
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["inherited_blocked_by"][0]["ancestor"], "tz-1");
+        assert_eq!(json["inherited_blocked_by"][0]["blocked_by"][0], "tz-2");
+        let stats = s.get_stats().unwrap();
+        assert_eq!(stats.blocked_issues, 2);
+        assert_eq!(stats.ready_issues, 1);
+    }
+
+    #[test]
+    fn blocked_grandparent_blocks_grandchild() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[("tz-9", BlockedBy)]),
+            ("tz-2", Open, &[("tz-1", ChildOf)]),
+            ("tz-3", Open, &[("tz-2", ChildOf)]),
+            ("tz-9", Open, &[]),
+        ]);
+        assert_eq!(ready_ids(&s), vec!["tz-9"]);
+        let item = blocked_item(&s, "tz-3").unwrap();
+        assert_eq!(item.inherited_blocked_by.len(), 1);
+        assert_eq!(item.inherited_blocked_by[0].ancestor, "tz-1");
+    }
+
+    #[test]
+    fn closing_the_ancestor_blocker_unblocks_descendants() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[("tz-2", BlockedBy)]),
+            ("tz-2", Closed, &[]),
+            ("tz-3", Open, &[("tz-1", ChildOf)]),
+        ]);
+        assert_eq!(ready_ids(&s), vec!["tz-1", "tz-3"]);
+        assert!(blocked_item(&s, "tz-3").is_none());
+    }
+
+    #[test]
+    fn missing_ancestor_blocker_target_blocks() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[("tz-404", BlockedBy)]),
+            ("tz-3", Open, &[("tz-1", ChildOf)]),
+        ]);
+        assert!(ready_ids(&s).is_empty());
+        let item = blocked_item(&s, "tz-3").unwrap();
+        assert_eq!(item.inherited_blocked_by[0].blocked_by, vec!["tz-404"]);
+    }
+
+    #[test]
+    fn ancestor_in_blocked_status_blocks() {
+        let (_t, s) = fixture(&[("tz-1", Blocked, &[]), ("tz-3", Open, &[("tz-1", ChildOf)])]);
+        assert!(ready_ids(&s).is_empty());
+        let item = blocked_item(&s, "tz-3").unwrap();
+        assert!(item.blocked_by.is_empty());
+        assert_eq!(item.inherited_blocked_by[0].ancestor, "tz-1");
+        assert!(item.inherited_blocked_by[0].blocked_status);
+        assert_eq!(item.blocked_by_count, 1);
+    }
+
+    #[test]
+    fn closed_ancestor_does_not_block() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Closed, &[("tz-404", BlockedBy)]),
+            ("tz-3", Open, &[("tz-1", ChildOf)]),
+        ]);
+        assert_eq!(ready_ids(&s), vec!["tz-3"]);
+    }
+
+    #[test]
+    fn child_of_cycle_terminates() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[("tz-2", ChildOf)]),
+            ("tz-2", Open, &[("tz-1", ChildOf), ("tz-9", BlockedBy)]),
+            ("tz-3", Open, &[("tz-3", ChildOf)]),
+            ("tz-9", Open, &[]),
+        ]);
+        // tz-1 inherits tz-2's blocker; tz-2 is blocked directly (and via
+        // tz-1, which is not blocked itself); the self-cycle is ready.
+        assert_eq!(ready_ids(&s), vec!["tz-3", "tz-9"]);
+        assert!(blocked_item(&s, "tz-1").is_some());
+        assert!(blocked_item(&s, "tz-3").is_none());
+        let _ = s.get_stats().unwrap();
+    }
+
+    #[test]
+    fn any_blocked_parent_of_several_blocks() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[]),
+            ("tz-2", Open, &[("tz-9", BlockedBy)]),
+            ("tz-3", Open, &[("tz-1", ChildOf), ("tz-2", ChildOf)]),
+            ("tz-4", Open, &[("tz-1", ChildOf)]),
+            ("tz-9", Open, &[]),
+        ]);
+        assert_eq!(ready_ids(&s), vec!["tz-1", "tz-4", "tz-9"]);
+        let item = blocked_item(&s, "tz-3").unwrap();
+        assert_eq!(item.inherited_blocked_by[0].ancestor, "tz-2");
+    }
+
+    #[test]
+    fn direct_and_inherited_blockers_are_reported_separately() {
+        let (_t, s) = fixture(&[
+            ("tz-1", Open, &[("tz-9", BlockedBy)]),
+            ("tz-3", Open, &[("tz-1", ChildOf), ("tz-8", BlockedBy)]),
+            ("tz-8", Open, &[]),
+            ("tz-9", Open, &[]),
+        ]);
+        let item = blocked_item(&s, "tz-3").unwrap();
+        assert_eq!(item.blocked_by, vec!["tz-8"]);
+        assert_eq!(item.inherited_blocked_by.len(), 1);
+        assert_eq!(item.blocked_by_count, 2);
     }
 }

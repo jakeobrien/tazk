@@ -2938,11 +2938,24 @@ fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&blocked)?);
             } else {
                 for item in blocked {
+                    let mut reasons = item.blocked_by.clone();
+                    for inherited in &item.inherited_blocked_by {
+                        for target in &inherited.blocked_by {
+                            reasons
+                                .push(format!("{target} (inherited from {})", inherited.ancestor));
+                        }
+                        if inherited.blocked_status {
+                            reasons.push(format!(
+                                "{} (blocked status, inherited)",
+                                inherited.ancestor
+                            ));
+                        }
+                    }
                     println!(
                         "{}: {} - blocked by: {}",
                         item.issue.id,
                         item.issue.title,
-                        item.blocked_by.join(", ")
+                        reasons.join(", ")
                     );
                 }
             }
