@@ -233,10 +233,9 @@ except where noted. None of them commit unless told to.
 
 ### `/spec`
 
-**Purpose:** turn a planning conversation into a spec ticket.
+**Purpose:** turn a planning conversation or a provided document into a spec ticket.
 
-**Input:** a conversation with the human, plus whatever research is needed
-(code, docs, the existing backlog).
+**Input:** the passed input or document, then a conversation with the human, plus whatever research is needed (code, docs, the existing backlog).
 
 **Steps:**
 1. Work through the problem with the human: ask questions, push back on the
@@ -304,12 +303,13 @@ offer to run `/spec` first.
 4. Implement. Run the checks the project's `AGENTS.md` asks for.
 5. Capture: anything non-blocking and out of scope found along the way goes
    into `tz triage add`.
+6. Code review: When done, use the `/code-review` skill for your work, which will dispatch sugagents. Address any feedback reported by them.
 6. Finish:
    - **Acceptance criteria met:** `tz close <id>` with no reason (the commit is
      the record). Loose ends go to triage (see
      [Done, with loose ends](#done-with-loose-ends)).
    - **Not met:** see [Getting stuck](#getting-stuck). Don't close.
-7. Commit (on the current branch). Stage only this session's changes: code,
+7. Commit (on the current branch). Unless the `no-commit` option is invoked, commit your work. Stage only this session's changes: code,
    the ticket file, and any triage items it created. Leave other uncommitted
    changes alone. The message starts with the ticket ID.
 8. Stop and report: what changed, the commit, and any triage items filed.
