@@ -131,7 +131,7 @@ cd "$TEST_DIR"
 
 # Test 1: Initialize tazk database
 echo -e "\n${YELLOW}Test 1: Initialize tazk database${NC}"
-OUTPUT=$("$TZ_BIN" init 2>&1)
+OUTPUT=$("$TZ_BIN" init --tz-hash-ids=false 2>&1)
 assert_contains "$OUTPUT" "Initialized tazk database" "Initialize should succeed"
 
 # Test 2: Create test issues with various types and states

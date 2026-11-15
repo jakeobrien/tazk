@@ -100,7 +100,7 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: a repo with two open issues
-"$TZ_BIN" init >/dev/null 2>&1
+"$TZ_BIN" init --tz-hash-ids=false >/dev/null 2>&1
 "$TZ_BIN" create "First task" -r agent -p 1 -t task >/dev/null 2>&1
 "$TZ_BIN" create "Second task" -r agent -p 2 -t task >/dev/null 2>&1
 

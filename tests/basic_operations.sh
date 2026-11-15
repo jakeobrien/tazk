@@ -112,7 +112,7 @@ cd "$TEST_DIR"
 
 # Test 1: Initialize tazk database
 echo -e "\n${YELLOW}Test 1: Initialize database${NC}"
-OUTPUT=$("$TZ_BIN" init 2>&1)
+OUTPUT=$("$TZ_BIN" init --tz-hash-ids=false 2>&1)
 assert_contains "$OUTPUT" "Initialized tazk database" "Initialize should succeed"
 assert_equals "true" "$([ -d .tazk/issues ] && echo true || echo false)" "Issues directory should exist"
 assert_equals "true" "$([ -f .tazk/config.yaml ] && echo true || echo false)" "Config file should exist"

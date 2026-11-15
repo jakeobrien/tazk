@@ -7,7 +7,7 @@ overview, see the [README](README.md).
 
 ### Core Commands
 
-- `tz init [--tz-hash-ids] [--tz-issue-layout flat|sharded]` - Initialize a database
+- `tz init [--tz-hash-ids[=true|false]] [--tz-issue-layout flat|sharded]` - Initialize a database
 - `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required for `task`, `bug`, `feature`, `chore` and `gate`, and rejected for `epic` and `spec`, which take no role.
   - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `--effort 1-5`, `-l LABEL`
   - Body sections are checked against the issue's type (see [Body sections](#body-sections)); nothing is created when a check fails:
@@ -347,7 +347,7 @@ Triage item names are not IDs and are unaffected.
 
 | Property | Required | Values | Notes |
 |----------|----------|--------|-------|
-| `id` | yes | `tz-N`, or `tz-<hash>` if the database was initialised with `--tz-hash-ids` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). See [Issue IDs](#issue-ids) for the format and the shorthand commands accept. An issue file whose name does not match is an invalid file. |
+| `id` | yes | `tz-<hash>`, or `tz-N` if the database was initialised with `--tz-hash-ids=false` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). See [Issue IDs](#issue-ids) for the format and the shorthand commands accept. An issue file whose name does not match is an invalid file. |
 | `title` | yes | Any text | Settable with `create`, `triage promote --title` and `update --title`. |
 | `status` | yes | See [Status](#status) | Default `open`. |
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |

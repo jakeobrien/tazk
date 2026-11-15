@@ -110,7 +110,7 @@ echo "Creating test directory: $TEST_DIR"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
-"$TZ_BIN" init >/dev/null 2>&1
+"$TZ_BIN" init --tz-hash-ids=false >/dev/null 2>&1
 # Create issues: tz-1 .. tz-6
 for i in 1 2 3 4 5 6; do
     "$TZ_BIN" create "Issue $i" -r agent >/dev/null 2>&1

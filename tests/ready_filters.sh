@@ -88,7 +88,7 @@ echo "Creating test directory: $TEST_DIR"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
-"$TZ_BIN" init >/dev/null 2>&1
+"$TZ_BIN" init --tz-hash-ids=false >/dev/null 2>&1
 
 # Fixture issues covering the various filter dimensions.
 "$TZ_BIN" create "Fix login bug" -r agent -t bug -p 1 -l backend -l urgent >/dev/null

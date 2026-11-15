@@ -2821,7 +2821,7 @@ fn write_initial_config(
         file,
         "# When false, issues are named like: tz-1, tz-2, ... (sequential)"
     )?;
-    writeln!(file, "# Default: false")?;
+    writeln!(file, "# Default for new databases: true")?;
     writeln!(
         file,
         "tz-hash-ids: {}",

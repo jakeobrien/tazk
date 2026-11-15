@@ -100,7 +100,7 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: an empty repo
-"$TZ_BIN" init >/dev/null 2>&1
+"$TZ_BIN" init --tz-hash-ids=false >/dev/null 2>&1
 
 field() { grep "^$2:" ".tazk/issues/$1.md" | sed "s/^$2: *//"; }
 assert_not_contains() {

@@ -99,8 +99,17 @@ struct GlobalOpts {
 enum Commands {
     /// Initialize tazk in current directory
     Init {
-        /// Use hash-based issue IDs instead of sequential numbers
-        #[arg(long = "tz-hash-ids")]
+        /// Use hash-based issue IDs (default) instead of sequential numbers;
+        /// pass --tz-hash-ids=false for sequential IDs
+        #[arg(
+            long = "tz-hash-ids",
+            value_name = "BOOL",
+            num_args = 0..=1,
+            require_equals = true,
+            default_value_t = true,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set
+        )]
         tz_hash_ids: bool,
 
         /// Issue file layout for new repos: flat or sharded
@@ -3588,9 +3597,9 @@ Issues chained together by dependencies.
 GETTING STARTED
   tz init   Initialize tz in your project
             Creates .tazk/ directory with project-specific database
-            Issues are named tz-1, tz-2, ...
+            Issues get hash-based IDs (tz-a1b2c, ...)
 
-  tz init --tz-hash-ids   Use hash-based IDs instead (tz-a1b2c, ...)
+  tz init --tz-hash-ids=false   Use sequential IDs instead (tz-1, tz-2, ...)
 
 CREATING ISSUES
   tz create "Fix login bug" -r agent   --role (human|agent) is required, except

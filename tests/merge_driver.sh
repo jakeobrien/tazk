@@ -94,7 +94,7 @@ ISSUE=.tazk/issues/tz-1.md
 COMMENTS=.tazk/comments/tz-1.json
 
 git init -q -b main
-TZ init >/dev/null
+TZ init --tz-hash-ids=false >/dev/null
 TZ create "Shared title" -r agent -p 2 -t task -d "First paragraph.
 
 Second paragraph.

@@ -100,8 +100,8 @@ impl std::fmt::Display for TazkAction {
         match self {
             TazkAction::Init { tz_hash_ids } => {
                 let mut parts = vec!["init".to_string()];
-                if let Some(true) = tz_hash_ids {
-                    parts.push("--tz-hash-ids".to_string());
+                if let Some(use_hash) = tz_hash_ids {
+                    parts.push(format!("--tz-hash-ids={use_hash}"));
                 }
                 write!(f, "{}", parts.join(" "))
             }
@@ -439,8 +439,8 @@ impl ActionExecutor {
             TazkAction::Init { tz_hash_ids } => {
                 let mut cmd = self.build_command();
                 cmd.arg("init");
-                if let Some(true) = tz_hash_ids {
-                    cmd.arg("--tz-hash-ids");
+                if let Some(use_hash) = tz_hash_ids {
+                    cmd.arg(format!("--tz-hash-ids={use_hash}"));
                 }
                 cmd.output().context("Failed to execute init command")?
             }
@@ -702,9 +702,8 @@ impl ReferenceInterpreter {
     pub fn execute(&mut self, action: &TazkAction) -> Result<()> {
         match action {
             TazkAction::Init { tz_hash_ids } => {
-                if let Some(use_hash) = tz_hash_ids {
-                    self.use_hash_ids = *use_hash;
-                }
+                // `tz init` defaults to hash IDs when the flag is omitted.
+                self.use_hash_ids = tz_hash_ids.unwrap_or(true);
                 Ok(())
             }
 

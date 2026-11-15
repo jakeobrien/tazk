@@ -125,13 +125,21 @@ echo "Creating test directory: $TEST_DIR"
 mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
+# Test 0: The default is hash IDs
+echo -e "\n${YELLOW}Test 0: Initialize database (default: hash IDs)${NC}"
+mkdir -p default_init
+(cd default_init && "$TZ_BIN" init >/dev/null 2>&1)
+CONFIG_VALUE=$(grep "tz-hash-ids:" default_init/.tazk/config.yaml | awk '{print $2}' | tr -d "'\"")
+assert_equals "true" "$CONFIG_VALUE" "tz-hash-ids should default to true"
+rm -rf default_init
+
 # Test 1: Initialize database with numeric IDs
-echo -e "\n${YELLOW}Test 1: Initialize database (default: numeric IDs)${NC}"
-OUTPUT=$("$TZ_BIN" init 2>&1)
+echo -e "\n${YELLOW}Test 1: Initialize database (--tz-hash-ids=false: numeric IDs)${NC}"
+OUTPUT=$("$TZ_BIN" init --tz-hash-ids=false 2>&1)
 assert_contains "$OUTPUT" "Initialized tazk database" "Initialize should succeed"
 # Check config.yaml has tz-hash-ids: false
 CONFIG_VALUE=$(grep "tz-hash-ids:" .tazk/config.yaml | awk '{print $2}' | tr -d "'\"")
-assert_equals "false" "$CONFIG_VALUE" "tz-hash-ids should default to false"
+assert_equals "false" "$CONFIG_VALUE" "tz-hash-ids should be false"
 
 # Test 2: Create issues with numeric IDs
 echo -e "\n${YELLOW}Test 2: Create issues with numeric IDs${NC}"

@@ -100,7 +100,7 @@ mkdir -p "$TEST_DIR"
 cd "$TEST_DIR"
 
 # Setup: a repo with one issue whose description has a repeated token.
-"$TZ_BIN" init >/dev/null 2>&1
+"$TZ_BIN" init --tz-hash-ids=false >/dev/null 2>&1
 "$TZ_BIN" create "A task" -r agent -d "I have a CLI that lets agents file tasks. The CLI is clumsy to edit." >/dev/null 2>&1
 
 # Read back the description body of tz-1 (everything after the "# Description" heading).
