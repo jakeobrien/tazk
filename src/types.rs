@@ -185,6 +185,37 @@ impl IssueType {
         }
     }
 
+    /// Check a write that changes `field` of the existing issue `id` from
+    /// `old` to `new` (tz-51 §4). Only the new value is judged; `old` decides
+    /// the wording: when the rejected section was already non-empty on a type
+    /// that forbids it, the message says that clearing it is allowed.
+    pub fn ensure_section_change(
+        &self,
+        id: &str,
+        field: EditField,
+        old: &str,
+        new: &str,
+    ) -> anyhow::Result<()> {
+        let result = self.ensure_section(Some(id), field, new);
+        if result.is_ok()
+            || self.section_rule(field) != SectionRule::Forbidden
+            || old.trim().is_empty()
+        {
+            return result;
+        }
+        let flag = match field {
+            EditField::Acceptance => "--acceptance",
+            EditField::Title | EditField::Description | EditField::Design | EditField::Notes => {
+                "--design"
+            }
+        };
+        result.map_err(|err| {
+            anyhow::anyhow!(
+                "{err} {id} already has one; it can't be changed, but clearing it is allowed ({flag} \"\")."
+            )
+        })
+    }
+
     /// The Acceptance Criteria a new issue of this type gets when none is
     /// given (tz-51 §5.1): `- All child issues closed.` on epics.
     pub fn default_acceptance(&self) -> Option<&'static str> {

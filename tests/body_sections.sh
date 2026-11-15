@@ -1,5 +1,5 @@
 #!/bin/bash
-# E2E test for per-type body sections on create and triage promote (tz-51 §3, §5.1, §5.2)
+# E2E test for per-type body sections on create, triage promote and update (tz-51 §3, §5.1-§5.3)
 set -euo pipefail
 
 # Colors for output
@@ -205,6 +205,89 @@ assert_not_contains "$("$TZ_BIN" show tz-11)" "All child issues closed" "promote
 E=$(add_item "task text")
 "$TZ_BIN" triage promote "$E" --title "Promoted task" -r agent --design "d" --acceptance "a" >/dev/null 2>&1
 assert_equals "12" "$(issue_count)" "work types still promote with every section"
+
+# Test 5: update enforces the rules on the sections it changes
+echo -e "\n${YELLOW}Test 5: update${NC}"
+# Run an update expecting failure; assert the message and that the file is untouched.
+assert_update_rejected() {
+    local id="$1" needle="$2" message="$3" before output
+    shift 3
+    before=$(cat ".tazk/issues/$id.md")
+    output=$("$TZ_BIN" update "$id" "$@" 2>&1 || true)
+    assert_contains "$output" "$needle" "$message"
+    assert_equals "$before" "$(cat ".tazk/issues/$id.md")" "$message: file untouched"
+}
+# tz-5 is an epic, tz-1 a spec, tz-2 a gate (created above)
+"$TZ_BIN" update tz-5 --design "" >/dev/null 2>&1
+printf 'x\n' >"$TEST_DIR/body.txt"
+assert_update_rejected tz-5 "epics have no Design" "epic --design" --design "approach"
+assert_update_rejected tz-5 "epics have no Design" "epic --append design" --append "more" --field design
+assert_update_rejected tz-1 "specs have no Design" "spec --design" --design "approach"
+assert_update_rejected tz-1 "specs have no Design or Acceptance" "spec --acceptance" --acceptance "c"
+assert_update_rejected tz-1 "specs have no Design or Acceptance" "spec --append acceptance" --append "c" --field acceptance
+assert_update_rejected tz-2 "gates have no Design" "gate --design" --design "approach"
+assert_update_rejected tz-2 "gates have no Design" "gate --append design" --append "x" --field design
+assert_update_rejected tz-1 "A spec needs a Description" "spec --description blank" --description " "
+assert_update_rejected tz-2 "A gate needs a Description" "gate --description empty" --description ""
+assert_update_rejected tz-2 "A gate needs Acceptance Criteria" "gate --acceptance empty" --acceptance ""
+assert_update_rejected tz-1 "A spec needs a Description" "spec search/replace to empty" \
+    --search "The spec" --replace "" --field description
+assert_update_rejected tz-2 "A gate needs Acceptance Criteria" "gate search/replace acceptance to empty" \
+    --search "Check" --replace "" --field acceptance --replace-all
+: >"$TEST_DIR/empty.txt"
+output=$("$TZ_BIN" update tz-1 --description-file "$TEST_DIR/empty.txt" 2>&1 || true)
+assert_contains "$output" "A spec needs a Description" "spec --description-file empty"
+assert_contains "$(cat .tazk/issues/tz-1.md)" "The spec" "spec description file untouched"
+output=$("$TZ_BIN" update tz-5 --design "d" tz-3 2>&1 || true)
+assert_contains "$output" "epics have no Design" "multi-id update checks each issue's own type"
+
+# Valid updates, and fields that are never checked
+"$TZ_BIN" update tz-1 -d "New spec" --notes "later" --design "" >/dev/null 2>&1
+"$TZ_BIN" update tz-1 --append "More" --field description >/dev/null 2>&1
+"$TZ_BIN" update tz-1 --search "New" --replace "Newer" --field description >/dev/null 2>&1
+assert_contains "$(cat .tazk/issues/tz-1.md)" "Newer spec" "valid spec update applies"
+"$TZ_BIN" update tz-1 --append "x" --field title >/dev/null 2>&1
+"$TZ_BIN" update tz-2 --acceptance "Check again" -p 1 >/dev/null 2>&1
+"$TZ_BIN" update tz-2 --search "again" --replace "twice" --field acceptance >/dev/null 2>&1
+assert_contains "$(cat .tazk/issues/tz-2.md)" "Check twice" "valid gate update applies"
+"$TZ_BIN" update tz-3 tz-4 --design "ok" >/dev/null 2>&1
+assert_contains "$(cat .tazk/issues/tz-4.md)" "ok" "work types update every section"
+
+# Issues that already break the rules keep working
+echo -e "\n${YELLOW}Test 6: existing issues that break the rules${NC}"
+"$TZ_BIN" create "Old epic" -t epic >/dev/null 2>&1
+"$TZ_BIN" create "Old spec" -t spec -d "Spec body" >/dev/null 2>&1
+"$TZ_BIN" create "Old gate" -t gate -r agent -d "Cond" --acceptance "Check" >/dev/null 2>&1
+EPIC=$("$TZ_BIN" list --json 2>/dev/null | jq -r '.[] | select(.title=="Old epic") | .id')
+SPEC=$("$TZ_BIN" list --json 2>/dev/null | jq -r '.[] | select(.title=="Old spec") | .id')
+GATE=$("$TZ_BIN" list --json 2>/dev/null | jq -r '.[] | select(.title=="Old gate") | .id')
+printf '\n# Design\n\nOld approach\n' >>".tazk/issues/$EPIC.md"
+printf '\n# Acceptance Criteria\n\nOld criteria\n' >>".tazk/issues/$SPEC.md"
+sed -i.bak '/^# Acceptance Criteria$/,/^Check$/d' ".tazk/issues/$GATE.md"
+rm -f .tazk/issues/*.bak
+assert_contains "$("$TZ_BIN" show "$EPIC")" "Old approach" "epic with Design still loads"
+assert_contains "$("$TZ_BIN" show "$SPEC")" "Old criteria" "spec with Acceptance Criteria still loads"
+assert_not_contains "$(cat ".tazk/issues/$GATE.md")" "Acceptance Criteria" "gate Acceptance Criteria was removed"
+for id in "$EPIC" "$SPEC" "$GATE"; do
+    "$TZ_BIN" update "$id" --title "Renamed $id" -p 1 --notes "n" >/dev/null 2>&1
+    "$TZ_BIN" update "$id" -d "Fresh body" >/dev/null 2>&1
+    "$TZ_BIN" close "$id" >/dev/null 2>&1
+done
+"$TZ_BIN" reopen "$EPIC" >/dev/null 2>&1
+"$TZ_BIN" reopen "$SPEC" >/dev/null 2>&1
+"$TZ_BIN" reopen "$GATE" -r agent >/dev/null 2>&1
+assert_contains "$("$TZ_BIN" show "$GATE")" "open" "gate with empty Acceptance Criteria reopens"
+assert_update_rejected "$EPIC" "clearing it is allowed" "epic existing Design cannot be set" --design "New"
+assert_update_rejected "$EPIC" "clearing it is allowed" "epic existing Design cannot be appended" --append "x" --field design
+assert_update_rejected "$EPIC" "clearing it is allowed" "epic existing Design cannot be replaced" \
+    --search "Old" --replace "New" --field design
+assert_update_rejected "$SPEC" "clearing it is allowed" "spec existing Acceptance cannot be replaced" \
+    --search "Old" --replace "New" --field acceptance --replace-all
+assert_update_rejected "$GATE" "A gate needs Acceptance Criteria" "gate empty Acceptance cannot be set empty" --acceptance ""
+"$TZ_BIN" update "$EPIC" --design "" >/dev/null 2>&1
+"$TZ_BIN" update "$SPEC" --acceptance "" >/dev/null 2>&1
+assert_not_contains "$(cat ".tazk/issues/$EPIC.md")" "Old approach" "epic Design can be cleared"
+assert_not_contains "$(cat ".tazk/issues/$SPEC.md")" "Old criteria" "spec Acceptance Criteria can be cleared"
 
 # Print summary
 echo ""

@@ -1040,13 +1040,16 @@ impl Storage {
         let mut issue = markdown_to_issue(id, &content)?;
 
         let target = issue.text_field_mut(field);
-        *target = search_replace_text(
+        let new = search_replace_text(
             target,
             search,
             replace,
             replace_all,
             &format!("{field} field of {id}"),
         )?;
+        let (ty, old) = (issue.issue_type, issue.text_field_mut(field).clone());
+        ty.ensure_section_change(id, field, &old, &new)?;
+        *issue.text_field_mut(field) = new;
 
         issue.updated_at = chrono::Utc::now();
 
@@ -1075,8 +1078,10 @@ impl Storage {
         let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
         let mut issue = markdown_to_issue(id, &content)?;
 
-        let target = issue.text_field_mut(field);
-        *target = append_paragraph(target, text);
+        let new = append_paragraph(issue.text_field_mut(field), text);
+        let (ty, old) = (issue.issue_type, issue.text_field_mut(field).clone());
+        ty.ensure_section_change(id, field, &old, &new)?;
+        *issue.text_field_mut(field) = new;
 
         issue.updated_at = chrono::Utc::now();
 
@@ -3752,6 +3757,224 @@ mod role_effort_tests {
         }
     }
 
+    // Section rules on update (tz-51 §4, §5.3).
+
+    fn update_body(storage: &Storage, id: &str, key: &str, value: &str) -> Result<Issue> {
+        let mut updates = HashMap::new();
+        updates.insert(key.to_string(), value.to_string());
+        storage.update_issue(id, updates)
+    }
+
+    fn issue_file(storage: &Storage, id: &str) -> String {
+        fs::read_to_string(storage.get_tazk_dir().join(format!("issues/{id}.md"))).unwrap()
+    }
+
+    /// Rewrite an issue file directly, bypassing the checks.
+    fn rewrite_file(storage: &Storage, id: &str, from: &str, to: &str) {
+        let path = storage.get_tazk_dir().join(format!("issues/{id}.md"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from), "{from:?} not in {text}");
+        fs::write(&path, text.replacen(from, to, 1)).unwrap();
+    }
+
+    #[test]
+    fn update_rejects_forbidden_and_emptied_required_sections() {
+        let (_tmp, storage) = storage();
+        // (type, key, field, rejected value)
+        let cases = [
+            (IssueType::Epic, "design", EditField::Design, "approach"),
+            (IssueType::Spec, "design", EditField::Design, "approach"),
+            (
+                IssueType::Spec,
+                "acceptance_criteria",
+                EditField::Acceptance,
+                "c",
+            ),
+            (IssueType::Gate, "design", EditField::Design, "approach"),
+            (IssueType::Spec, "description", EditField::Description, "  "),
+            (IssueType::Gate, "description", EditField::Description, ""),
+            (
+                IssueType::Gate,
+                "acceptance_criteria",
+                EditField::Acceptance,
+                " ",
+            ),
+        ];
+        for (ty, key, field, value) in cases {
+            let id = create_typed(&storage, ty, (ty == IssueType::Gate).then_some(Role::Agent))
+                .unwrap()
+                .id;
+            let before = issue_file(&storage, &id);
+
+            let err = update_body(&storage, &id, key, value).unwrap_err();
+            assert!(
+                err.to_string().contains(&id) || err.to_string().contains("needs"),
+                "{ty} {key}: {err}"
+            );
+            assert_eq!(issue_file(&storage, &id), before, "{ty} {key} update");
+
+            if field == EditField::Design
+                || (ty == IssueType::Spec && field == EditField::Acceptance)
+            {
+                // Append to an empty forbidden section; replace is impossible.
+                let err = storage.append_to_issue(&id, field, "more").unwrap_err();
+                assert!(err.to_string().contains(&id), "{ty} {key}: {err}");
+                assert!(!err.to_string().contains("clearing"), "{err}");
+                assert_eq!(issue_file(&storage, &id), before, "{ty} {key} append");
+            } else {
+                // Replace the whole body with nothing.
+                let mut body = storage.get_issue(&id).unwrap().unwrap();
+                let text = body.text_field_mut(field).clone();
+                let err = storage
+                    .search_replace_issue(&id, field, &text, "", false)
+                    .unwrap_err();
+                assert!(err.to_string().contains("needs"), "{ty} {key}: {err}");
+                assert_eq!(issue_file(&storage, &id), before, "{ty} {key} replace");
+            }
+        }
+    }
+
+    #[test]
+    fn update_accepts_valid_section_changes_and_unchecked_fields() {
+        let (_tmp, storage) = storage();
+        let epic = create_typed(&storage, IssueType::Epic, None).unwrap().id;
+        update_body(&storage, &epic, "acceptance_criteria", "").unwrap();
+        update_body(&storage, &epic, "design", "  ").unwrap();
+        storage
+            .append_to_issue(&epic, EditField::Notes, "n")
+            .unwrap();
+        storage
+            .append_to_issue(&epic, EditField::Title, "t")
+            .unwrap();
+
+        let spec = create_typed(&storage, IssueType::Spec, None).unwrap().id;
+        update_body(&storage, &spec, "description", "New spec").unwrap();
+        update_body(&storage, &spec, "notes", "later").unwrap();
+        update_body(&storage, &spec, "design", "").unwrap();
+        storage
+            .search_replace_issue(&spec, EditField::Description, "New", "Newer", false)
+            .unwrap();
+        storage
+            .search_replace_issue(&spec, EditField::Title, "T", "U", true)
+            .unwrap();
+        storage
+            .append_to_issue(&spec, EditField::Description, "more")
+            .unwrap();
+
+        let gate = create_typed(&storage, IssueType::Gate, Some(Role::Human))
+            .unwrap()
+            .id;
+        update_body(&storage, &gate, "acceptance_criteria", "Look").unwrap();
+        update_body(&storage, &gate, "priority", "1").unwrap();
+        storage
+            .append_to_issue(&gate, EditField::Acceptance, "and see")
+            .unwrap();
+        storage
+            .search_replace_issue(&gate, EditField::Acceptance, "Look", "Peek", false)
+            .unwrap();
+        let gate = storage.get_issue(&gate).unwrap().unwrap();
+        assert_eq!(gate.acceptance_criteria, "Peek\n\nand see");
+    }
+
+    #[test]
+    fn update_checks_each_issue_against_its_own_type() {
+        let (_tmp, storage) = storage();
+        let task = create_typed(&storage, IssueType::Task, Some(Role::Agent))
+            .unwrap()
+            .id;
+        let epic = create_typed(&storage, IssueType::Epic, None).unwrap().id;
+        update_body(&storage, &task, "design", "ok").unwrap();
+        let err = update_body(&storage, &epic, "design", "no").unwrap_err();
+        assert!(err.to_string().contains("epics have no Design"), "{err}");
+    }
+
+    #[test]
+    fn issues_that_break_the_rules_still_work_and_can_be_cleared() {
+        let (_tmp, storage) = storage();
+
+        let epic = create_typed(&storage, IssueType::Epic, None).unwrap().id;
+        rewrite_file(
+            &storage,
+            &epic,
+            "# Description",
+            "# Design\n\nOld approach\n\n# Description",
+        );
+        let spec = create_typed(&storage, IssueType::Spec, None).unwrap().id;
+        rewrite_file(
+            &storage,
+            &spec,
+            "# Description",
+            "# Acceptance Criteria\n\nOld\n\n# Description",
+        );
+        let gate = create_typed(&storage, IssueType::Gate, Some(Role::Agent))
+            .unwrap()
+            .id;
+        rewrite_file(&storage, &gate, "Check it.", "");
+
+        assert_eq!(
+            storage.get_issue(&epic).unwrap().unwrap().design,
+            "Old approach"
+        );
+        assert_eq!(
+            storage
+                .get_issue(&spec)
+                .unwrap()
+                .unwrap()
+                .acceptance_criteria,
+            "Old"
+        );
+        assert_eq!(
+            storage
+                .get_issue(&gate)
+                .unwrap()
+                .unwrap()
+                .acceptance_criteria,
+            ""
+        );
+
+        for id in [&epic, &spec, &gate] {
+            update_body(&storage, id, "title", "Renamed").unwrap();
+            update_body(&storage, id, "notes", "note").unwrap();
+            update_body(&storage, id, "description", "Body 2").unwrap();
+            storage.append_to_issue(id, EditField::Title, "x").unwrap();
+            storage.close_issue(id, None).unwrap();
+            let role = (*id == gate).then_some(Role::Agent);
+            storage.reopen_issue(id, role, Some("again")).unwrap();
+        }
+
+        // The forbidden sections cannot be changed, only cleared.
+        let err = update_body(&storage, &epic, "design", "New").unwrap_err();
+        assert!(err.to_string().contains("clearing it is allowed"), "{err}");
+        let err = storage
+            .append_to_issue(&epic, EditField::Design, "more")
+            .unwrap_err();
+        assert!(err.to_string().contains("clearing it is allowed"), "{err}");
+        let err = storage
+            .search_replace_issue(&epic, EditField::Design, "Old", "New", false)
+            .unwrap_err();
+        assert!(err.to_string().contains("clearing it is allowed"), "{err}");
+        let err = storage
+            .search_replace_issue(&spec, EditField::Acceptance, "Old", "New", true)
+            .unwrap_err();
+        assert!(err.to_string().contains("--acceptance"), "{err}");
+
+        // A gate's empty Acceptance Criteria only fails when it is touched.
+        let err = update_body(&storage, &gate, "acceptance_criteria", "").unwrap_err();
+        assert!(err.to_string().contains("A gate needs Acceptance"), "{err}");
+
+        update_body(&storage, &epic, "design", "").unwrap();
+        update_body(&storage, &spec, "acceptance_criteria", "").unwrap();
+        assert_eq!(storage.get_issue(&epic).unwrap().unwrap().design, "");
+        assert_eq!(
+            storage
+                .get_issue(&spec)
+                .unwrap()
+                .unwrap()
+                .acceptance_criteria,
+            ""
+        );
+    }
+
     #[test]
     fn legacy_epic_or_spec_role_still_loads_and_takes_other_changes() {
         let (_tmp, storage) = storage();
@@ -4220,6 +4443,21 @@ fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> R
                 "{}s take no role. To remove a stored role, use --clear-role",
                 issue.issue_type
             );
+        }
+    }
+    // Section rule (tz-51 §4): only the body sections this update changes are
+    // checked, against the values they will have after it.
+    for (key, field) in [
+        ("description", EditField::Description),
+        ("design", EditField::Design),
+        ("acceptance_criteria", EditField::Acceptance),
+        ("notes", EditField::Notes),
+    ] {
+        if let Some(value) = updates.get(key) {
+            let old = issue.text_field_mut(field).clone();
+            issue
+                .issue_type
+                .ensure_section_change(&issue.id, field, &old, value)?;
         }
     }
     for (key, value) in updates {
