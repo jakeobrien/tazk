@@ -3,12 +3,11 @@ title: 'TUI: issues grid (filters, search, grouping, cells, picker)'
 status: closed
 priority: 1
 issue_type: epic
-role: agent
 effort: 5
 labels:
 - tui
 created_at: 2026-11-06T03:28:37.331373795+00:00
-updated_at: 2026-11-15T16:33:10.611171+00:00
+updated_at: 2026-11-15T16:45:20.117528137+00:00
 closed_at: 2026-11-15T16:33:10.611171+00:00
 ---
 

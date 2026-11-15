@@ -8,13 +8,15 @@ overview, see the [README](README.md).
 ### Core Commands
 
 - `tz init [--tz-hash-ids] [--tz-issue-layout flat|sharded]` - Initialize a database
-- `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required.
+- `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required for `task`, `bug`, `feature`, `chore` and `gate`, and rejected for `epic` and `spec`, which take no role.
   - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `--effort 1-5`, `-l LABEL`
-- `tz list [FILTERS]` - List issues with optional filters (including `--assignee USER` and `-r/--role ROLE`)
+- `tz list [FILTERS]` - List issues with optional filters (including `--assignee USER` and `-r/--role ROLE`, where ROLE is `human`, `agent` or `none` for issues with no role)
 - `tz show ISSUE_ID` - Show detailed issue information
 - `tz update ISSUE_ID [OPTIONS]` - Update issue fields (not status)
   - `-r/--role ROLE`, `--effort N` set the role or effort; `--clear-role` and
-    `--clear-effort` remove them.
+    `--clear-effort` remove them. `epic` and `spec` take no role: `-r` fails on
+    them, and `--clear-role` is the only role change allowed (it succeeds only
+    there; it fails on every other type).
   - `--search TEXT --replace TEXT [--field FIELD] [--replace-all]` - targeted,
     aider-style edit of a text field (default `description`) instead of
     overwriting it wholesale. By default the search text must match exactly once;
@@ -29,7 +31,7 @@ overview, see the [README](README.md).
 - `tz block ISSUE_ID... [--release] [--reason TEXT]` - Mark issues `blocked`, or back to `open` with `--release`. A reason is appended to Notes as `Blocked <UTC timestamp>: <reason>` (`Unblocked ...` on release)
 - `tz defer ISSUE_ID... [--release] [--reason TEXT]` - Same as `tz block`, for `deferred` (`Deferred ...` / `Undeferred ...` notes)
 - `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue. A reason is appended to Notes as `Closed <UTC timestamp>: <reason>`
-- `tz reopen ISSUE_ID... [--role human|agent] [--reason REASON]` - Reopen closed issues. A reason is appended to Notes as `Reopened <UTC timestamp>: <reason>`. An issue with no role is refused until you resubmit with `--role`
+- `tz reopen ISSUE_ID... [--role human|agent] [--reason REASON]` - Reopen closed issues. A reason is appended to Notes as `Reopened <UTC timestamp>: <reason>`. A work issue (not `epic` or `spec`) with no role is refused until you resubmit with `--role`; `epic` and `spec` need no role and reject `--role`
 - `tz renumber ISSUE_ID [--to SUFFIX_OR_ID] [--dry-run] [--tz-patch-code]` - Give an issue a new ID, for fixing duplicate IDs (see [Duplicate IDs](#duplicate-ids-after-a-merge)). The ID is always canonical and in the store's format:
   - Numeric store (default): without `--to`, the next free number (highest + 1); `--to` must be a free numeric ID (`--to 20` or `--to tz-20`).
   - Hash store (`tz-hash-ids: true`): without `--to`, a freshly generated hash; `--to` must be a free hash ID.
@@ -74,7 +76,7 @@ the file in `.tazk/triage/`.
   empty is refused; use `tz triage rm`.
 - `tz triage rm NAME...` - Delete items. All must exist, otherwise none is
   deleted.
-- `tz triage promote NAME... --title TITLE -r human|agent [OPTIONS]` - Create
+- `tz triage promote NAME... --title TITLE [-r human|agent] [OPTIONS]` - Create
   one issue from one or more items and delete the items. Accepts the same
   options as `tz create` (`-p`, `-t`, `-d` /
   `--description-file`, `--design`, `--acceptance`, `-a`, `--effort`,
@@ -99,7 +101,7 @@ leaves them to git's ordinary line merge.
 
 ### Queries
 
-- `tz ready [--assignee USER] [-r/--role ROLE] [--priority N]` - Find ready work, printed as `id: title [priority: N, effort: N]` (effort omitted when unset) (no blockers, including blockers inherited from `child_of` ancestors; `epic` and `spec` issues are hidden unless requested with `--type`)
+- `tz ready [--assignee USER] [-r/--role ROLE|none] [--priority N]` - Find ready work, printed as `id: title [priority: N, effort: N]` (effort omitted when unset) (no blockers, including blockers inherited from `child_of` ancestors; `epic` and `spec` issues are hidden unless requested with `--type`)
 - `tz blocked` - Show blocked issues and what blocks them. Blockers inherited from `child_of` ancestors are listed as `target (inherited from ANCESTOR)`, or `ANCESTOR (blocked status, inherited)` when the ancestor is in `blocked` status. `--json` keeps `blocked_by` for the issue's own blockers and adds `inherited_blocked_by`: a list of `{ancestor, blocked_by, blocked_status}`; `blocked_by_count` covers both
 - `tz stats` - Show statistics (total, open, blocked, average lead time)
 
@@ -329,7 +331,7 @@ Triage item names are not IDs and are unaffected.
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |
 | `issue_type` | yes | See [Issue type](#issue-type) | Default `task`. Set with `-t/--issue-type`. |
 | `assignee` | no | Any text | Omitted when empty. Clear with `update --unassign`. |
-| `role` | no | `human`, `agent` | Who the issue is for. Omitted when unset. Required by `tz create` and `tz triage promote` (`-r/--role`); change with `tz update -r/--role`; clear with `update --clear-role`. Filter with `-r/--role` on `tz list`, `tz ready` and `tz export`. |
+| `role` | no | `human`, `agent` | Who picks the issue up as work. Required on `task`, `bug`, `feature`, `chore` and `gate` by `tz create` and `tz triage promote` (`-r/--role`); forbidden on `epic` and `spec`. Omitted when unset. Change with `tz update -r/--role` (work types only); `update --clear-role` works only on `epic` and `spec`. An epic/spec that already has a role still loads and accepts other updates and `tz close`. Filter with `-r/--role` on `tz list` and `tz ready` (`none` matches issues with no role) and `tz export`. |
 | `effort` | no | Integer `1`–`5`; `5` is the most effort | Omitted when unset. Set with `tz create/update --effort`; clear with `update --clear-effort`. Values outside 1–5 are rejected, including in hand-edited files. |
 | `external_ref` | no | Any text (e.g. a URL or ticket key in another tracker) | Omitted when unset. |
 | `labels` | no | List of free-form strings | Stored sorted and de-duplicated; empty entries are dropped. Commas separate labels in `--labels`, `--set-labels`. |

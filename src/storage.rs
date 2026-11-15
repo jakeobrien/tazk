@@ -701,6 +701,7 @@ impl Storage {
             role,
             effort,
         } = fields;
+        issue_type.ensure_role_allowed(role)?;
         if let Some(effort) = effort {
             validate_effort(effort)?;
         }
@@ -1241,8 +1242,10 @@ impl Storage {
 
     /// Reopen an issue.
     ///
-    /// An issue without a role cannot be reopened: the caller must supply one
-    /// (`role`). A supplied `role` always replaces the stored one. A non-empty
+    /// A work issue (not an epic or spec) without a role cannot be reopened: the
+    /// caller must supply one (`role`). A supplied `role` always replaces the
+    /// stored one. Epics and specs take no role: reopening needs none and
+    /// rejects one. A non-empty
     /// `reason` is appended to the notes as `Reopened <timestamp>: <reason>`.
     pub fn reopen_issue(
         &self,
@@ -1259,12 +1262,17 @@ impl Storage {
         let content = fs::read_to_string(&issue_path).context("Failed to read issue file")?;
         let mut issue = markdown_to_issue(id, &content)?;
 
-        match role.or(issue.role) {
-            Some(role) => issue.role = Some(role),
-            None => anyhow::bail!(
-                "Cannot reopen {}: it has no role. Resubmit with --role human|agent",
-                id
-            ),
+        if issue.issue_type.takes_role() {
+            match role.or(issue.role) {
+                Some(role) => issue.role = Some(role),
+                None => anyhow::bail!(
+                    "Cannot reopen {}: it has no role. Resubmit with --role human|agent",
+                    id
+                ),
+            }
+        } else {
+            // Epics and specs take no role; a legacy stored role is left alone.
+            issue.issue_type.ensure_role_allowed(role)?;
         }
 
         let now = chrono::Utc::now();
@@ -3655,11 +3663,120 @@ mod role_effort_tests {
         assert_eq!(updated.effort, Some(5));
 
         let mut updates = HashMap::new();
-        updates.insert("role".to_string(), String::new());
         updates.insert("effort".to_string(), String::new());
         let cleared = storage.update_issue(&issue.id, updates).unwrap();
-        assert_eq!(cleared.role, None);
+        assert_eq!(cleared.role, Some(Role::Agent));
         assert_eq!(cleared.effort, None);
+    }
+
+    fn create_typed(storage: &Storage, issue_type: IssueType, role: Option<Role>) -> Result<Issue> {
+        storage.create_issue(
+            "T".to_string(),
+            String::new(),
+            None,
+            None,
+            2,
+            issue_type,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            role,
+            None,
+        )
+    }
+
+    fn update_role(storage: &Storage, id: &str, role: &str) -> Result<Issue> {
+        let mut updates = HashMap::new();
+        updates.insert("role".to_string(), role.to_string());
+        storage.update_issue(id, updates)
+    }
+
+    /// An epic or spec that has a role stored, as written before the role rule.
+    fn legacy_with_role(storage: &Storage, issue_type: IssueType) -> String {
+        let id = create_typed(storage, issue_type, None).unwrap().id;
+        let path = storage.get_tazk_dir().join(format!("issues/{id}.md"));
+        let text = fs::read_to_string(&path).unwrap();
+        let marker = format!("issue_type: {issue_type}\n");
+        assert!(text.contains(&marker));
+        fs::write(
+            &path,
+            text.replace(&marker, &format!("{marker}role: agent\n")),
+        )
+        .unwrap();
+        assert_eq!(
+            storage.get_issue(&id).unwrap().unwrap().role,
+            Some(Role::Agent)
+        );
+        id
+    }
+
+    #[test]
+    fn epics_and_specs_take_no_role() {
+        let (_tmp, storage) = storage();
+        for ty in [IssueType::Epic, IssueType::Spec] {
+            let err = create_typed(&storage, ty, Some(Role::Agent)).unwrap_err();
+            assert!(err.to_string().contains("take no role"), "{err}");
+            let issue = create_typed(&storage, ty, None).unwrap();
+            assert_eq!(issue.role, None);
+
+            let err = update_role(&storage, &issue.id, "human").unwrap_err();
+            assert!(err.to_string().contains("take no role"), "{err}");
+            assert_eq!(update_role(&storage, &issue.id, "").unwrap().role, None);
+        }
+        for ty in [
+            IssueType::Task,
+            IssueType::Bug,
+            IssueType::Feature,
+            IssueType::Chore,
+            IssueType::Gate,
+        ] {
+            let issue = create_typed(&storage, ty, Some(Role::Human)).unwrap();
+            let err = update_role(&storage, &issue.id, "").unwrap_err();
+            assert!(err.to_string().contains("cannot be cleared"), "{err}");
+            let issue = update_role(&storage, &issue.id, "agent").unwrap();
+            assert_eq!(issue.role, Some(Role::Agent));
+        }
+    }
+
+    #[test]
+    fn legacy_epic_or_spec_role_still_loads_and_takes_other_changes() {
+        let (_tmp, storage) = storage();
+        for ty in [IssueType::Epic, IssueType::Spec] {
+            let id = legacy_with_role(&storage, ty);
+            let mut updates = HashMap::new();
+            updates.insert("title".to_string(), "Renamed".to_string());
+            let updated = storage.update_issue(&id, updates).unwrap();
+            assert_eq!(updated.title, "Renamed");
+            assert_eq!(updated.role, Some(Role::Agent));
+            assert!(update_role(&storage, &id, "human").is_err());
+
+            // Closing and reopening need no role, and reopening rejects one.
+            storage.close_issue(&id, None).unwrap();
+            let err = storage
+                .reopen_issue(&id, Some(Role::Human), None)
+                .unwrap_err();
+            assert!(err.to_string().contains("take no role"), "{err}");
+            assert_eq!(
+                storage.get_issue(&id).unwrap().unwrap().status,
+                Status::Closed
+            );
+            storage.reopen_issue(&id, None, None).unwrap();
+
+            assert_eq!(update_role(&storage, &id, "").unwrap().role, None);
+        }
+    }
+
+    #[test]
+    fn reopen_epic_or_spec_without_role() {
+        let (_tmp, storage) = storage();
+        for ty in [IssueType::Epic, IssueType::Spec] {
+            let id = create_typed(&storage, ty, None).unwrap().id;
+            storage.close_issue(&id, None).unwrap();
+            let issue = storage.reopen_issue(&id, None, None).unwrap();
+            assert_eq!(issue.status, Status::Open);
+            assert_eq!(issue.role, None);
+        }
     }
 
     #[test]
@@ -4074,6 +4191,24 @@ pub fn is_blocked_with_ancestors(
 
 fn apply_issue_updates(issue: &mut Issue, updates: HashMap<String, String>) -> Result<()> {
     let now = chrono::Utc::now();
+    // Role rule: only commands that change the role are checked, so a legacy
+    // epic/spec that still has a role accepts every other update.
+    if let Some(role) = updates.get("role") {
+        if role.is_empty() {
+            anyhow::ensure!(
+                !issue.issue_type.takes_role(),
+                "{}s need a role, so it cannot be cleared. Set another with --role human|agent",
+                issue.issue_type
+            );
+        } else {
+            role.parse::<Role>()?;
+            anyhow::ensure!(
+                issue.issue_type.takes_role(),
+                "{}s take no role. To remove a stored role, use --clear-role",
+                issue.issue_type
+            );
+        }
+    }
     for (key, value) in updates {
         match key.as_str() {
             "title" => issue.title = value,

@@ -197,9 +197,10 @@ enum Commands {
         #[arg(short = 'a', long)]
         assignee: Option<String>,
 
-        /// Role the issue is for: human, agent (required)
-        #[arg(short = 'r', long, required = true)]
-        role: Role,
+        /// Role the issue is for: human, agent. Required, except on epic and
+        /// spec, which take none
+        #[arg(short = 'r', long)]
+        role: Option<Role>,
 
         /// Effort estimate from 1 to 5 (5 is the most effort)
         #[arg(long, value_parser = clap::value_parser!(u8).range(MIN_EFFORT as i64..=MAX_EFFORT as i64))]
@@ -261,9 +262,9 @@ enum Commands {
         #[arg(long)]
         assignee: Option<String>,
 
-        /// Filter by role: human, agent
+        /// Filter by role: human, agent, none (no role)
         #[arg(short = 'r', long)]
-        role: Option<Role>,
+        role: Option<RoleFilter>,
 
         /// Filter by labels (must have ALL specified labels)
         #[arg(short = 'l', long = "label")]
@@ -322,11 +323,11 @@ enum Commands {
         #[arg(long)]
         unassign: bool,
 
-        /// New role: human, agent
+        /// New role: human, agent (not allowed on epic and spec)
         #[arg(short = 'r', long, conflicts_with = "clear_role")]
         role: Option<Role>,
 
-        /// Clear role
+        /// Clear role (only allowed on epic and spec)
         #[arg(long = "clear-role")]
         clear_role: bool,
 
@@ -517,9 +518,9 @@ enum Commands {
         #[arg(short, long, allow_hyphen_values = true)]
         reason: Option<String>,
 
-        /// Role the issue is for: human, agent. Required when an issue has no
-        /// role; replaces the stored role otherwise. (No short form: -r is
-        /// already --reason.)
+        /// Role the issue is for: human, agent. Required when a work issue has
+        /// no role; replaces the stored role otherwise. Epics and specs take
+        /// none. (No short form: -r is already --reason.)
         #[arg(long)]
         role: Option<Role>,
     },
@@ -636,9 +637,9 @@ enum Commands {
         #[arg(short = 'a', long)]
         assignee: Option<String>,
 
-        /// Filter by role: human, agent
+        /// Filter by role: human, agent, none (no role)
         #[arg(short = 'r', long)]
-        role: Option<Role>,
+        role: Option<RoleFilter>,
 
         /// Filter by priority (repeatable and/or comma-separated, e.g. "-p 0 -p 1" or "-p 0,1")
         #[arg(short = 'p', long)]
@@ -1005,7 +1006,8 @@ enum TriageCommands {
 
     /// Create one issue from one or more triage items, then delete them
     ///
-    /// --title and --role are required; priority and type default as in
+    /// --title is required, and so is --role (except for epic and spec, which
+    /// take none); priority and type default as in
     /// `tz create` (2, task). Without a description flag, the issue's
     /// description is the items' text, in the order given, separated by `---`
     /// lines. The issue's notes record the item names, so the originals can be
@@ -1020,9 +1022,10 @@ enum TriageCommands {
         #[arg(long, required = true, allow_hyphen_values = true)]
         title: String,
 
-        /// Role the issue is for: human, agent (required)
-        #[arg(short = 'r', long, required = true)]
-        role: Role,
+        /// Role the issue is for: human, agent. Required, except on epic and
+        /// spec, which take none
+        #[arg(short = 'r', long)]
+        role: Option<Role>,
 
         /// Priority (0-4, 0=highest)
         #[arg(short, long, default_value = "2")]
@@ -1632,6 +1635,7 @@ fn run_triage_command(storage: &Storage, command: TriageCommands, json: bool) ->
             deps,
             parent,
         } => {
+            require_role_for_type(issue_type, role)?;
             let description = resolve_body(description, description_file)?.unwrap_or_default();
             let mut all_labels = label;
             all_labels.extend(split_label_args(labels));
@@ -1648,7 +1652,7 @@ fn run_triage_command(storage: &Storage, command: TriageCommands, json: bool) ->
                     labels: all_labels,
                     external_ref,
                     deps: parse_deps(deps, parent),
-                    role: Some(role),
+                    role,
                     effort,
                 },
             )?;
@@ -1781,8 +1785,40 @@ struct IssueFilters<'a> {
     title: Option<&'a str>,
     /// Only direct children of this parent issue.
     parent: Option<&'a str>,
-    /// Only issues with this role.
-    role: Option<Role>,
+    /// Only issues with this role (`none`: issues with no role).
+    role: Option<RoleFilter>,
+}
+
+/// `-r` filter value on `list` and `ready`: a role, or `none` for "role unset".
+#[derive(Debug, Clone, Copy)]
+struct RoleFilter(Option<Role>);
+
+impl std::str::FromStr for RoleFilter {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        if s == "none" {
+            Ok(RoleFilter(None))
+        } else {
+            s.parse::<Role>()
+                .map(|role| RoleFilter(Some(role)))
+                .map_err(|_| {
+                    anyhow::anyhow!("Invalid role: '{s}'. Valid values are: human, agent, none")
+                })
+        }
+    }
+}
+
+/// `role` is required on the types `tz ready` can return and forbidden on
+/// epics and specs.
+fn require_role_for_type(issue_type: IssueType, role: Option<Role>) -> Result<()> {
+    issue_type.ensure_role_allowed(role)?;
+    if role.is_none() && issue_type.takes_role() {
+        anyhow::bail!(
+            "--role human|agent is required for {issue_type} issues (only epic and spec take none)"
+        );
+    }
+    Ok(())
 }
 
 /// Parse priority filters into a flat list, shared by `list` and `ready`. The
@@ -1853,8 +1889,8 @@ impl IssueFilters<'_> {
             issues.retain(|issue| issue.title.to_lowercase().contains(&title_lower));
         }
 
-        if let Some(role) = self.role {
-            issues.retain(|issue| issue.role == Some(role));
+        if let Some(RoleFilter(role)) = self.role {
+            issues.retain(|issue| issue.role == role);
         }
 
         if let Some(parent_id) = self.parent {
@@ -2026,6 +2062,8 @@ fn run() -> Result<()> {
             let description =
                 resolve_body(Some(description), description_file)?.unwrap_or_default();
 
+            require_role_for_type(issue_type, role)?;
+
             let issue = storage.create_issue(
                 actual_title,
                 description.clone(),
@@ -2037,7 +2075,7 @@ fn run() -> Result<()> {
                 all_labels,
                 external_ref,
                 parsed_deps,
-                Some(role),
+                role,
                 effort,
             )?;
 
@@ -2480,23 +2518,22 @@ fn run() -> Result<()> {
                 let _ = log_command(&storage.get_tazk_dir(), &env::args().collect::<Vec<_>>());
             }
 
-            // Check every issue before changing any, so a missing role doesn't
+            // Check every issue before changing any, so a role problem doesn't
             // leave a multi-issue reopen half done.
-            if role.is_none() {
-                let mut missing = Vec::new();
-                for issue_id in &issue_ids {
-                    if let Some(issue) = storage.get_issue(issue_id)? {
-                        if issue.role.is_none() {
-                            missing.push(issue.id);
-                        }
+            let mut missing = Vec::new();
+            for issue_id in &issue_ids {
+                if let Some(issue) = storage.get_issue(issue_id)? {
+                    issue.issue_type.ensure_role_allowed(role)?;
+                    if issue.issue_type.takes_role() && role.is_none() && issue.role.is_none() {
+                        missing.push(issue.id);
                     }
                 }
-                if !missing.is_empty() {
-                    anyhow::bail!(
-                        "Cannot reopen {}: no role set. Resubmit with --role human|agent",
-                        missing.join(", ")
-                    );
-                }
+            }
+            if !missing.is_empty() {
+                anyhow::bail!(
+                    "Cannot reopen {}: no role set. Resubmit with --role human|agent",
+                    missing.join(", ")
+                );
             }
 
             let mut reopened = Vec::new();
@@ -3588,7 +3625,8 @@ GETTING STARTED
   tz init --tz-hash-ids   Use hash-based IDs instead (tz-a1b2c, ...)
 
 CREATING ISSUES
-  tz create "Fix login bug" -r agent   --role (human|agent) is required
+  tz create "Fix login bug" -r agent   --role (human|agent) is required, except
+            for epics and specs, which take no role (tz create "Auth" -t epic)
   tz create "Add auth" -r human -p 0 -t feature
   tz create "Write tests" -r agent -d "Unit tests for auth" --assignee alice
   tz create "Triage logs" -r agent --effort 2   Effort: 1-5
@@ -3611,7 +3649,7 @@ VIEWING ISSUES
   tz list       List all issues
   tz list --status open  List by status
   tz list --priority 0  List by priority (0-4, 0=highest)
-  tz list --role agent  List by role (human, agent)
+  tz list --role agent  List by role (human, agent, none = no role)
   tz ready --role agent Ready work for a role
   tz show myapp-1       Show issue details
 

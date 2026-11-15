@@ -59,10 +59,18 @@ work**. `tz claim` sets it. For agents it is `<model>/<session>` (see
 |------|----------|-----------------------|--------|
 | `task`, `bug`, `feature`, `chore` | Work | yes | required |
 | `gate` | A placeholder blocker with no work attached. Closed when an outside condition becomes true (upstream release, event, decision). | yes | required: who checks the condition |
-| `epic` | Groups related work. Children link to it with `child_of`. | no | optional by convention\* |
-| `spec` | The output of planning (see [Specs](#specs)) | no | optional by convention\* |
+| `epic` | Groups related work. Children link to it with `child_of`. | no | forbidden: an epic belongs to the owners of its children |
+| `spec` | The output of planning (see [Specs](#specs)) | no | forbidden: a spec belongs to the planning session with the human |
 
-The rule: `role` is required exactly for the types `tz ready` can return.
+The rule, enforced by `tz`: `role` is required exactly for the types `tz ready`
+can return (work types and `gate`) and forbidden on `epic` and `spec`. Epics
+and specs are never picked up as work, so a role on them would only mislead
+(an `agent` spec would suggest an agent may pick it up). `tz create`,
+`tz triage promote` and `tz reopen` follow the rule; `tz update -r` fails on an
+epic or spec, and `tz update --clear-role` fails on the other types. Use
+`tz list -r none` to find issues with no role. An epic or spec that still has a
+role from before the rule loads normally; only setting a role on it fails, and
+`tz update --clear-role` removes it.
 
 Body conventions by type:
 
@@ -76,11 +84,8 @@ Body conventions by type:
 - **Gate:** Description says the condition (what has to happen) and how to
   check it.
 
-\* `tz` currently requires a role on every issue and has one body format for
-all types. Until that changes, use `-r human` for specs (the human owns the
-decisions) and `-r agent` for epics, unless every child is a human task. Two
-triage items track the tool changes: making `role` optional for epics and
-specs, and per-type templates and checks.
+`tz` has one body format for all types; per-type templates and checks are
+still open (see [Open items](#open-items)).
 
 ### Triage: the inbox
 
@@ -242,7 +247,7 @@ except where noted. None of them commit unless told to.
    approach, settle what's in and out of scope.
 2. Write the spec: problem, goals and non-goals, design, open questions. Use
    numbered sections if tickets will need to refer to parts of it.
-3. Create it: `tz create "<title>" -t spec -r human --description-file -`.
+3. Create it: `tz create "<title>" -t spec --description-file -`.
 4. If something has to come from the human and can't be settled now, create a
    `role: human` task and make the spec `blocked_by` it.
 
@@ -384,14 +389,13 @@ tuned. It may grow or go away.
 | builder | `tz ready -r agent` | Agent queue |
 | builder | `tz claim <id> --as <model> --team <session>` | Start |
 | builder | `tz close <id>` | Finish (commit follows) |
-| planner | `tz create ... -t spec\|epic\|task -r ... --parent ... --deps ...` | Shape work |
+| planner | `tz create ... -t spec\|epic\|task [-r ...] --parent ... --deps ...` (no `-r` for spec and epic) | Shape work |
 | planner | `tz dep add <epic> --target <spec> --type tracks` | Link an epic to its spec |
 | planner | `tz triage promote\|attach\|rm` | Clear the inbox |
 
 ## Open items
 
-- `role` optional for epics and specs; per-type body templates and checks
-  (triage).
+- Per-type body templates and checks (triage).
 - Scales for priority and effort; choosing model and thinking level by effort.
 - Reviewer and validator subagents before `/build` closes a ticket.
 - Comment conventions.

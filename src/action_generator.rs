@@ -451,11 +451,12 @@ impl ActionExecutor {
                 description,
             } => {
                 let mut cmd = self.build_command();
-                cmd.arg("create")
-                    .arg(title)
-                    .arg("-r")
-                    .arg("agent")
-                    .arg("-p")
+                cmd.arg("create").arg(title);
+                // Epics and specs take no role; every other type requires one.
+                if issue_type.takes_role() {
+                    cmd.arg("-r").arg("agent");
+                }
+                cmd.arg("-p")
                     .arg(priority.to_string())
                     .arg("-t")
                     .arg(issue_type.as_str());

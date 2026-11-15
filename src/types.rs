@@ -79,6 +79,33 @@ impl IssueType {
             IssueType::Spec => "spec",
         }
     }
+
+    /// Whether issues of this type carry a `role`.
+    ///
+    /// `role` routes work (`tz ready -r agent`), so it is set on exactly the
+    /// types that can be picked up as work. Epics (owned by their children's
+    /// owners) and specs (produced with the human in a planning session) take
+    /// none.
+    pub fn takes_role(&self) -> bool {
+        !matches!(self, IssueType::Epic | IssueType::Spec)
+    }
+
+    /// Error unless `role` may be set on an issue of this type.
+    pub fn ensure_role_allowed(&self, role: Option<Role>) -> anyhow::Result<()> {
+        if role.is_some() && !self.takes_role() {
+            anyhow::bail!(
+                "{}s take no role: role says who picks an issue up as work, and {}s are not picked up as work. Omit --role{}",
+                self,
+                self,
+                if matches!(self, IssueType::Epic) {
+                    " (an epic belongs to the owners of its children)"
+                } else {
+                    " (a spec belongs to the planning session)"
+                }
+            );
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Display for IssueType {

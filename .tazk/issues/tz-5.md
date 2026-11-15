@@ -3,12 +3,11 @@ title: 'TUI: refresh, global actions and help'
 status: closed
 priority: 2
 issue_type: epic
-role: agent
 effort: 4
 labels:
 - tui
 created_at: 2026-11-06T03:28:37.337710503+00:00
-updated_at: 2026-11-15T16:33:18.950831+00:00
+updated_at: 2026-11-15T16:45:20.137950845+00:00
 closed_at: 2026-11-15T16:33:18.950831+00:00
 ---
 

@@ -3,12 +3,11 @@ title: 'TUI: triage mode (grid + detail)'
 status: closed
 priority: 2
 issue_type: epic
-role: agent
 effort: 3
 labels:
 - tui
 created_at: 2026-11-06T03:28:37.336042128+00:00
-updated_at: 2026-11-15T16:33:16.713987+00:00
+updated_at: 2026-11-15T16:45:20.133034929+00:00
 closed_at: 2026-11-15T16:33:16.713987+00:00
 ---
 
