@@ -113,7 +113,7 @@ the file in `.tazk/triage/`.
 
 `promote`, `attach` and `rm` are transactions: the issue or comments are
 written and the items deleted together, or nothing changes. Triage items are
-not read by `list`, `ready`, `stats`, `export` or `sync`, and the merge driver
+not read by `list`, `ready`, `export` or `sync` (`stats` only counts them), and the merge driver
 leaves them to git's ordinary line merge.
 
 ### Dependencies
@@ -126,7 +126,7 @@ leaves them to git's ordinary line merge.
 
 - `tz ready [--assignee USER] [-r/--role ROLE|none] [--priority N]` - Find ready work, printed as `id: title [priority: N, effort: N]` (effort omitted when unset) (no blockers, including blockers inherited from `child_of` ancestors; `epic` and `spec` issues are hidden unless requested with `--type`)
 - `tz blocked` - Show blocked issues and what blocks them. Blockers inherited from `child_of` ancestors are listed as `target (inherited from ANCESTOR)`, or `ANCESTOR (blocked status, inherited)` when the ancestor is in `blocked` status. `--json` keeps `blocked_by` for the issue's own blockers and adds `inherited_blocked_by`: a list of `{ancestor, blocked_by, blocked_status}`; `blocked_by_count` covers both
-- `tz stats` - Show statistics (total, open, blocked, average lead time)
+- `tz stats` - Show statistics (total, open, blocked, average lead time, and the number of triage items with the age of the oldest). `--json` adds `triage_items` and `oldest_triage_item_age_hours` (`null` when there is no timestamped item)
 
 ### Terminal UI
 

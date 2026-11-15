@@ -2934,6 +2934,10 @@ fn run() -> Result<()> {
                     "Average lead time: {:.1} hours",
                     stats.average_lead_time_hours
                 );
+                println!("Triage items: {}", stats.triage_items);
+                if let Some(hours) = stats.oldest_triage_item_age_hours {
+                    println!("Oldest triage item: {hours:.1} hours");
+                }
             }
             Ok(())
         }

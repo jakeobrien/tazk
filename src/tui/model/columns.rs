@@ -417,7 +417,10 @@ mod tests {
         let snap = snapshot_of(vec![epic("e", "E"), issue("t", "orphan")]);
         let c = cols(&snap, GroupByArg::Epic);
         assert_eq!(col(&c, &ColumnKey::NoEpic).cells, ["t"]);
-        assert_eq!(col(&c, &epic_key("e")).header.as_ref().unwrap().epic_id, "e");
+        assert_eq!(
+            col(&c, &epic_key("e")).header.as_ref().unwrap().epic_id,
+            "e"
+        );
     }
 
     #[test]

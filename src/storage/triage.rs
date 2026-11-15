@@ -78,6 +78,14 @@ fn generate_name(now: DateTime<Utc>) -> String {
     format!("{}-{}{}", now.format("%Y%m%dT%H%M%S"), suffix, EXTENSION)
 }
 
+/// The creation time encoded in an item name, if it has one.
+fn name_timestamp(name: &str) -> Option<DateTime<Utc>> {
+    let stamp = name.get(..15)?;
+    chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%S")
+        .ok()
+        .map(|t| t.and_utc())
+}
+
 /// Whether a directory entry name is a triage item file.
 fn is_item_file_name(name: &str) -> bool {
     name.ends_with(EXTENSION)
@@ -257,6 +265,16 @@ impl Storage {
             return Ok(TriageItem { name, body });
         }
         anyhow::bail!("Could not find a free triage item name; try again")
+    }
+
+    /// Number of triage items, and the creation time of the oldest one that
+    /// has a timestamped name (`YYYYMMDDTHHMMSS-...`). Item contents are not
+    /// read, so unreadable files still count.
+    pub fn triage_summary(&self) -> Result<(usize, Option<DateTime<Utc>>)> {
+        let _lock = self.lock_for_read()?;
+        let names = self.triage_names_no_lock()?;
+        let oldest = names.iter().filter_map(|n| name_timestamp(n)).min();
+        Ok((names.len(), oldest))
     }
 
     /// Every triage item, sorted by name (creation time, to the second).
@@ -463,6 +481,33 @@ mod tests {
             role: Some(Role::Agent),
             effort: None,
         }
+    }
+
+    #[test]
+    fn stats_count_triage_items_and_report_the_oldest() {
+        let (_tmp, storage) = storage();
+        let stats = storage.get_stats().unwrap();
+        assert_eq!(stats.triage_items, 0);
+        assert_eq!(stats.oldest_triage_item_age_hours, None);
+
+        let dir = storage.triage_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("20200101T000000-aaaa.md"), "old\n").unwrap();
+        storage.add_triage_item("new").unwrap();
+        let stats = storage.get_stats().unwrap();
+        assert_eq!(stats.triage_items, 2);
+        // Well over a year old.
+        assert!(stats.oldest_triage_item_age_hours.unwrap() > 24.0 * 365.0);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["triage_items"], 2);
+    }
+
+    #[test]
+    fn name_timestamp_parses_generated_names_only() {
+        assert!(name_timestamp("20251104T001800-k3f9.md").is_some());
+        assert!(name_timestamp("notes.md").is_none());
+        assert!(name_timestamp("é.md").is_none());
+        assert!(name_timestamp(&generate_name(Utc::now())).is_some());
     }
 
     fn create_issue(storage: &Storage) -> String {

@@ -1955,6 +1955,10 @@ impl Storage {
             lead_times.iter().sum::<f64>() / lead_times.len() as f64
         };
 
+        let (triage_items, oldest_triage) = self.triage_summary()?;
+        let oldest_triage_item_age_hours =
+            oldest_triage.map(|t| (chrono::Utc::now() - t).num_seconds().max(0) as f64 / 3600.0);
+
         Ok(Stats {
             total_issues: total,
             open_issues: open,
@@ -1963,6 +1967,8 @@ impl Storage {
             closed_issues: closed,
             ready_issues: ready,
             average_lead_time_hours: avg_lead_time_hours,
+            triage_items,
+            oldest_triage_item_age_hours,
         })
     }
 

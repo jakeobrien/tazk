@@ -643,6 +643,11 @@ pub struct Stats {
     pub closed_issues: usize,
     pub ready_issues: usize,
     pub average_lead_time_hours: f64,
+    /// Number of items in the triage inbox.
+    pub triage_items: usize,
+    /// Age in hours of the oldest triage item, from the timestamp in its file
+    /// name. `None` when there are no items with a timestamped name.
+    pub oldest_triage_item_age_hours: Option<f64>,
 }
 
 /// A blocker an issue inherits from one of its `child_of` ancestors.

@@ -302,13 +302,7 @@ mod tests {
         let mut app = app_at(snap, GroupByArg::Epic, size);
         let text = grid_text(&mut app, size);
         // The epic's own column is the only one ("No epic" is empty, so hidden).
-        let title: String = text
-            .lines()
-            .next()
-            .unwrap()
-            .chars()
-            .take(32)
-            .collect();
+        let title: String = text.lines().next().unwrap().chars().take(32).collect();
         assert!(title.contains("e-1 An extremely"), "{title}");
         assert!(title.contains('…'));
         assert_eq!(title.chars().count(), 31, "{title}"); // 32 wide, trailing space trimmed
