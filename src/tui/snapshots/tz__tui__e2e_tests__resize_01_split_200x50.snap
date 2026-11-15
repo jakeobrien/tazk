@@ -4,35 +4,35 @@ expression: wide
 ---
  Issues (10) │ Triage (3)                                                                                                                                                                   group: epic
  role:all  status:!closed  type:all  pri:all  effort:all                                                                                                                           8 of 10  ⚠ 1 skipped
- No epic ──────────────────── 4  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2     ┌ tz-2 ────────────────────────────────────────────────────────────────────────────────────────────┐
-╭ tz-1 ────────────────────────╮╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮    │Auth rework                                                                                       │
-│ Platform                     ││ Platform                     ││ Auth rework                  │    │                                                                                                  │
+ No epic ──────────────────── 3  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2     ┌ tz-2 ────────────────────────────────────────────────────────────────────────────────────────────┐
+╭ tz-9 ────────────────────────╮╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮    │Auth rework                                                                                       │
+│ Write the docs               ││ Platform                     ││ Auth rework                  │    │                                                                                                  │
 │                              ││                              ││                              │    │ID           tz-2                                                                                 │
 │                              ││                              ││                              │    │Type         epic                                                                                 │
 │                              ││                              ││                              │    │Status       open                                                                                 │
-│ —  open  P0  —               ││ —  open  P0  —               ││ —  open  P1  —               │    │Priority     P1                                                                                   │
-╰────────────────────── epic ──╯╰────────────────────── epic ──╯╰────────────────────── epic ──╯    │Role         —                                                                                    │
-╭ tz-9 ────────────────────────╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮    │Effort       —                                                                                    │
-│ Write the docs               ││ Auth rework                  ││ Session cookie dropped       │    │Assignee     —                                                                                    │
+│ human  open  P2  ●●○○○       ││ —  open  P0  —               ││ —  open  P1  —               │    │Priority     P1                                                                                   │
+╰─────────────────── feature ──╯╰────────────────────── epic ──╯╰────────────────────── epic ──╯    │Role         —                                                                                    │
+╭ tz-8 ───────────────────── ⊘ ╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮    │Effort       —                                                                                    │
+│ Standalone chore             ││ Auth rework                  ││ Session cookie dropped       │    │Assignee     —                                                                                    │
 │                              ││                              ││                              │    │Labels       —                                                                                    │
 │                              ││                              ││                              │    │External ref —                                                                                    │
 │                              ││                              ││                              │    │Created      2025-01-01 00:00                                                                     │
-│ human  open  P2  ●●○○○       ││ —  open  P1  —               ││ —  open  P0  —               │    │Updated      2025-01-01 00:00                                                                     │
-╰─────────────────── feature ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯    │                                                                                                  │
-╭ tz-8 ───────────────────── ⊘ ╮╭ tz-5 ────────────────────────╮┏ tz-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓    │Parent                                                                                            │
-│ Standalone chore             ││ Session store                │┃ Login form redirects loop    ┃    │  tz-1 open Platform                                                                              │
+│ —  open  P3  —               ││ —  open  P1  —               ││ —  open  P0  —               │    │Updated      2025-01-01 00:00                                                                     │
+╰────────────────────── task ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯    │                                                                                                  │
+╭ tz-10 ───────────────────────╮╭ tz-5 ────────────────────────╮┏ tz-3 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓    │Parent                                                                                            │
+│ Orphan task                  ││ Session store                │┃ Login form redirects loop    ┃    │  tz-1 open Platform                                                                              │
 │                              ││                              │┃                              ┃    │                                                                                                  │
 │                              ││                              │┃                              ┃    │Children                                                                                          │
 │                              ││                              │┃                              ┃    │  tz-3 open Login form redirects loop                                                             │
-│ —  open  P3  —               ││ —  in_prog  P2  —            │┃ agent  open  P1  ●●●○○       ┃    │  tz-4 open Session cookie dropped                                                                │
+│ —  open  P4  —               ││ —  in_prog  P2  —            │┃ agent  open  P1  ●●●○○       ┃    │  tz-4 open Session cookie dropped                                                                │
 ╰────────────────────── task ──╯╰────────────────────── task ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛    │                                                                                                  │
-╭ tz-10 ───────────────────────╮                                                                    │(no description)                                                                                  │
-│ Orphan task                  │                                                                    │                                                                                                  │
-│                              │                                                                    │                                                                                                  │
-│                              │                                                                    │                                                                                                  │
-│                              │                                                                    │                                                                                                  │
-│ —  open  P4  —               │                                                                    │                                                                                                  │
-╰────────────────────── task ──╯                                                                    │                                                                                                  │
+                                                                                                    │(no description)                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
+                                                                                                    │                                                                                                  │
                                                                                                     │                                                                                                  │
                                                                                                     │                                                                                                  │
                                                                                                     │                                                                                                  │

@@ -301,13 +301,12 @@ mod tests {
         let size = (70, 12);
         let mut app = app_at(snap, GroupByArg::Epic, size);
         let text = grid_text(&mut app, size);
-        // The epic's own column is the second one (after "No epic").
+        // The epic's own column is the only one ("No epic" is empty, so hidden).
         let title: String = text
             .lines()
             .next()
             .unwrap()
             .chars()
-            .skip(32)
             .take(32)
             .collect();
         assert!(title.contains("e-1 An extremely"), "{title}");

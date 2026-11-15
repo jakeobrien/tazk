@@ -164,6 +164,8 @@ Rule:
 3. Group visible issues by parent. A group becomes an epic column if its parent
    exists **and** is of type `epic`. Issues with no parent, a missing parent, or
    a non-epic parent go in the **"No epic"** column.
+   Epics that are not children of another epic are **excluded** from "No epic":
+   each already appears as the header of its own column (rule 4).
 4. Every **visible epic** also gets its own column, even if it has no visible
    children (the column then holds only its header).
 5. The column's **header** is the epic's cell, looked up from the **full** issue

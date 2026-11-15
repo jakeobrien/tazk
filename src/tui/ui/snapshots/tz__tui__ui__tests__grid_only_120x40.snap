@@ -4,21 +4,21 @@ expression: "render_app(&mut app, 120, 40)"
 ---
  Issues (4) │ Triage (0)                                                                                    group: epic
  role:all  status:!closed  type:all  pri:all  effort:all                                                         4 of 4
- No epic ──────────────────── 2  tz-1 Auth rework ─────────── 2
-╭ tz-1 ────────────────────────╮╭ tz-1 ────────────────────────╮
-│ Auth rework                  ││ Auth rework                  │
+ No epic ──────────────────── 1  tz-1 Auth rework ─────────── 2
+╭ tz-4 ────────────────────────╮╭ tz-1 ────────────────────────╮
+│ Unrelated chore              ││ Auth rework                  │
 │                              ││                              │
 │                              ││                              │
 │                              ││                              │
-│ —  open  P0  —               ││ —  open  P0  —               │
-╰────────────────────── epic ──╯╰────────────────────── epic ──╯
-╭ tz-4 ────────────────────────╮┏ tz-2 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
-│ Unrelated chore              │┃ Fix Safari login fails on    ┃
-│                              │┃ redirect after timeout       ┃
-│                              │┃                              ┃
-│                              │┃                              ┃
-│ —  open  P3  —               │┃ agent  open  P1  ●●●○○       ┃
-╰────────────────────── task ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
+│ —  open  P3  —               ││ —  open  P0  —               │
+╰────────────────────── task ──╯╰────────────────────── epic ──╯
+                                ┏ tz-2 ━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+                                ┃ Fix Safari login fails on    ┃
+                                ┃ redirect after timeout       ┃
+                                ┃                              ┃
+                                ┃                              ┃
+                                ┃ agent  open  P1  ●●●○○       ┃
+                                ┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
                                 ╭ tz-3 ────────────────────────╮
                                 │ Set up the session store     │
                                 │                              │

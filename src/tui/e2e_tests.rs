@@ -224,7 +224,7 @@ fn launch_shows_the_grid_at_both_sizes() {
     // Closed issues are hidden by default; the bad file is counted.
     assert_eq!(app.counts(), (8, 10));
     assert_eq!(app.snapshot.skipped.len(), 1);
-    assert_eq!(selected(&app), Some("tz-1"));
+    assert_eq!(selected(&app), Some("tz-9"));
     let narrow = screen(&mut app, NARROW);
     assert!(narrow.contains("⚠ 1 skipped"));
     snap!("launch_120x40", narrow);
@@ -290,6 +290,9 @@ fn picker_filter_then_reset_with_c() {
     assert!(app.counts().0 < 10);
     keys(&mut app, "c");
     assert_eq!(app.counts(), (8, 10));
+    // Narrowing moved the selection off the first cell; put it back.
+    keys(&mut app, "h");
+    press(&mut app, KeyCode::Home);
     assert_eq!(screen(&mut app, NARROW), {
         let fresh = fx.app(&[]);
         let mut fresh = fresh;

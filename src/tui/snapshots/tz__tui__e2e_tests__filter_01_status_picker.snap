@@ -4,35 +4,35 @@ expression: "screen(&mut app, NARROW)"
 ---
  Issues (10) │ Triage (3)                                                                                   group: epic
  role:all  status:!closed  type:all  pri:all  effort:all                                           8 of 10  ⚠ 1 skipped
- No epic ──────────────────── 4  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2
-┏ tz-1 ━━━━━━━━━━━━━━━━━━━━━━━━┓╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮
-┃ Platform                     ┃│ Platform                     ││ Auth rework                  │
+ No epic ──────────────────── 3  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2
+┏ tz-9 ━━━━━━━━━━━━━━━━━━━━━━━━┓╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮
+┃ Write the docs               ┃│ Platform                     ││ Auth rework                  │
 ┃                              ┃│                              ││                              │
 ┃                              ┃│                              ││                              │
 ┃                              ┃│                              ││                              │
-┃ —  open  P0  —               ┃│ —  open  P0  —               ││ —  open  P1  —               │
-┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛╰────────────────────── epic ──╯╰────────────────────── epic ──╯
-╭ tz-9 ────────────────────────╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮
-│ Write the docs               ││ Auth rework                  ││ Session cookie dropped       │
+┃ human  open  P2  ●●○○○       ┃│ —  open  P0  —               ││ —  open  P1  —               │
+┗━━━━━━━━━━━━━━━━━━━ feature ━━┛╰────────────────────── epic ──╯╰────────────────────── epic ──╯
+╭ tz-8 ───────────────────── ⊘ ╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮
+│ Standalone chore             ││ Auth rework                  ││ Session cookie dropped       │
 │                              ││                              ││                              │
 │                              ││                              ││                              │
 │                              ││                              ││                              │
-│ human  open  P2  ●●○○○       ││ —  open  P1  —               ││ —  open  P0  —               │
-╰─────────────────── feature ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯
-╭ tz-8 ───────────────────── ⊘ ╮╭ tz-5 ───────────┌ Status ──────────┐ ───────────────────── ⊘ ╮
-│ Standalone chore             ││ Session store   │ [x] open         │n form redirects loop    │
+│ —  open  P3  —               ││ —  open  P1  —               ││ —  open  P0  —               │
+╰────────────────────── task ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯
+╭ tz-10 ───────────────────────╮╭ tz-5 ───────────┌ Status ──────────┐ ───────────────────── ⊘ ╮
+│ Orphan task                  ││ Session store   │ [x] open         │n form redirects loop    │
 │                              ││                 │ [x] in_progress  │                         │
 │                              ││                 │ [x] blocked      │                         │
 │                              ││                 │ [x] deferred     │                         │
-│ —  open  P3  —               ││ —  in_prog  P2  │ [ ] closed       │t  open  P1  ●●●○○       │
+│ —  open  P4  —               ││ —  in_prog  P2  │ [ ] closed       │t  open  P1  ●●●○○       │
 ╰────────────────────── task ──╯╰─────────────────└ space · a/n · ⏎ ─┘───────────────── task ──╯
-╭ tz-10 ───────────────────────╮
-│ Orphan task                  │
-│                              │
-│                              │
-│                              │
-│ —  open  P4  —               │
-╰────────────────────── task ──╯
+
+
+
+
+
+
+
 
 
 

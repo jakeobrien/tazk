@@ -178,6 +178,8 @@ fn epic_columns(snapshot: &Snapshot, visible: &[&Issue]) -> Vec<Column> {
             .filter(|p| p.issue_type == IssueType::Epic)
         {
             Some(parent) => by_epic.entry(parent.id.as_str()).or_default().push(i),
+            // Top-level epics are already represented by their own column.
+            None if i.issue_type == IssueType::Epic => {}
             None => no_epic.push(i),
         }
     }
@@ -307,7 +309,7 @@ mod tests {
         let visible = visible_issues(&snap, &f, "");
         let c = build_columns(&snap, &visible, GroupByArg::Epic);
         assert_eq!(c[0].key, ColumnKey::NoEpic);
-        assert_eq!(c[0].cells, ["e", "t"]);
+        assert_eq!(c[0].cells, ["t"]);
         assert_eq!(c.len(), 2);
         assert!(col(&c, &epic_key("e")).cells.is_empty());
     }
@@ -316,8 +318,9 @@ mod tests {
     fn self_parent_is_ignored() {
         let snap = snapshot_of(vec![epic("e", "E").child_of("e")]);
         let c = cols(&snap, GroupByArg::Epic);
-        // The epic is a plain "No epic" cell and has its own (empty) column.
-        assert_eq!(col(&c, &ColumnKey::NoEpic).cells, ["e"]);
+        // The epic is not its own parent: it has its own (empty) column and,
+        // being an epic, is not repeated in "No epic" (which is then omitted).
+        assert_eq!(c.len(), 1);
         assert!(col(&c, &epic_key("e")).cells.is_empty());
     }
 
@@ -376,10 +379,9 @@ mod tests {
             issue("t", "x").child_of("e-2"),
         ]);
         let c = cols(&snap, GroupByArg::Epic);
-        // "No epic" holds the outer epic; the inner epic is a cell of the
-        // outer epic's column and has its own column.
-        assert_eq!(c.len(), 3);
-        assert_eq!(col(&c, &ColumnKey::NoEpic).cells, ["e-1"]);
+        // The outer epic is only a column header (not in "No epic"); the inner
+        // epic is a cell of the outer epic's column and has its own column.
+        assert_eq!(c.len(), 2);
         assert_eq!(col(&c, &epic_key("e-1")).cells, ["e-2"]);
         let inner = col(&c, &epic_key("e-2"));
         assert_eq!(inner.header.as_ref().unwrap().epic_id, "e-2");
@@ -408,6 +410,14 @@ mod tests {
             ]
         );
         assert_eq!(c[1].title, "e-b B");
+    }
+
+    #[test]
+    fn top_level_epics_are_not_listed_in_no_epic() {
+        let snap = snapshot_of(vec![epic("e", "E"), issue("t", "orphan")]);
+        let c = cols(&snap, GroupByArg::Epic);
+        assert_eq!(col(&c, &ColumnKey::NoEpic).cells, ["t"]);
+        assert_eq!(col(&c, &epic_key("e")).header.as_ref().unwrap().epic_id, "e");
     }
 
     #[test]

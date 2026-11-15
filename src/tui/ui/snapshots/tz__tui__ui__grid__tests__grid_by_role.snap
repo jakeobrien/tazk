@@ -1,15 +1,15 @@
 ---
 source: src/tui/ui/grid.rs
-expression: "grid_text(&app, WIDE)"
+expression: "grid_text(&mut app, WIDE)"
 ---
  agent ────────────────────── 1  human ────────────────────── 1  (none) ───────────────────── 4
-╭ t-1 ─────────────────────────╮╭ t-2 ─────────────────────────╮┏ e-1 ━━━━━━━━━━━━━━━━━━━━━━━━━┓
-│ Login page                   ││ Fix redirect                 │┃ Auth rework                  ┃
-│                              ││                              │┃                              ┃
-│                              ││                              │┃                              ┃
-│                              ││                              │┃                              ┃
-│ agent  open  P0  ●●○○○       ││ human  in_prog  P1  —        │┃ —  open  P1  —               ┃
-╰─────────────────── feature ──╯╰─────────────────────── bug ──╯┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛
+╭ t-1 ─────────────────────────╮╭ t-2 ─────────────────────────╮╭ e-1 ─────────────────────────╮
+│ Login page                   ││ Fix redirect                 ││ Auth rework                  │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│                              ││                              ││                              │
+│ agent  open  P0  ●●○○○       ││ human  in_prog  P1  —        ││ —  open  P1  —               │
+╰─────────────────── feature ──╯╰─────────────────────── bug ──╯╰────────────────────── epic ──╯
                                                                 ╭ e-3 ─────────────────────────╮
                                                                 │ Nested sessions epic         │
                                                                 │                              │
@@ -17,10 +17,10 @@ expression: "grid_text(&app, WIDE)"
                                                                 │                              │
                                                                 │ —  open  P2  —               │
                                                                 ╰────────────────────── epic ──╯
-                                                                ╭ t-4 ────────────────────── ⊘ ╮
-                                                                │ Blocked task                 │
-                                                                │                              │
-                                                                │                              │
-                                                                │                              │
-                                                                │ —  blocked  P2  —            │
-                                                                ╰────────────────────── task ──╯
+                                                                ┏ t-4 ━━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+                                                                ┃ Blocked task                 ┃
+                                                                ┃                              ┃
+                                                                ┃                              ┃
+                                                                ┃                              ┃
+                                                                ┃ —  blocked  P2  —            ┃
+                                                                ┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛

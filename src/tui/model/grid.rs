@@ -379,10 +379,9 @@ mod tests {
             issue("t1", "x").child_of("e").priority(1),
             issue("t2", "x").child_of("e").priority(2),
         ]);
-        // Columns: No epic [e]; e [header, t1, t2].
+        // Columns: e [header, t1, t2].
         let mut s = state(&snap, GroupByArg::Epic, VP);
-        s.move_dir(Dir::Right, VP);
-        assert_eq!(at(&s), (1, 0));
+        assert_eq!(at(&s), (0, 0));
         assert_eq!(s.selected_id(), Some("e"));
         s.move_dir(Dir::Down, VP);
         assert_eq!(s.selected_id(), Some("t1"));
@@ -390,7 +389,7 @@ mod tests {
         assert_eq!(s.selected_id(), Some("e"));
         s.bottom(VP);
         assert_eq!(s.selected_id(), Some("t2"));
-        assert_eq!(at(&s), (1, 2));
+        assert_eq!(at(&s), (0, 2));
     }
 
     #[test]
@@ -677,16 +676,16 @@ mod tests {
     #[test]
     fn nested_epic_selection_prefers_the_same_column() {
         let snap = snapshot_of([epic("e-1", "Outer"), epic("e-2", "Inner").child_of("e-1")]);
-        // Columns: No epic [e-1], e-1 [header e-1, e-2], e-2 [header e-2].
+        // Columns: e-1 [header e-1, e-2], e-2 [header e-2].
         let mut s = state(&snap, GroupByArg::Epic, VP);
-        select(&mut s, 2, 0);
+        select(&mut s, 1, 0);
         assert_eq!(s.selected_id(), Some("e-2"));
         rebuild(&mut s, &snap, &Filters::default(), "", GroupByArg::Epic);
-        assert_eq!(at(&s), (2, 0));
-        select(&mut s, 1, 1);
+        assert_eq!(at(&s), (1, 0));
+        select(&mut s, 0, 1);
         assert_eq!(s.selected_id(), Some("e-2"));
         rebuild(&mut s, &snap, &Filters::default(), "", GroupByArg::Epic);
-        assert_eq!(at(&s), (1, 1));
+        assert_eq!(at(&s), (0, 1));
     }
 
     #[test]

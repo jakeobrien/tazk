@@ -1,22 +1,22 @@
 ---
 source: src/tui/ui/grid.rs
-expression: "grid_text(&app, WIDE)"
+expression: "grid_text(&mut app, WIDE)"
 ---
  open ─────────────────────── 4  in_progress ──────────────── 1  blocked ──────────────────── 1
-╭ t-1 ─────────────────────────╮╭ t-2 ─────────────────────────╮╭ t-4 ────────────────────── ⊘ ╮
-│ Login page                   ││ Fix redirect                 ││ Blocked task                 │
-│                              ││                              ││                              │
-│                              ││                              ││                              │
-│                              ││                              ││                              │
-│ agent  open  P0  ●●○○○       ││ human  in_prog  P1  —        ││ —  blocked  P2  —            │
-╰─────────────────── feature ──╯╰─────────────────────── bug ──╯╰────────────────────── task ──╯
-┏ e-1 ━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Auth rework                  ┃
-┃                              ┃
-┃                              ┃
-┃                              ┃
-┃ —  open  P1  —               ┃
-┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛
+╭ t-1 ─────────────────────────╮╭ t-2 ─────────────────────────╮┏ t-4 ━━━━━━━━━━━━━━━━━━━━━━ ⊘ ┓
+│ Login page                   ││ Fix redirect                 │┃ Blocked task                 ┃
+│                              ││                              │┃                              ┃
+│                              ││                              │┃                              ┃
+│                              ││                              │┃                              ┃
+│ agent  open  P0  ●●○○○       ││ human  in_prog  P1  —        │┃ —  blocked  P2  —            ┃
+╰─────────────────── feature ──╯╰─────────────────────── bug ──╯┗━━━━━━━━━━━━━━━━━━━━━━ task ━━┛
+╭ e-1 ─────────────────────────╮
+│ Auth rework                  │
+│                              │
+│                              │
+│                              │
+│ —  open  P1  —               │
+╰────────────────────── epic ──╯
 ╭ e-3 ─────────────────────────╮
 │ Nested sessions epic         │
 │                              │

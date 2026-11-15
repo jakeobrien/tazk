@@ -4,41 +4,41 @@ expression: "screen(&mut app, NARROW)"
 ---
  Issues (10) │ Triage (3)                                                                                   group: epic
  role:all  status:all  type:all  pri:all  effort:all                                              10 of 10  ⚠ 1 skipped
- No epic ──────────────────── 6  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2
-┏ tz-1 ━━━━━━━━━━━━━━━━━━━━━━━━┓╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮
-┃ Platform                     ┃│ Platform                     ││ Auth rework                  │
+ No epic ──────────────────── 4  tz-1 Platform ────────────── 2  tz-2 Auth rework ─────────── 2
+┏ tz-9 ━━━━━━━━━━━━━━━━━━━━━━━━┓╭ tz-1 ────────────────────────╮╭ tz-2 ────────────────────────╮
+┃ Write the docs               ┃│ Platform                     ││ Auth rework                  │
 ┃                              ┃│                              ││                              │
 ┃                              ┃│                              ││                              │
 ┃                              ┃│                              ││                              │
-┃ —  open  P0  —               ┃│ —  open  P0  —               ││ —  open  P1  —               │
-┗━━━━━━━━━━━━━━━━━━━━━━ epic ━━┛╰────────────────────── epic ──╯╰────────────────────── epic ──╯
-╭ tz-9 ────────────────────────╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮
-│ Write the docs               ││ Auth rework                  ││ Session cookie dropped       │
+┃ human  open  P2  ●●○○○       ┃│ —  open  P0  —               ││ —  open  P1  —               │
+┗━━━━━━━━━━━━━━━━━━━ feature ━━┛╰────────────────────── epic ──╯╰────────────────────── epic ──╯
+╭ tz-7 ────────────────────────╮╭ tz-2 ────────────────────────╮╭ tz-4 ────────────────────────╮
+│ Old migration                ││ Auth rework                  ││ Session cookie dropped       │
 │                              ││                              ││                              │
 │                              ││                              ││                              │
 │                              ││                              ││                              │
-│ human  open  P2  ●●○○○       ││ —  open  P1  —               ││ —  open  P0  —               │
-╰─────────────────── feature ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯
-╭ tz-6 ────────────────────────╮╭ tz-5 ────────────────────────╮╭ tz-3 ───────────────────── ⊘ ╮
-│ Legacy cleanup               ││ Session store                ││ Login form redirects loop    │
+│ —  closed  P3  —             ││ —  open  P1  —               ││ —  open  P0  —               │
+╰────────────────────── task ──╯╰────────────────────── epic ──╯╰─────────────────────── bug ──╯
+╭ tz-8 ───────────────────── ⊘ ╮╭ tz-5 ────────────────────────╮╭ tz-3 ───────────────────── ⊘ ╮
+│ Standalone chore             ││ Session store                ││ Login form redirects loop    │
 │                              ││                              ││                              │
 │                              ││                              ││                              │
 │                              ││                              ││                              │
-│ —  closed  P3  —             ││ —  in_prog  P2  —            ││ agent  open  P1  ●●●○○       │
-╰────────────────────── epic ──╯╰────────────────────── task ──╯╰────────────────────── task ──╯
-╭ tz-7 ────────────────────────╮
-│ Old migration                │
+│ —  open  P3  —               ││ —  in_prog  P2  —            ││ agent  open  P1  ●●●○○       │
+╰────────────────────── task ──╯╰────────────────────── task ──╯╰────────────────────── task ──╯
+╭ tz-10 ───────────────────────╮
+│ Orphan task                  │
 │                              │
 │                              │
 │                              │
-│ —  closed  P3  —             │
+│ —  open  P4  —               │
 ╰────────────────────── task ──╯
-╭ tz-8 ───────────────────── ⊘ ╮
-│ Standalone chore             │
-│                              │
-│                              │
-│                              │
-│ —  open  P3  —               │
-╰────────────────────── task ──╯
+
+
+
+
+
+
+
 
  ? help  Enter open  / search  g group  r/s/t/p/e filter  c reset  m mode  q quit  y copy  o edit
