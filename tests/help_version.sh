@@ -146,6 +146,15 @@ OUTPUT=$("$TZ_BIN" dep add --help 2>&1)
 assert_contains "$OUTPUT" "Add a dependency" "Dep add help should show description"
 assert_contains "$OUTPUT" "--type" "Dep add help should show --type flag"
 
+# Test 12: --tz-validation was removed
+echo -e "\n${YELLOW}Test 12: --tz-validation is rejected${NC}"
+assert_not_contains "$("$TZ_BIN" --help 2>&1)" "tz-validation" "Help should not list --tz-validation"
+if OUTPUT=$("$TZ_BIN" --tz-validation warn list 2>&1); then
+    echo -e "${RED}✗ --tz-validation should fail${NC}"
+    exit 1
+fi
+assert_contains "$OUTPUT" "unexpected argument '--tz-validation'" "--tz-validation should be an unknown argument"
+
 # Print summary
 echo ""
 echo "=========================================="

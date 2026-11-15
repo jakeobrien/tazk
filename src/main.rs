@@ -90,41 +90,9 @@ struct GlobalOpts {
     #[arg(long, global = true, hide = true)]
     readonly: bool,
 
-    /// Validation mode for parsing issues: silent, warn, error
-    #[arg(
-        long = "tz-validation",
-        global = true,
-        default_value = "error",
-        value_name = "MODE"
-    )]
-    tz_validation: ValidationMode,
-
     /// Disable command logging to the tazk command_history.log
     #[arg(long = "tz-no-cmd-logging", global = true)]
     tz_no_cmd_logging: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ValidationMode {
-    Silent,
-    Warn,
-    Error,
-}
-
-impl std::str::FromStr for ValidationMode {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "silent" => Ok(ValidationMode::Silent),
-            "warn" => Ok(ValidationMode::Warn),
-            "error" => Ok(ValidationMode::Error),
-            _ => Err(anyhow::anyhow!(
-                "Invalid validation mode: '{}'. Valid values are: silent, warn, error",
-                s
-            )),
-        }
-    }
 }
 
 #[derive(Subcommand)]

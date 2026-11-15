@@ -293,7 +293,6 @@ highest ID. In a hash store collisions are very unlikely; if one happens,
 
 - `--tz-dir PATH` - Path to .tazk directory
 - `--json` - Output JSON format
-- `--tz-validation MODE` - Validation mode: silent, warn, error (default)
 - `--tz-no-cmd-logging` - Disable command history logging
 
 ## Issue Properties
