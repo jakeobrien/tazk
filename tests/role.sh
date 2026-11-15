@@ -135,13 +135,13 @@ for ty in epic spec; do
 done
 assert_fails "create epic with --role should leave no issue" test -e .tazk/issues/tz-2.md
 "$TZ_BIN" create "An epic" -t epic >/dev/null 2>&1
-"$TZ_BIN" create "A spec" -t spec >/dev/null 2>&1
+"$TZ_BIN" create "A spec" -t spec -d "The spec" >/dev/null 2>&1
 assert_equals "" "$(field tz-2 role)" "epic should have no role"
 assert_equals "" "$(field tz-3 role)" "spec should have no role"
 for ty in task bug feature chore gate; do
     assert_fails "create $ty without --role should fail" "$TZ_BIN" create "No role" -t "$ty"
 done
-OUTPUT=$("$TZ_BIN" create "A gate" -t gate -r human 2>&1)
+OUTPUT=$("$TZ_BIN" create "A gate" -t gate -r human -d "The condition" --acceptance "Check it" 2>&1)
 assert_contains "$OUTPUT" "Created issue" "create gate with --role should succeed"
 assert_equals "human" "$(field tz-4 role)" "gate should store the role"
 

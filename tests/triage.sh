@@ -186,7 +186,7 @@ assert_equals "3" "$(item_count)" "rm should delete the item"
 
 # Test 6: promote several items into one issue
 echo -e "\n${YELLOW}Test 6: promote${NC}"
-"$TZ_BIN" create "Auth spec" -t spec >/dev/null 2>&1
+"$TZ_BIN" create "Auth spec" -t spec -d "The spec" >/dev/null 2>&1
 assert_fails "promote without --title should fail" "$TZ_BIN" triage promote "$A" -r agent
 assert_fails "promote without --role should fail" "$TZ_BIN" triage promote "$A" --title T
 assert_fails "promote of a missing item should fail" "$TZ_BIN" triage promote "$A" nope --title T -r agent

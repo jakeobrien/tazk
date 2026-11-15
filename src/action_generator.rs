@@ -258,11 +258,13 @@ impl ActionGenerator {
             _ => IssueType::Chore,
         };
 
-        let description = if self.rng.gen_bool(0.5) {
-            Some(format!("Description for {}", title))
-        } else {
-            None
-        };
+        // Specs and gates must have a description.
+        let description =
+            if matches!(issue_type, IssueType::Spec | IssueType::Gate) || self.rng.gen_bool(0.5) {
+                Some(format!("Description for {}", title))
+            } else {
+                None
+            };
 
         // Compute expected ID based on mode
         let expected_id = if self.use_hash_ids {
@@ -463,6 +465,11 @@ impl ActionExecutor {
 
                 if let Some(desc) = description {
                     cmd.arg("-d").arg(desc);
+                }
+                // A gate needs acceptance criteria.
+                if matches!(issue_type, IssueType::Gate) {
+                    cmd.arg("--acceptance")
+                        .arg("Check that the condition holds");
                 }
 
                 let output = cmd.output().context("Failed to execute create command")?;

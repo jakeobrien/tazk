@@ -106,6 +106,124 @@ impl IssueType {
         }
         Ok(())
     }
+
+    /// Whether a body section is optional, required or forbidden on this type
+    /// (tz-51 §3). `EditField::Title` is always optional.
+    pub fn section_rule(&self, field: EditField) -> SectionRule {
+        match self {
+            IssueType::Task | IssueType::Bug | IssueType::Feature | IssueType::Chore => match field
+            {
+                EditField::Title
+                | EditField::Description
+                | EditField::Design
+                | EditField::Acceptance
+                | EditField::Notes => SectionRule::Optional,
+            },
+            IssueType::Epic => match field {
+                EditField::Title
+                | EditField::Description
+                | EditField::Acceptance
+                | EditField::Notes => SectionRule::Optional,
+                EditField::Design => SectionRule::Forbidden,
+            },
+            IssueType::Spec => match field {
+                EditField::Title | EditField::Notes => SectionRule::Optional,
+                EditField::Description => SectionRule::Required,
+                EditField::Design | EditField::Acceptance => SectionRule::Forbidden,
+            },
+            IssueType::Gate => match field {
+                EditField::Title | EditField::Notes => SectionRule::Optional,
+                EditField::Description | EditField::Acceptance => SectionRule::Required,
+                EditField::Design => SectionRule::Forbidden,
+            },
+        }
+    }
+
+    /// Error unless `text` is acceptable for `field` on this type: a forbidden
+    /// section must be empty and a required one non-empty (whitespace only
+    /// counts as empty).
+    ///
+    /// `id` names the issue in the message; pass `None` for an issue that has
+    /// no ID yet (`create`, `triage promote`).
+    pub fn ensure_section(
+        &self,
+        id: Option<&str>,
+        field: EditField,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let empty = text.trim().is_empty();
+        match self.section_rule(field) {
+            SectionRule::Optional => Ok(()),
+            SectionRule::Forbidden if empty => Ok(()),
+            SectionRule::Required if !empty => Ok(()),
+            SectionRule::Forbidden => {
+                let subject = id.unwrap_or("This issue");
+                let article = if matches!(self, IssueType::Epic) {
+                    "an"
+                } else {
+                    "a"
+                };
+                let advice = match self {
+                    IssueType::Epic => "epics have no Design section. Put the approach in the spec or in the child tickets.",
+                    IssueType::Spec => "specs have no Design or Acceptance Criteria section. The whole spec goes in Description.",
+                    IssueType::Gate => "gates have no Design section. Description says the condition, Acceptance Criteria says how to check it.",
+                    IssueType::Task | IssueType::Bug | IssueType::Feature | IssueType::Chore => {
+                        "this section is not allowed."
+                    }
+                };
+                anyhow::bail!("{subject} is {article} {self}; {advice}")
+            }
+            SectionRule::Required => match (self, field) {
+                (IssueType::Gate, EditField::Acceptance) => anyhow::bail!(
+                    "A gate needs Acceptance Criteria: how to check that its condition is true (--acceptance)."
+                ),
+                (IssueType::Gate, _) => anyhow::bail!(
+                    "A gate needs a Description: the condition that must become true."
+                ),
+                (_, _) => anyhow::bail!("A {self} needs a Description: the spec itself."),
+            },
+        }
+    }
+
+    /// The Acceptance Criteria a new issue of this type gets when none is
+    /// given (tz-51 §5.1): `- All child issues closed.` on epics.
+    pub fn default_acceptance(&self) -> Option<&'static str> {
+        match self {
+            IssueType::Epic => Some("- All child issues closed."),
+            IssueType::Task
+            | IssueType::Bug
+            | IssueType::Feature
+            | IssueType::Chore
+            | IssueType::Gate
+            | IssueType::Spec => None,
+        }
+    }
+
+    /// Check every body section of a new issue (tz-51 §4: `create` and
+    /// `triage promote` check all of them).
+    pub fn ensure_new_sections(
+        &self,
+        description: &str,
+        design: &str,
+        acceptance: &str,
+        notes: &str,
+    ) -> anyhow::Result<()> {
+        self.ensure_section(None, EditField::Description, description)?;
+        self.ensure_section(None, EditField::Design, design)?;
+        self.ensure_section(None, EditField::Acceptance, acceptance)?;
+        self.ensure_section(None, EditField::Notes, notes)
+    }
+}
+
+/// How a body section is treated on an issue type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionRule {
+    /// May be empty or not.
+    Optional,
+    /// Must contain non-whitespace text.
+    Required,
+    /// Must be empty (whitespace only counts as empty).
+    Forbidden,
 }
 
 impl std::fmt::Display for IssueType {
@@ -539,4 +657,102 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
     pub is_cycle: bool,
     pub depth_exceeded: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use SectionRule::{Forbidden, Optional, Required};
+
+    const ALL_TYPES: [IssueType; 7] = [
+        IssueType::Task,
+        IssueType::Bug,
+        IssueType::Feature,
+        IssueType::Chore,
+        IssueType::Epic,
+        IssueType::Spec,
+        IssueType::Gate,
+    ];
+
+    #[test]
+    fn section_rule_table() {
+        // (type, description, design, acceptance, notes)
+        let table = [
+            (IssueType::Task, Optional, Optional, Optional, Optional),
+            (IssueType::Bug, Optional, Optional, Optional, Optional),
+            (IssueType::Feature, Optional, Optional, Optional, Optional),
+            (IssueType::Chore, Optional, Optional, Optional, Optional),
+            (IssueType::Epic, Optional, Forbidden, Optional, Optional),
+            (IssueType::Spec, Required, Forbidden, Forbidden, Optional),
+            (IssueType::Gate, Required, Forbidden, Required, Optional),
+        ];
+        assert_eq!(table.len(), ALL_TYPES.len());
+        for (t, desc, design, acceptance, notes) in table {
+            assert_eq!(
+                t.section_rule(EditField::Description),
+                desc,
+                "{t} description"
+            );
+            assert_eq!(t.section_rule(EditField::Design), design, "{t} design");
+            assert_eq!(
+                t.section_rule(EditField::Acceptance),
+                acceptance,
+                "{t} acceptance"
+            );
+            assert_eq!(t.section_rule(EditField::Notes), notes, "{t} notes");
+            assert_eq!(t.section_rule(EditField::Title), Optional, "{t} title");
+        }
+    }
+
+    #[test]
+    fn ensure_section_treats_whitespace_as_empty() {
+        let spec = IssueType::Spec;
+        assert!(spec
+            .ensure_section(None, EditField::Design, " \n\t")
+            .is_ok());
+        assert!(spec.ensure_section(None, EditField::Design, "x").is_err());
+        assert!(spec
+            .ensure_section(None, EditField::Description, "  \n")
+            .is_err());
+        assert!(spec
+            .ensure_section(None, EditField::Description, "x")
+            .is_ok());
+    }
+
+    #[test]
+    fn ensure_section_messages() {
+        let err = |t: IssueType, f, text| {
+            t.ensure_section(Some("tz-7"), f, text)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(
+            err(IssueType::Epic, EditField::Design, "x"),
+            "tz-7 is an epic; epics have no Design section. Put the approach in the spec or in the child tickets."
+        );
+        assert!(err(IssueType::Spec, EditField::Acceptance, "x")
+            .starts_with("tz-7 is a spec; specs have no Design or Acceptance Criteria section."));
+        assert!(err(IssueType::Gate, EditField::Design, "x")
+            .starts_with("tz-7 is a gate; gates have no Design section."));
+        assert_eq!(
+            err(IssueType::Spec, EditField::Description, ""),
+            "A spec needs a Description: the spec itself."
+        );
+        assert_eq!(
+            err(IssueType::Gate, EditField::Description, ""),
+            "A gate needs a Description: the condition that must become true."
+        );
+        assert!(err(IssueType::Gate, EditField::Acceptance, " ")
+            .starts_with("A gate needs Acceptance Criteria"));
+    }
+
+    #[test]
+    fn default_acceptance_only_on_epics() {
+        for t in ALL_TYPES {
+            assert_eq!(
+                t.default_acceptance(),
+                (t == IssueType::Epic).then_some("- All child issues closed.")
+            );
+        }
+    }
 }

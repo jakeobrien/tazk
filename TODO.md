@@ -1,9 +1,5 @@
 # To Do
 
-- prompts
-    - next ticket
-    - shortcut for /build -no-commit
-    - commit
 - get rid of sequenced id?
 - see `tz-39` for other open questions
 - list effort in `tz ready`

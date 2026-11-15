@@ -706,6 +706,17 @@ impl Storage {
             validate_effort(effort)?;
         }
 
+        // Every section is new, so check them all (tz-51 §4) before an ID is
+        // allocated or anything is written.
+        let design = design.unwrap_or_default();
+        let mut acceptance = acceptance.unwrap_or_default();
+        if acceptance.trim().is_empty() {
+            if let Some(default) = issue_type.default_acceptance() {
+                acceptance = default.to_string();
+            }
+        }
+        issue_type.ensure_new_sections(&description, &design, &acceptance, "")?;
+
         let issue_id = if self.use_hash_ids()? {
             // Use hash-based ID generation
             self.generate_hash_id(&title, &description)?
@@ -718,8 +729,8 @@ impl Storage {
         // Create issue
         let mut issue = Issue::new(issue_id, title, priority, issue_type);
         issue.description = description;
-        issue.design = design.unwrap_or_default();
-        issue.acceptance_criteria = acceptance.unwrap_or_default();
+        issue.design = design;
+        issue.acceptance_criteria = acceptance;
         issue.assignee = assignee.unwrap_or_default();
         issue.role = role;
         issue.effort = effort;
@@ -3670,11 +3681,13 @@ mod role_effort_tests {
     }
 
     fn create_typed(storage: &Storage, issue_type: IssueType, role: Option<Role>) -> Result<Issue> {
+        // Specs and gates need a description, and gates need acceptance criteria.
+        let acceptance = (issue_type == IssueType::Gate).then(|| "Check it.".to_string());
         storage.create_issue(
             "T".to_string(),
-            String::new(),
+            "Body".to_string(),
             None,
-            None,
+            acceptance,
             2,
             issue_type,
             None,
@@ -4742,5 +4755,267 @@ mod inherited_blocker_tests {
         assert_eq!(item.blocked_by, vec!["tz-8"]);
         assert_eq!(item.inherited_blocked_by.len(), 1);
         assert_eq!(item.blocked_by_count, 2);
+    }
+}
+
+#[cfg(test)]
+mod body_section_tests {
+    //! Per-type body section rules on `create` and `triage promote` (tz-51).
+    use super::*;
+
+    fn storage() -> (tempfile::TempDir, Storage) {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage =
+            Storage::init(tmp.path().join(".tazk"), false, IssueStorageLayout::Flat).unwrap();
+        (tmp, storage)
+    }
+
+    fn fields(
+        issue_type: IssueType,
+        description: &str,
+        design: Option<&str>,
+        acceptance: Option<&str>,
+    ) -> NewIssue {
+        NewIssue {
+            title: "T".to_string(),
+            description: description.to_string(),
+            design: design.map(str::to_string),
+            acceptance: acceptance.map(str::to_string),
+            priority: 2,
+            issue_type,
+            assignee: None,
+            labels: Vec::new(),
+            external_ref: None,
+            deps: Vec::new(),
+            role: issue_type.takes_role().then_some(Role::Agent),
+            effort: None,
+        }
+    }
+
+    /// How an issue is made: `create`, or `triage promote` of one item.
+    #[derive(Clone, Copy, Debug)]
+    enum Path {
+        Create,
+        Promote,
+    }
+
+    const PATHS: [Path; 2] = [Path::Create, Path::Promote];
+
+    fn make(storage: &Storage, path: Path, f: NewIssue) -> Result<Issue> {
+        match path {
+            Path::Create => storage.create_issue(
+                f.title,
+                f.description,
+                f.design,
+                f.acceptance,
+                f.priority,
+                f.issue_type,
+                f.assignee,
+                f.labels,
+                f.external_ref,
+                f.deps,
+                f.role,
+                f.effort,
+            ),
+            Path::Promote => {
+                let item = storage.add_triage_item("item text").unwrap();
+                storage.promote_triage_items(&[item.name], f)
+            }
+        }
+    }
+
+    /// Assert `make` fails with `needle` in the message and writes nothing.
+    fn assert_rejected(path: Path, f: NewIssue, needle: &str) {
+        let (_tmp, storage) = storage();
+        let items_before = if let Path::Promote = path {
+            storage.add_triage_item("kept").unwrap();
+            1
+        } else {
+            0
+        };
+        let err = match path {
+            Path::Create => make(&storage, path, f),
+            Path::Promote => {
+                let names = storage.list_triage_items().unwrap();
+                storage.promote_triage_items(&[names[0].name.clone()], f)
+            }
+        }
+        .unwrap_err();
+        assert!(err.to_string().contains(needle), "{path:?}: {err}");
+        assert!(
+            storage
+                .list_issues(None, None, None, None, None)
+                .unwrap()
+                .is_empty(),
+            "{path:?}: nothing should be written"
+        );
+        assert_eq!(storage.list_triage_items().unwrap().len(), items_before);
+        // The rejected command did not use up an ID.
+        let ok = storage
+            .create_issue(
+                "ok".to_string(),
+                String::new(),
+                None,
+                None,
+                2,
+                IssueType::Task,
+                None,
+                Vec::new(),
+                None,
+                Vec::new(),
+                Some(Role::Agent),
+                None,
+            )
+            .unwrap();
+        assert_eq!(ok.id, "tz-1");
+    }
+
+    #[test]
+    fn design_is_forbidden_on_epic_spec_and_gate() {
+        for path in PATHS {
+            for ty in [IssueType::Epic, IssueType::Spec, IssueType::Gate] {
+                assert_rejected(
+                    path,
+                    fields(ty, "Body", Some("approach"), Some("Check it")).tap_acceptance(ty),
+                    "Design",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn acceptance_is_forbidden_on_spec() {
+        for path in PATHS {
+            assert_rejected(
+                path,
+                fields(IssueType::Spec, "Body", None, Some("criteria")),
+                "specs have no Design or Acceptance Criteria",
+            );
+        }
+    }
+
+    #[test]
+    fn spec_and_gate_need_a_description() {
+        // A promoted issue defaults a blank description to the item text, so
+        // only `create` can be rejected for this.
+        for ty in [IssueType::Spec, IssueType::Gate] {
+            for desc in ["", "  \n\t"] {
+                assert_rejected(
+                    Path::Create,
+                    fields(ty, desc, None, Some("Check it")).tap_acceptance(ty),
+                    &format!("A {ty} needs a Description"),
+                );
+            }
+        }
+        let (_tmp, storage) = storage();
+        let item = storage.add_triage_item("item text").unwrap();
+        let spec = storage
+            .promote_triage_items(&[item.name], fields(IssueType::Spec, " ", None, None))
+            .unwrap();
+        assert_eq!(spec.description, "item text");
+    }
+
+    #[test]
+    fn gate_needs_acceptance() {
+        for path in PATHS {
+            for acceptance in [None, Some(""), Some(" \n")] {
+                assert_rejected(
+                    path,
+                    fields(IssueType::Gate, "Condition", None, acceptance),
+                    "A gate needs Acceptance Criteria",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn valid_spec_and_gate_are_created() {
+        for path in PATHS {
+            let (_tmp, storage) = storage();
+            let spec = make(
+                &storage,
+                path,
+                fields(IssueType::Spec, "The spec", Some("  "), Some("")),
+            )
+            .unwrap();
+            assert_eq!(spec.issue_type, IssueType::Spec);
+            assert_eq!(spec.acceptance_criteria, "");
+            let gate = make(
+                &storage,
+                path,
+                fields(IssueType::Gate, "Condition", None, Some("Check it")),
+            )
+            .unwrap();
+            assert_eq!(gate.acceptance_criteria, "Check it");
+        }
+    }
+
+    #[test]
+    fn epic_gets_default_acceptance() {
+        for path in PATHS {
+            for acceptance in [None, Some(""), Some("  \n")] {
+                let (_tmp, storage) = storage();
+                let epic = make(
+                    &storage,
+                    path,
+                    fields(IssueType::Epic, "", None, acceptance),
+                )
+                .unwrap();
+                assert_eq!(epic.acceptance_criteria, "- All child issues closed.");
+                let stored = storage.get_issue(&epic.id).unwrap().unwrap();
+                assert_eq!(stored.acceptance_criteria, "- All child issues closed.");
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_epic_acceptance_replaces_the_default() {
+        for path in PATHS {
+            let (_tmp, storage) = storage();
+            let epic = make(
+                &storage,
+                path,
+                fields(IssueType::Epic, "", None, Some("- Ships in prod.")),
+            )
+            .unwrap();
+            assert_eq!(epic.acceptance_criteria, "- Ships in prod.");
+        }
+    }
+
+    #[test]
+    fn work_types_are_unchanged() {
+        for path in PATHS {
+            for ty in [
+                IssueType::Task,
+                IssueType::Bug,
+                IssueType::Feature,
+                IssueType::Chore,
+            ] {
+                let (_tmp, storage) = storage();
+                let bare = make(&storage, path, fields(ty, "", None, None)).unwrap();
+                assert_eq!(bare.design, "");
+                assert_eq!(bare.acceptance_criteria, "");
+                let full =
+                    make(&storage, path, fields(ty, "d", Some("design"), Some("acc"))).unwrap();
+                assert_eq!(full.design, "design");
+                assert_eq!(full.acceptance_criteria, "acc");
+            }
+        }
+    }
+
+    trait TapAcceptance {
+        /// Give a gate the acceptance criteria it needs, so a test isolates
+        /// the section it is about.
+        fn tap_acceptance(self, ty: IssueType) -> Self;
+    }
+
+    impl TapAcceptance for NewIssue {
+        fn tap_acceptance(mut self, ty: IssueType) -> Self {
+            self.acceptance = match ty {
+                IssueType::Gate => Some("Check it".to_string()),
+                _ => None,
+            };
+            self
+        }
     }
 }
