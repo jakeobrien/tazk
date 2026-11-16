@@ -1,16 +1,29 @@
 # tazk
 
-A minimal, markdown-based issue tracker written in Rust.
+A minimal, markdown-based issue tracker intended for use in managing agent workflows.
 
 ## Overview
 
-tazk (`tz`) is a dependency-aware issue tracker. Issues are stored as markdown files with YAML frontmatter, making them both human-readable and git-friendly. There is no database: just markdown files in `.tazk/issues/`.
+tazk (`tz`) is designed around providing:
+- a terminal-based workflow
+- lightweight issue tracking
+- dependency-aware issues (blocking issues, epics as parents)
+- quick capture of triage items
+- role-based routing (human or agent)
+- human visibility (`tz tui` shows a browsable view of issues)
+
+Issues are stored as markdown files with YAML frontmatter, making them both human-readable and git-friendly. There is no database: just markdown files in `.tazk/issues/`.
+
+### Heritage
+
+This project was developed from the MIT-licensed [rrnewton/minibeads](https://github.com/rrnewton/minibeads). That project's source was used as the starting point.
+
+`minibeads` is itself a Rust port of [steveyegge/beads](https://github.com/steveyegge/beads).
 
 ### Key Features
 
 - **Markdown-only storage**: Issues are plain `.md` files
 - **Dependency tracking**: Issues can block each other, with automatic detection of ready work
-- **Fast**: Rust implementation with coarse-grained file locking
 - **Git-friendly**: Field-aware three-way merge driver for issue and comment files
 - **Terminal UI**: `tz tui` is a read-only, full-screen browser for issues and triage items (see [USAGE.md](USAGE.md#terminal-ui); behind the default-on `tui` cargo feature)
 
