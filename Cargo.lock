@@ -1960,7 +1960,7 @@ dependencies = [
 
 [[package]]
 name = "tazk"
-version = "0.29.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "built",
