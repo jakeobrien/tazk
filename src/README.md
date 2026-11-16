@@ -28,4 +28,4 @@ The binary composes safe-Rust modules around Markdown issue storage:
   tolerant storage loader that skips bad files) and drives refresh, `keymap.rs`
   is the single key table behind both input dispatch and the help overlay,
   `ui/` renders, and `terminal.rs` owns raw mode and the `$EDITOR` hand-off.
-  User docs are in `USAGE.md`; the design is in `docs/tui-spec.md`.
+  User docs are in `docs/tui.md`; the design is in `docs/tui-spec.md`.

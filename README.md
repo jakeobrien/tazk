@@ -1,5 +1,7 @@
 # tazk
 
+> **Warning:** tazk is work-in-progress software. Commands, the on-disk format and behavior may change without notice, and bugs are likely. Use it at your own risk.
+
 A minimal, markdown-based issue tracker intended for use in managing agent workflows.
 
 ## Overview
@@ -11,21 +13,17 @@ tazk (`tz`) is designed around providing:
 - quick capture of triage items
 - role-based routing (human or agent)
 - human visibility (`tz tui` shows a browsable view of issues)
+- portability
 
 Issues are stored as markdown files with YAML frontmatter, making them both human-readable and git-friendly. There is no database: just markdown files in `.tazk/issues/`.
 
-### Heritage
+### Heritage/Acknowledgments
 
 This project was developed from the MIT-licensed [rrnewton/minibeads](https://github.com/rrnewton/minibeads). That project's source was used as the starting point.
 
 `minibeads` is itself a Rust port of [steveyegge/beads](https://github.com/steveyegge/beads).
 
-### Key Features
-
-- **Markdown-only storage**: Issues are plain `.md` files
-- **Dependency tracking**: Issues can block each other, with automatic detection of ready work
-- **Git-friendly**: Field-aware three-way merge driver for issue and comment files
-- **Terminal UI**: `tz tui` is a read-only, full-screen browser for issues and triage items (see [USAGE.md](USAGE.md#terminal-ui); behind the default-on `tui` cargo feature)
+Much of this project's approach comes from `beads`, but this project (unlike `minibeads`) is not a drop-in replacement for it.
 
 ## Installation
 
@@ -83,54 +81,13 @@ tz stats
 
 Run `tz quickstart` for a comprehensive guide.
 
-## Storage Format
+## Documentation
 
-tazk stores issues in `.tazk/issues/` as markdown files, and triage items
-(unplanned reports) in `.tazk/triage/` as plain markdown.
-
-```
-.tazk/
-├── config.yaml           # tz-hash-ids, issue-storage-layout
-├── .gitignore           # Auto-managed (tazk.lock, command_history.log)
-├── issues/
-│   ├── myproject-1.md   # Issue files with YAML frontmatter
-│   └── myproject-2.md
-├── comments/            # Optional per-issue comment JSON files
-└── triage/              # Triage items: plain markdown, no frontmatter
-    └── 20251104T001800-k3f9.md
-```
-
-### Issue Format
-
-Each issue is a markdown file with YAML frontmatter:
-
-```markdown
----
-title: Fix authentication bug
-status: in_progress
-priority: 1
-issue_type: bug
-assignee: alice
-dependencies:
-  myproject-5: blocked_by
-created_at: 2025-10-30T10:00:00Z
-updated_at: 2025-10-30T11:00:00Z
----
-
-# Description
-
-User sessions expire too quickly. Need to extend timeout to 24 hours.
-
-# Design
-
-Update session middleware to use configurable timeout from environment variable.
-
-# Acceptance Criteria
-
-- [ ] Session timeout configurable via SESS_TIMEOUT env var
-- [ ] Default remains 1 hour if not set
-- [ ] Tests pass for various timeout values
-```
+- [CLI reference](docs/cli.md): commands, options and environment variables
+- [Issue properties](docs/issues.md): frontmatter, body sections, statuses, types, dependencies and claims
+- [Terminal UI](docs/tui.md): `tz tui`
+- [Git merge driver](docs/merge-driver.md): field-aware merging of issue and comment files
+- [Implementation](docs/implementation.md): storage format, project structure and locking
 
 ## Development
 
@@ -150,45 +107,6 @@ make stress-test
 make fmt
 ```
 
-### Project Structure
-
-```
-src/
-├── main.rs      # CLI entry point and command handlers
-├── storage.rs   # File-based storage operations
-├── storage/triage.rs  # Triage items (.tazk/triage/)
-├── format.rs    # Markdown serialization/deserialization
-├── types.rs     # Core data structures (Issue, Status, etc.)
-├── lock.rs      # Coarse-grained file locking
-├── merge_driver.rs, issue_merge.rs, diff3.rs  # Git merge driver (see src/README.md)
-└── tui/         # `tz tui` read-only terminal UI (feature `tui`, see src/README.md)
-
-tests/
-├── e2e_tests.rs           # Test harness
-└── basic_operations.sh    # Shell-based e2e tests
-```
-
-## Design Philosophy
-
-### Why Markdown?
-
-- **Human-readable**: Issues are plain text files you can read, edit, and grep
-- **Git-friendly**: Diffs, merges, and history work naturally
-- **Simple**: No schema migrations, no database corruption, no SQL
-- **Portable**: Copy `.tazk/` anywhere, it just works
-
-### Locking Strategy
-
-tazk uses coarse-grained locking with `.tazk/tazk.lock` containing the process PID. Operations use exponential backoff (up to 5 seconds) when lock is held. This is simple and sufficient for typical workflows.
-
-## Usage
-
-See [USAGE.md](USAGE.md) for the full command reference and a description of issue properties and their possible values.
-
-## Environment Variables
-
-- `TAZK_DIR` - Path to the `.tazk` directory
-
 ## License
 
-MIT.
+[MIT](LICENSE.md).

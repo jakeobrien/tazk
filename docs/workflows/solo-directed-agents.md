@@ -96,7 +96,7 @@ epic, spec or gate, Acceptance Criteria on a spec, a spec or gate without a
 Description, or a gate without Acceptance Criteria is an error. `update` checks
 only the sections it changes, so an older issue that breaks the rule still
 loads, closes and takes unrelated edits; its forbidden section can only be
-cleared (`--design ""`). See USAGE.md, "Body sections".
+cleared (`--design ""`). See [docs/issues.md](../issues.md#body-sections).
 
 ### Triage: the inbox
 
