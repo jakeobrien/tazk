@@ -12,7 +12,7 @@ Run `tz quickstart` for a comprehensive guide.
 - `tz create TITLE -r human|agent [OPTIONS]` - Create new issue (status `open`). `-r/--role` is required for `task`, `bug`, `feature`, `chore` and `gate`, and rejected for `epic` and `spec`, which take no role.
   - Common options: `-p PRIORITY`, `-t TYPE`, `-d TEXT`, `-a ASSIGNEE`, `--effort 1-5`, `-l LABEL`
   - Body sections are checked against the issue's type (see [Body sections](issues.md#body-sections)); nothing is created when a check fails:
-    - `--design` with text on an `epic`, `spec` or `gate` fails (`tz-7 is an epic; epics have no Design section...`).
+    - `--design` with text on an `epic`, `spec` or `gate` fails (`tz-4f1 is an epic; epics have no Design section...`).
     - `--acceptance` with text on a `spec` fails.
     - A `spec` or `gate` needs a non-empty description (`-d` / `--description-file`).
     - A `gate` needs non-empty `--acceptance`: how to check that its condition is true.
@@ -50,11 +50,11 @@ Run `tz quickstart` for a comprehensive guide.
 - `tz claim ISSUE_ID... --as NAME [--team TEAM] [--release] [--force]` - Claim or release issues
 - `tz block ISSUE_ID... [--release] [--reason TEXT]` - Mark issues `blocked`, or back to `open` with `--release`. A reason is appended to Notes as `Blocked <UTC timestamp>: <reason>` (`Unblocked ...` on release)
 - `tz defer ISSUE_ID... [--release] [--reason TEXT]` - Same as `tz block`, for `deferred` (`Deferred ...` / `Undeferred ...` notes)
-- `tz close ISSUE_ID [--reason REASON]` - Close (complete) an issue. A reason is appended to Notes as `Closed <UTC timestamp>: <reason>`
+- `tz close ISSUE_ID... [--reason REASON]` - Close (complete) an issue. A reason is appended to Notes as `Closed <UTC timestamp>: <reason>`
 - `tz reopen ISSUE_ID... [--role human|agent] [--reason REASON]` - Reopen closed issues. A reason is appended to Notes as `Reopened <UTC timestamp>: <reason>`. A work issue (not `epic` or `spec`) with no role is refused until you resubmit with `--role`; `epic` and `spec` need no role and reject `--role`
 - `tz renumber ISSUE_ID [--to SUFFIX_OR_ID] [--dry-run] [--tz-patch-code]` - Give an issue a new ID, for fixing duplicate IDs (see [Duplicate IDs](merge-driver.md#duplicate-ids-after-a-merge)). The ID is always canonical and in the store's format:
-  - Numeric store (default): without `--to`, the next free number (highest + 1); `--to` must be a free numeric ID (`--to 20` or `--to tz-20`).
-  - Hash store (`tz-hash-ids: true`): without `--to`, a freshly generated hash; `--to` must be a free hash ID.
+  - Numeric store (`--tz-hash-ids=false`): without `--to`, the next free number (highest + 1); `--to` must be a free numeric ID (`--to 20` or `--to tz-20`).
+  - Hash store (default, `tz-hash-ids: true`): without `--to`, a freshly generated hash; `--to` must be a free hash ID.
   - `--to` in the other format, or naming an existing issue, is an error.
   - Dependencies and parents in all issues, ID mentions in issue text, comments and triage items are rewritten in one transaction. `--dry-run` lists the changes without making them. `--tz-patch-code` also offers to patch references in code (interactive TTY only).
 - `tz repair [--dry-run]` - Remove references (dependencies, parents) to issues that no longer exist
@@ -114,8 +114,8 @@ the file in `.tazk/triage/`.
 
 `promote`, `attach` and `rm` are transactions: the issue or comments are
 written and the items deleted together, or nothing changes. Triage items are
-not read by `list`, `ready`, `export` or `sync` (`stats` only counts them), and the merge driver
-leaves them to git's ordinary line merge.
+not read by `list`, `ready`, `export` or `sync` (`stats` only counts them), and
+the merge driver leaves them to git's ordinary line merge.
 
 ## Dependencies
 
@@ -125,9 +125,21 @@ leaves them to git's ordinary line merge.
 
 ## Queries
 
-- `tz ready [--assignee USER] [-r/--role ROLE|none] [--priority N]` - Find ready work, printed as `id: title [priority: N, effort: N]` (effort omitted when unset) (no blockers, including blockers inherited from `child_of` ancestors; `epic` and `spec` issues are hidden unless requested with `--type`)
-- `tz blocked` - Show blocked issues and what blocks them. Blockers inherited from `child_of` ancestors are listed as `target (inherited from ANCESTOR)`, or `ANCESTOR (blocked status, inherited)` when the ancestor is in `blocked` status. `--json` keeps `blocked_by` for the issue's own blockers and adds `inherited_blocked_by`: a list of `{ancestor, blocked_by, blocked_status}`; `blocked_by_count` covers both
-- `tz stats` - Show statistics (total, open, blocked, average lead time, and the number of triage items with the age of the oldest). `--json` adds `triage_items` and `oldest_triage_item_age_hours` (`null` when there is no timestamped item)
+- `tz ready [--assignee USER] [-r/--role ROLE|none] [--priority N]` - Find ready work: open issues with no blockers
+  - Printed as `id: title [priority: N, effort: N]` (effort omitted when unset).
+  - Blockers inherited from `child_of` ancestors count.
+  - `epic` and `spec` issues are hidden unless requested with `--type`.
+- `tz blocked` - Show blocked issues and what blocks them
+  - Blockers inherited from `child_of` ancestors are listed as
+    `target (inherited from ANCESTOR)`, or `ANCESTOR (blocked status, inherited)`
+    when the ancestor is in `blocked` status.
+  - `--json` keeps `blocked_by` for the issue's own blockers and adds
+    `inherited_blocked_by`: a list of `{ancestor, blocked_by, blocked_status}`.
+    `blocked_by_count` covers both.
+- `tz stats` - Show statistics (total, open, blocked, average lead time, and the
+  number of triage items with the age of the oldest)
+  - `--json` adds `triage_items` and `oldest_triage_item_age_hours` (`null`
+    when there is no timestamped item).
 
 ## Options
 

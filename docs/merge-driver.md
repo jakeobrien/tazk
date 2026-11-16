@@ -39,8 +39,8 @@ Merge rules:
   side while removing it on the other conflicts.
 - **Timestamps** never conflict: `created_at` keeps the earliest, `updated_at`
   the latest, and `closed_at` follows the merged status.
-- **Prose sections** (Description, Design, Acceptance Criteria, Notes) use the
-  same bounded paragraph/word merger. Edits to different
+- **Prose sections** (Description, Design, Acceptance Criteria, Notes) use a
+  bounded paragraph/word merger. Edits to different
   paragraphs merge; competing edits conflict. A side that already contains the
   other side's whole change is taken as it stands. The merger is
   conservative: when repeated text makes the alignment of two edits ambiguous
@@ -81,9 +81,9 @@ a resolver that reads the marker length from the `<<<<<<<` line. The driver
 also prints one `tz merge-driver: CONFLICT <path>: <field or comment>:
 <reason>` line per conflict. `tz` refuses to read an issue file that still
 contains a hunk outside a code fence, so a hunk accidentally committed is
-reported instead of silently parsed as prose. (Text that quotes a conflict outside fenced code is
-stored with its `<<<<<<<` line escaped as `\<<<<<<<` and reads back
-unchanged; fenced code is stored as it is.)
+reported instead of silently parsed as prose. (Text that quotes a conflict
+outside fenced code is stored with its `<<<<<<<` line escaped as `\<<<<<<<` and
+reads back unchanged; fenced code is stored as it is.)
 
 `tz merge-driver run BASE OURS THEIRS --path REPO/PATH --stdout` previews a
 merge without writing any file.

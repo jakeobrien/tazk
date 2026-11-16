@@ -73,5 +73,4 @@ by default. `cargo build --no-default-features` produces a `tz` without the
 
 ## See also
 
-- [tui-spec.md](tui-spec.md): the design specification.
 - [CLI reference](cli.md) for the other `tz` commands.

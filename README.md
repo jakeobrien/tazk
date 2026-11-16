@@ -29,7 +29,7 @@ Much of this project's approach comes from `beads`, but this project (unlike `mi
 
 ### Build from source
 
-Use Rust 1.87 or newer (required by the build-time metadata helper).
+Use Rust 1.99 or newer (the `rust-version` in `Cargo.toml`).
 
 ```bash
 # Build in debug mode (recommended for development)
@@ -64,15 +64,15 @@ tz triage promote 20251104T001800-k3f9 --title "Fix Safari login" -r agent -p 1 
 tz list
 
 # Show issue details
-tz show tz-1
+tz show tz-4f1
 
 # Claim an issue (sets assignee and status to in_progress)
-tz claim tz-1 --as alice
+tz claim tz-4f1 --as alice
 
-# Add dependencies (tz-1 is blocked_by tz-2)
-tz dep add tz-1 --target tz-2
+# Add dependencies (tz-4f1 is blocked_by tz-b7k)
+tz dep add tz-4f1 --target tz-b7k
 
-# Find ready work (no blockers)
+# Find ready work (open, no blockers)
 tz ready
 
 # Get statistics

@@ -25,9 +25,13 @@ Triage item names are not IDs and are unaffected.
 
 ## Frontmatter properties
 
+The issue's `id` is not a frontmatter property: it is the file name
+(`.tazk/issues/<id>.md`; an issue file whose name does not match its ID is
+invalid). See [Issue IDs](#issue-ids) for the format and the shorthand commands
+accept.
+
 | Property | Required | Values | Notes |
 |----------|----------|--------|-------|
-| `id` | yes | `tz-<hash>`, or `tz-N` if the database was initialised with `--tz-hash-ids=false` | Not stored in the frontmatter: it is the file name (`.tazk/issues/<id>.md`). See [Issue IDs](#issue-ids) for the format and the shorthand commands accept. An issue file whose name does not match is an invalid file. |
 | `title` | yes | Any text | Settable with `create`, `triage promote --title` and `update --title`. |
 | `status` | yes | See [Status](#status) | Default `open`. |
 | `priority` | yes | Integer; `0`–`4` by convention, `0` is highest | Default `2`. Used for sorting in `tz ready`. |
@@ -140,4 +144,4 @@ the issue. Claiming a `closed` issue always fails, even with `--force`.
 identity requires `--force`.
 
 Status cannot be set with `tz update`; it changes only through dedicated
-commands (`claim`, `close`, `reopen`).
+commands (`claim`, `block`, `defer`, `close`, `reopen`).

@@ -11,12 +11,12 @@ tazk stores issues in `.tazk/issues/` as markdown files, and triage items
 ```
 .tazk/
 ├── config.yaml           # tz-hash-ids, issue-storage-layout
-├── .gitignore           # Auto-managed (tazk.lock, command_history.log)
+├── .gitignore            # Auto-managed (tazk.lock, command_history.log)
 ├── issues/
-│   ├── myproject-1.md   # Issue files with YAML frontmatter
-│   └── myproject-2.md
-├── comments/            # Optional per-issue comment JSON files
-└── triage/              # Triage items: plain markdown, no frontmatter
+│   ├── tz-a1b.md         # Issue files with YAML frontmatter
+│   └── tz-c2d.md
+├── comments/             # Optional per-issue comment JSON files
+└── triage/               # Triage items: plain markdown, no frontmatter
     └── 20251104T001800-k3f9.md
 ```
 
@@ -30,9 +30,10 @@ title: Fix authentication bug
 status: in_progress
 priority: 1
 issue_type: bug
+role: agent
 assignee: alice
 dependencies:
-  myproject-5: blocked_by
+  tz-e5f: blocked_by
 created_at: 2025-10-30T10:00:00Z
 updated_at: 2025-10-30T11:00:00Z
 ---
