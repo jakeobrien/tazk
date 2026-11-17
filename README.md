@@ -27,9 +27,28 @@ Much of this project's approach comes from `beads`, but this project (unlike `mi
 
 ## Installation
 
+### Prebuilt binary
+
+Prebuilt binaries are published for macOS on Apple Silicon (arm64) and Linux on ARM64 (aarch64).
+The installer downloads the binary, verifies its SHA-256 checksum and installs `tz` to `~/.local/bin`:
+
+```bash
+curl -fsSL https://github.com/jakeobrien/tazk/releases/latest/download/install.sh | sh
+```
+
+To install a specific version, pass `--version` (or set `TAZK_VERSION` on the `sh` side of the pipe):
+
+```bash
+curl -fsSL https://github.com/jakeobrien/tazk/releases/latest/download/install.sh | sh -s -- --version v0.9.0
+curl -fsSL https://github.com/jakeobrien/tazk/releases/latest/download/install.sh | TAZK_VERSION=v0.9.0 sh
+```
+
+Use `--install-dir <dir>` (or `TAZK_INSTALL_DIR`) to install somewhere other than `~/.local/bin`.
+Re-running the installer upgrades an existing install.
+
 ### Build from source
 
-Use Rust 1.99 or newer (the `rust-version` in `Cargo.toml`).
+Use Rust 1.96 or newer (the `rust-version` in `Cargo.toml`). `rust-toolchain.toml` pins the toolchain used for development, CI and releases (rustup installs it automatically).
 
 ```bash
 # Build in debug mode (recommended for development)
@@ -88,6 +107,7 @@ Run `tz quickstart` for a comprehensive guide.
 - [Terminal UI](docs/tui.md): `tz tui`
 - [Git merge driver](docs/merge-driver.md): field-aware merging of issue and comment files
 - [Implementation](docs/implementation.md): storage format, project structure and locking
+- [Releasing](docs/releasing.md): cutting a release, CI and the install script
 
 ## Development
 

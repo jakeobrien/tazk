@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-14]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `validate-inner` is `make validate` without the external `time` call:
+      # tests (incl. shell e2e), cargo fmt --check, clippy -D warnings.
+      - name: Validate
+        run: make validate-inner
+
+  musl-build:
+    # The release workflow ships a static musl binary; catch breakage before a tag.
+    name: build (aarch64-unknown-linux-musl)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - name: Install musl C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          echo "CC_aarch64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target aarch64-unknown-linux-musl
+
+      - name: Smoke test
+        run: |
+          bin=target/aarch64-unknown-linux-musl/release/tz
+          "$bin" --version
+          ldd "$bin" 2>&1 | grep -q "not a dynamic executable"
+
+  shellcheck:
+    name: shellcheck install.sh
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck -s sh install.sh
