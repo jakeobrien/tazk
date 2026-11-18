@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a version tag (e.g. v0.9.0) builds, tests and publishes a GitHub Release.
+# Pushing a version tag (e.g. v0.9.0 or v0.9.0-rc.1) builds, tests and publishes a GitHub Release.
 on:
   push:
     tags:
@@ -25,14 +25,22 @@ jobs:
         id: check
         run: |
           version="${GITHUB_REF_NAME#v}"
-          cargo_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if [ "$version" != "$cargo_version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_version"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME must look like vX.Y.Z or vX.Y.Z-rc.N"
             exit 1
           fi
 
-          # Release notes are the CHANGELOG.md section headed "## [<version>]" (or "## <version>").
-          awk -v v="$version" '
+          # Release candidates (vX.Y.Z-rc.N) are built from the plain X.Y.Z in Cargo.toml and
+          # CHANGELOG.md, so only the base version is compared.
+          base="${version%%-*}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$base" != "$cargo_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME (version $base) does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+
+          # Release notes are the CHANGELOG.md section headed "## [<base>]" (or "## <base>").
+          awk -v v="$base" '
             /^## / {
               if (found) exit
               h = $0
@@ -43,7 +51,7 @@ jobs:
             found { print }
           ' CHANGELOG.md > release-notes.md
           if ! grep -q '[^[:space:]]' release-notes.md; then
-            echo "::error::CHANGELOG.md has no section for version $version"
+            echo "::error::CHANGELOG.md has no section for version $base"
             exit 1
           fi
 
@@ -94,7 +102,9 @@ jobs:
         run: |
           bin="target/${{ matrix.target }}/release/tz"
           "$bin" --version | tee version.txt
-          grep -qF "${GITHUB_REF_NAME#v}" version.txt
+          # The binary reports the base version, so an RC (v0.9.0-rc.1) is expected to say 0.9.0.
+          tag_version="${GITHUB_REF_NAME#v}"
+          grep -qF "${tag_version%%-*}" version.txt
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
             ldd "$bin" 2>&1 | grep -q "not a dynamic executable"
           fi

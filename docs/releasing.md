@@ -16,7 +16,7 @@ Releases are built by GitHub Actions and published as GitHub Releases.
 
 The `Release` workflow (`.github/workflows/release.yml`) then:
 
-1. **verify**: fails unless the tag equals `v` + the `Cargo.toml` version and `CHANGELOG.md` has a section for it. Tags with a hyphen (`v0.9.0-rc.1`) are published as prereleases.
+1. **verify**: fails unless the tag is `vX.Y.Z` or `vX.Y.Z-rc.N`, `X.Y.Z` equals the `Cargo.toml` version and `CHANGELOG.md` has a section for it. Tags with a hyphen (`v0.9.0-rc.1`) are published as prereleases.
 2. **build**: on native runners, for each target, runs `make test`, builds `cargo build --release --locked`, smoke-tests the binary and packages it.
 3. **release**: writes `SHA256SUMS` and creates the GitHub Release with the archives, `SHA256SUMS` and `install.sh`. Nothing is published unless every build and test passed.
 
@@ -26,12 +26,12 @@ If a release fails part-way, fix the problem, delete the tag (`git push --delete
 
 Use a release candidate to rehearse the pipeline or let people try a build before the final release. RCs go through exactly the same workflow as a normal release.
 
-**Naming:** `vX.Y.Z-rc.N`, for example `v0.9.0-rc.1`, `v0.9.0-rc.2`. Keep the dot before `N`: semver compares the suffix piece by piece, so `rc.10` sorts after `rc.2`, but `rc10` sorts before `rc2`. Any tag with a hyphen is treated as a prerelease, so other suffixes (`-beta.1`) work the same way.
+**Naming:** `vX.Y.Z-rc.N`, for example `v0.9.0-rc.1`, `v0.9.0-rc.2`. Keep the dot before `N`: semver compares the suffix piece by piece, so `rc.10` sorts after `rc.2`, but `rc10` sorts before `rc2`. Only the `-rc.N` suffix is accepted; any other tag shape fails verification.
 
 **What differs from a final release:**
 
-- The version in `Cargo.toml` must be the full RC version (`version = "0.9.0-rc.1"`), because the verify step requires the tag to match it exactly. Run `cargo check` after editing and commit `Cargo.lock` too; CI builds with `--locked` and fails if the lockfile is stale.
-- `CHANGELOG.md` needs a matching `## [0.9.0-rc.1]` section. It can be one line.
+- `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md` keep the plain version (`0.9.0`, `## [0.9.0]`). Verify strips the `-rc.N` suffix from the tag before comparing, so cutting an RC needs no version bump commit.
+- The binary reports the plain version, so `tz --version` on an RC prints `0.9.0`, the same as the final. Use the release page or the commit to tell them apart.
 - The GitHub Release is marked **Pre-release**, so it is never what `releases/latest` points to. A plain `curl ... | sh` keeps installing the newest *final* release and ignores RCs.
 
 **Trying an RC:** pin it explicitly, since the default install won't find it:
@@ -44,10 +44,10 @@ curl -fsSL https://github.com/jakeobrien/tazk/releases/latest/download/install.s
 
 **Flow:**
 
-1. Set `version = "X.Y.Z-rc.1"`, add the changelog section, commit, push to `main`, wait for CI.
+1. Make sure `Cargo.toml` has `version = "X.Y.Z"` and `CHANGELOG.md` has a `## [X.Y.Z]` section, commit, push to `main`, wait for CI.
 2. `git tag vX.Y.Z-rc.1 && git push origin vX.Y.Z-rc.1`
-3. If the RC needs fixes, commit them, bump to `-rc.2` (version, `Cargo.lock`, changelog) and tag again. Never move or reuse an RC tag that has been published.
-4. For the final release, set `version = "X.Y.Z"`, replace the RC changelog sections with one `## [X.Y.Z]` section, commit and tag `vX.Y.Z` as described above.
+3. If the RC needs fixes, commit them and tag `vX.Y.Z-rc.2`. Never move or reuse an RC tag that has been published.
+4. For the final release, tag `vX.Y.Z` on the commit you want to ship, as described above.
 
 ## Cleaning up a release or RC
 
