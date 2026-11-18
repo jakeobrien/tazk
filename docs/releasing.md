@@ -75,7 +75,7 @@ Deleting a release removes its assets, so the install script can no longer fetch
 
 | Target | Runner | Notes |
 |---|---|---|
-| `aarch64-apple-darwin` | `macos-14` | macOS on Apple Silicon |
+| `aarch64-apple-darwin` | `macos-15` | macOS on Apple Silicon |
 | `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | statically linked; needs `musl-tools` (a dependency, `onig_sys`, compiles C code) |
 
 Archives are named `tazk-<target>.tar.gz` (no version in the name, so `releases/latest/download/<name>` works) and contain a `tazk-<target>/` directory with `tz`, `LICENSE.md` and `README.md`.
